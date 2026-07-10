@@ -1,0 +1,35 @@
+# Binaries & build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+/build/
+# Compiled server binary at repo root (anchored so it does not match cmd/chaosplus-server/)
+/chaosplus-server
+
+# Test & coverage
+*.test
+*.out
+coverage.*
+*.prof
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local config & secrets (never commit real credentials)
+.env
+*.env
+.env.*
+configs/.env
+!configs/.env.example
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
