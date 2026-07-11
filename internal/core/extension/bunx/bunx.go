@@ -11,6 +11,7 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/pgdriver"
+	"github.com/uptrace/bun/schema"
 )
 
 type Datasource struct {
@@ -27,30 +28,52 @@ type Datasource struct {
 }
 
 func (d *Datasource) NewDB() *bun.DB {
-	if d.Type == "sqlite" {
-		sqldb, err := sql.Open("sqliteshim", d.Dsn)
+	var sqldb *sql.DB
+	var dialect schema.Dialect
+
+	switch d.Type {
+	case "sqlite":
+		conn, err := sql.Open("sqliteshim", d.Dsn)
 		if err != nil {
 			slog.Error("failed to open sqlite", "error", err)
 			return nil
 		}
-		return bun.NewDB(sqldb, sqlitedialect.New())
-	}
-	if d.Type == "mysql" {
-		sqldb, err := sql.Open("mysql", d.Dsn)
+		sqldb, dialect = conn, sqlitedialect.New()
+	case "mysql":
+		conn, err := sql.Open("mysql", d.Dsn)
 		if err != nil {
 			slog.Error("failed to open mysql", "error", err)
 			return nil
 		}
-		return bun.NewDB(sqldb, mysqldialect.New())
-	}
-	if d.Type == "postgres" {
-		sqldb := sql.OpenDB(pgdriver.NewConnector(
-			pgdriver.WithDSN(d.Dsn),
-		))
-		return bun.NewDB(sqldb, pgdialect.New())
+		sqldb, dialect = conn, mysqldialect.New()
+	case "postgres":
+		sqldb = sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(d.Dsn)))
+		dialect = pgdialect.New()
+	default:
+		slog.Error("unsupported datasource type", "type", d.Type)
+		return nil
 	}
 
-	return nil
+	d.applyPool(sqldb)
+	return bun.NewDB(sqldb, dialect)
+}
+
+// applyPool applies the configured connection-pool limits. Each is applied only
+// when set (> 0) so a zero value leaves database/sql's default in place rather
+// than, say, capping the pool at zero connections.
+func (d *Datasource) applyPool(sqldb *sql.DB) {
+	if d.MaxOpenConns > 0 {
+		sqldb.SetMaxOpenConns(d.MaxOpenConns)
+	}
+	if d.MaxIdleConns > 0 {
+		sqldb.SetMaxIdleConns(d.MaxIdleConns)
+	}
+	if d.ConnMaxLifetime > 0 {
+		sqldb.SetConnMaxLifetime(d.ConnMaxLifetime)
+	}
+	if d.ConnMaxIdleTime > 0 {
+		sqldb.SetConnMaxIdleTime(d.ConnMaxIdleTime)
+	}
 }
 
 type DatasourceRouter struct {

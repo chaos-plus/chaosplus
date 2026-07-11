@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 	"google.golang.org/grpc"
 
@@ -32,6 +33,10 @@ type App struct {
 
 	dbr bunx.DatasourceRouter
 
+	// worker holds the leased worker id backing the guid generator. Closed on
+	// shutdown to release the lease. Nil when no database is available.
+	worker *wuid.Worker
+
 	rest *http.Server
 	grpc *grpc.Server
 
@@ -40,9 +45,10 @@ type App struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// serveErr receives a fatal error from a server goroutine when Serve/
-	// ListenAndServe fails after a successful bind. Buffered by the number of
-	// servers so neither goroutine leaks if both fail at once.
+	// serveErr receives a fatal error that must bring the whole app down: a
+	// server's Serve/ListenAndServe failing after bind, or the worker-id lease
+	// being lost. Buffered by the number of such sources (2 servers + worker) so
+	// no reporter blocks if several fail at once.
 	serveErr chan error
 }
 
@@ -54,7 +60,7 @@ func NewApp(cfg Config) *App {
 	return &App{
 		name:     cfg.Name,
 		cfg:      cfg,
-		serveErr: make(chan error, 2),
+		serveErr: make(chan error, 3),
 	}
 }
 
@@ -67,7 +73,9 @@ func (a *App) Run() error {
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
 	// bootstrap
-	a.Bootstrap()
+	if err := a.Bootstrap(); err != nil {
+		return errors.Join(fmt.Errorf("bootstrap: %w", err), a.shutdown())
+	}
 
 	// grpc server
 	if err := a.StartGrpcServer(); err != nil {
@@ -142,6 +150,14 @@ func (a *App) shutdown() error {
 		case <-shutdownCtx.Done():
 			a.grpc.Stop() // force-close remaining connections
 			errs = append(errs, fmt.Errorf("grpc graceful stop timed out: %w", shutdownCtx.Err()))
+		}
+	}
+
+	// Release the worker-id lease before closing the database it lives in, so the
+	// slot is freed for reuse rather than waiting out its TTL.
+	if a.worker != nil {
+		if err := a.worker.Close(shutdownCtx); err != nil {
+			errs = append(errs, fmt.Errorf("worker close: %w", err))
 		}
 	}
 
