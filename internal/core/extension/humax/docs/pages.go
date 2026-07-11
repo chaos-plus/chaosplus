@@ -28,13 +28,13 @@ const (
 )
 
 // scalarHTML returns the Scalar API reference host page for the given spec URL.
-func scalarHTML(spec string) []byte {
+func scalarHTML(name, spec string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — Scalar</title>
+    <title>` + name + ` API — Scalar</title>
   </head>
   <body>
     <script id="api-reference" data-url="` + spec + `"></script>
@@ -44,13 +44,13 @@ func scalarHTML(spec string) []byte {
 }
 
 // swaggerHTML returns the Swagger UI host page for the given spec URL.
-func swaggerHTML(spec string) []byte {
+func swaggerHTML(name, spec string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — Swagger UI</title>
+    <title>` + name + ` API — Swagger UI</title>
     <link rel="stylesheet" href="` + swaggerCSS + `" crossorigin>
   </head>
   <body>
@@ -67,13 +67,13 @@ func swaggerHTML(spec string) []byte {
 
 // stoplightHTML returns the Stoplight Elements host page for the given spec URL
 // (Stoplight is happy with either the JSON or YAML document).
-func stoplightHTML(spec string) []byte {
+func stoplightHTML(name, spec string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — Stoplight</title>
+    <title>` + name + ` API — Stoplight</title>
     <link rel="stylesheet" href="` + stoplightCSS + `" crossorigin>
     <script src="` + stoplightJS + `" crossorigin></script>
   </head>
@@ -89,13 +89,13 @@ func stoplightHTML(spec string) []byte {
 }
 
 // redocHTML returns the ReDoc host page for the given spec URL.
-func redocHTML(spec string) []byte {
+func redocHTML(name, spec string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — ReDoc</title>
+    <title>` + name + ` API — ReDoc</title>
   </head>
   <body>
     <div id="redoc"></div>
@@ -106,13 +106,13 @@ func redocHTML(spec string) []byte {
 }
 
 // openapiUIHTML returns the openapi-ui host page for the given spec URL.
-func openapiUIHTML(spec string) []byte {
+func openapiUIHTML(name, spec string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — openapi-ui</title>
+    <title>` + name + ` API — openapi-ui</title>
   </head>
   <body>
     <div id="openapi-ui-container" spec-url="` + spec + `" theme="light"></div>
@@ -125,13 +125,13 @@ func openapiUIHTML(spec string) []byte {
 // iframe. Tabs are keyboard-accessible and the active renderer is reflected in
 // the URL hash (e.g. /docs#swagger) for deep-linking. specJSON is linked as the
 // raw-spec shortcut in the top bar.
-func docsWrapperHTML(specJSON string) []byte {
+func docsWrapperHTML(name, specJSON string) []byte {
 	return []byte(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chaosplus API — Docs</title>
+    <title>` + name + ` API — Docs</title>
     <style>
       :root {
         --bar-h: 48px;
@@ -180,13 +180,13 @@ func docsWrapperHTML(specJSON string) []byte {
   </head>
   <body>
     <header class="bar">
-      <div class="brand">Chaosplus API <span>docs</span></div>
+      <div class="brand">` + name + ` API <span>docs</span></div>
       <nav class="tabs" role="tablist" aria-label="Documentation renderer">
-        <button class="tab" role="tab" data-src="/docs/scalar" aria-selected="true">Scalar</button>
-        <button class="tab" role="tab" data-src="/docs/swagger" aria-selected="false">Swagger UI</button>
-        <button class="tab" role="tab" data-src="/docs/redoc" aria-selected="false">ReDoc</button>
-        <button class="tab" role="tab" data-src="/docs/stoplight" aria-selected="false">Stoplight</button>
+        <button class="tab" role="tab" data-src="/docs/scalar" aria-selected="true">scalar</button>
+        <button class="tab" role="tab" data-src="/docs/stoplight" aria-selected="false">stoplight</button>
+        <button class="tab" role="tab" data-src="/docs/redoc" aria-selected="false">redoc</button>
         <button class="tab" role="tab" data-src="/docs/openapi-ui" aria-selected="false">openapi-ui</button>
+        <button class="tab" role="tab" data-src="/docs/swagger" aria-selected="false">swagger-ui</button>
       </nav>
       <div class="spacer"></div>
       <a class="ext" href="` + specJSON + `" target="_blank" rel="noreferrer">` + specJSON + ` &#8599;</a>

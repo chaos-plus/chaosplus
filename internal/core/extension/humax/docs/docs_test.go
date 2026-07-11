@@ -6,8 +6,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
-
-	"gofr.dev/pkg/gofr"
 )
 
 // TestBuildersEmbedSpecURL proves the pages reference the spec URL passed in
@@ -16,12 +14,12 @@ func TestBuildersEmbedSpecURL(t *testing.T) {
 	const spec = "/custom/api-spec.json"
 
 	builders := map[string]func(string) []byte{
-		"scalar":     scalarHTML,
-		"swagger":    swaggerHTML,
-		"redoc":      redocHTML,
-		"stoplight":  stoplightHTML,
-		"openapi-ui": openapiUIHTML,
-		"wrapper":    docsWrapperHTML,
+		"scalar":     func(s string) []byte { return scalarHTML("test", s) },
+		"swagger":    func(s string) []byte { return swaggerHTML("test", s) },
+		"redoc":      func(s string) []byte { return redocHTML("test", s) },
+		"stoplight":  func(s string) []byte { return stoplightHTML("test", s) },
+		"openapi-ui": func(s string) []byte { return openapiUIHTML("test", s) },
+		"wrapper":    func(s string) []byte { return docsWrapperHTML("test", s) },
 	}
 
 	for name, build := range builders {
@@ -49,11 +47,7 @@ func TestApply(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.env, func(t *testing.T) {
-			t.Setenv("METRICS_PORT", "0")
-			t.Setenv(RendererEnv, c.env)
-			app := gofr.New()
-
-			config, multi := Apply(app, huma.DefaultConfig("T", "1.0.0"))
+			config, multi := Apply(c.env, nil, huma.DefaultConfig("T", "1.0.0"))
 
 			assert.Equal(t, c.multi, multi)
 			if c.renderer != "" {

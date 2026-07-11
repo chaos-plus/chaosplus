@@ -16,6 +16,10 @@
 coverage.*
 *.prof
 
+# Runtime logs
+/logs/
+*.log
+
 # Go workspace
 go.work
 go.work.sum
