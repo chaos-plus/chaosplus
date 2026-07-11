@@ -209,7 +209,7 @@ func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64,
 	var reuse int
 	err := db.NewSelect().Model((*workerRow)(nil)).
 		Column("id").
-		Where("expires_at < " + nowExpr).
+		Where("expires_at < "+nowExpr).
 		Order("id ASC").Limit(1).
 		Scan(ctx, &reuse)
 	switch {

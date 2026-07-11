@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
-	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid/api"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -33,10 +32,8 @@ func (a *App) StartRestServer() error {
 	config := huma.DefaultConfig(a.name+" API", "1.0.0")
 	config, multi := docs.Apply("all", nil, config)
 
-	// router.Route("/api", func(r chi.Router) {
 	api := humachi.New(router, config)
-	RegisteRouter(api)
-	// })
+	a.registerREST(api)
 
 	if multi {
 		docs.Register(router, config, a.name)
@@ -58,8 +55,4 @@ func (a *App) StartRestServer() error {
 	}()
 
 	return nil
-}
-
-func RegisteRouter(api huma.API) {
-	guidapi.RegisterREST(api)
 }

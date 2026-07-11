@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
-	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 	"google.golang.org/grpc"
 
@@ -33,9 +32,9 @@ type App struct {
 
 	dbr bunx.DatasourceRouter
 
-	// worker holds the leased worker id backing the guid generator. Closed on
-	// shutdown to release the lease. Nil when no database is available.
-	worker *wuid.Worker
+	// mods are the application modules, in registration order. Their lifecycle
+	// phases (migrate/start/register/stop) are driven by the phase runners.
+	mods []any
 
 	rest *http.Server
 	grpc *grpc.Server
@@ -153,12 +152,10 @@ func (a *App) shutdown() error {
 		}
 	}
 
-	// Release the worker-id lease before closing the database it lives in, so the
-	// slot is freed for reuse rather than waiting out its TTL.
-	if a.worker != nil {
-		if err := a.worker.Close(shutdownCtx); err != nil {
-			errs = append(errs, fmt.Errorf("worker close: %w", err))
-		}
+	// Stop modules (reverse order) before closing the database they use, so e.g.
+	// the worker-id lease is released rather than left to expire.
+	if err := a.stopModules(shutdownCtx); err != nil {
+		errs = append(errs, err)
 	}
 
 	// Close the database connection pools once nothing is serving.

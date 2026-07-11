@@ -23,8 +23,7 @@ func (a *App) StartGrpcServer() error {
 	}
 
 	server := grpc.NewServer()
-	// TODO: register gRPC services here, e.g.
-	//   guidpb.RegisterGuidServer(server, guidapi.NewGrpcServer(...))
+	a.registerGRPC(server)
 	reflection.Register(server) // enables grpcurl and service discovery for tooling
 	a.grpc = server
 
