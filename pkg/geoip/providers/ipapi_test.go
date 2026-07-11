@@ -109,18 +109,25 @@ func TestIPAPI_GetIpInfo_TransportError(t *testing.T) {
 	}
 }
 
-func TestIPAPI_ClientInstance_Default(t *testing.T) {
+func TestIPAPI_HTTPClient_Default(t *testing.T) {
 	p := &IPAPIProvider{}
-	c := p.clientInstance()
+	c := p.httpClient()
 	if c == nil {
 		t.Fatal("expected non-nil default client")
 	}
 	if c.Timeout != 3*time.Second {
 		t.Fatalf("expected 3s timeout, got %v", c.Timeout)
 	}
-	// Second call returns the cached instance.
-	if p.clientInstance() != c {
-		t.Fatal("expected cached client instance")
+	// With no injected client, every call returns the shared read-only default.
+	if p.httpClient() != c {
+		t.Fatal("expected the shared default client")
+	}
+
+	// An injected client takes precedence over the default.
+	injected := &http.Client{}
+	p = &IPAPIProvider{client: injected}
+	if p.httpClient() != injected {
+		t.Fatal("expected the injected client to be used")
 	}
 }
 

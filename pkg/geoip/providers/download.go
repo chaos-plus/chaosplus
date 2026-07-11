@@ -30,13 +30,15 @@ func workDir(parts ...string) (string, error) {
 	return dir, nil
 }
 
-// httpClient bounds GeoIP DB downloads so a network hang can't block the goroutine
-// indefinitely (http.DefaultClient has no timeout).
-var httpClient = &http.Client{Timeout: 60 * time.Second}
+// defaultDownloadClient bounds GeoIP DB downloads so a network hang can't block a
+// refresh goroutine indefinitely (http.DefaultClient has no timeout). It is
+// assigned once and only ever read, so it is safe for concurrent use; callers
+// that need to override it (notably tests) pass their own *http.Client instead.
+var defaultDownloadClient = &http.Client{Timeout: 60 * time.Second}
 
-// downloadFile downloads a URL to the specified path.
-func downloadFile(url, dest string) error {
-	resp, err := httpClient.Get(url)
+// downloadFile downloads a URL to dest using the given HTTP client.
+func downloadFile(client *http.Client, url, dest string) error {
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -99,8 +101,8 @@ func verifyFileDigest(path, digest string) error {
 // the absence of integrity verification is logged at WARN so the operational
 // risk is visible. This is a deliberate availability/security trade-off: we
 // have no trustworthy checksum to compare against in that case.
-func downloadVerifiedFile(url, dest, digest string) error {
-	if err := downloadFile(url, dest); err != nil {
+func downloadVerifiedFile(client *http.Client, url, dest, digest string) error {
+	if err := downloadFile(client, url, dest); err != nil {
 		return err
 	}
 	if digest == "" {
@@ -171,9 +173,9 @@ type githubAsset struct {
 }
 
 // getGitHubLatestRelease fetches the latest release for owner/repo.
-func getGitHubLatestRelease(owner, repo string) (*githubRelease, error) {
+func getGitHubLatestRelease(client *http.Client, owner, repo string) (*githubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
-	resp, err := httpClient.Get(url)
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +220,3 @@ func findLatestFile(dir string, suffix string) (string, error) {
 	}
 	return "", fmt.Errorf("no db found")
 }
-
-// timeNow returns the current time (replaceable in tests).
-var timeNow = time.Now

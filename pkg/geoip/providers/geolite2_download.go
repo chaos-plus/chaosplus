@@ -37,7 +37,7 @@ func (m *Geolite2) downloadDb(name string) error {
 
 	slog.Info("download geolite2 db use cache dir", "cacheDir", cacheDir)
 
-	latestRelease, err := getGitHubLatestRelease(m.Owner, m.Repo)
+	latestRelease, err := getGitHubLatestRelease(m.httpClient(), m.Owner, m.Repo)
 	if err != nil {
 		slog.Error("failed to get latest release", "owner", m.Owner, "repo", m.Repo, "error", err)
 		return err
@@ -64,7 +64,7 @@ func (m *Geolite2) downloadDb(name string) error {
 	// so a poisoned release asset is never used. If the release predates GitHub
 	// asset digests, it logs a WARN and accepts the file (no checksum to check).
 	dest := filepath.Join(saveDir, name)
-	if err := downloadVerifiedFile(assetURL, dest, assetDigest); err != nil {
+	if err := downloadVerifiedFile(m.httpClient(), assetURL, dest, assetDigest); err != nil {
 		slog.Error("failed to download", "owner", m.Owner, "repo", m.Repo, "name", name, "error", err)
 		return err
 	}

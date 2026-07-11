@@ -22,16 +22,24 @@ func init() {
 	types.RegisterGeoIpProvider("ipapi", &IPAPIProvider{})
 }
 
+// defaultLookupClient is the shared, read-only HTTP client for live lookups. It
+// is assigned once and only ever read, so it is safe for concurrent use.
+var defaultLookupClient = &http.Client{Timeout: 3 * time.Second}
+
 // IPAPIProvider uses ipapi.co free tier for lookups.
 type IPAPIProvider struct {
+	// client overrides the HTTP client used for lookups; nil uses the shared
+	// defaultLookupClient. Unexported so tests can inject without exposing it.
 	client *http.Client
 }
 
-func (p *IPAPIProvider) clientInstance() *http.Client {
-	if p.client == nil {
-		p.client = &http.Client{Timeout: 3 * time.Second}
+// httpClient returns the provider's HTTP client, falling back to the shared
+// read-only default when none was injected.
+func (p *IPAPIProvider) httpClient() *http.Client {
+	if p.client != nil {
+		return p.client
 	}
-	return p.client
+	return defaultLookupClient
 }
 
 func (p *IPAPIProvider) GetIpInfo(ip string) (*types.GeoIp, error) {
@@ -46,7 +54,7 @@ func (p *IPAPIProvider) GetIpInfo(ip string) (*types.GeoIp, error) {
 	}
 
 	url := fmt.Sprintf("https://ipapi.co/%s/json/", ip)
-	resp, err := p.clientInstance().Get(url)
+	resp, err := p.httpClient().Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}

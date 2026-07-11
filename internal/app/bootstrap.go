@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
+	_ "github.com/chaos-plus/chaosplus/pkg/geoip/providers" // register geoip providers
 	"github.com/chaos-plus/chaosplus/pkg/timezone"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 )
@@ -27,6 +29,11 @@ func (a *App) Bootstrap() {
 
 	// init db
 	a.dbr = bunx.NewDatasourceRouter(a.name, cfg.Database)
+
+	// init geoip providers — background db download/refresh, tied to the app
+	// context so it stops on shutdown. Providers self-register via their package
+	// init (blank import above); those without a database do no background work.
+	geoip.StartProviders(a.ctx)
 
 	// init cache
 

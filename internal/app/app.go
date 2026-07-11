@@ -35,6 +35,11 @@ type App struct {
 	rest *http.Server
 	grpc *grpc.Server
 
+	// ctx is the application's root context; cancel tears down background workers
+	// (e.g. geoip database refresh) during shutdown. Set in Run.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// serveErr receives a fatal error from a server goroutine when Serve/
 	// ListenAndServe fails after a successful bind. Buffered by the number of
 	// servers so neither goroutine leaks if both fail at once.
@@ -58,6 +63,9 @@ func NewApp(cfg Config) *App {
 // a server fails. If a server fails to start, whatever was already started is
 // torn down before returning, so Run never leaks a running server.
 func (a *App) Run() error {
+	// Root context for background workers; cancelled in shutdown.
+	a.ctx, a.cancel = context.WithCancel(context.Background())
+
 	// bootstrap
 	a.Bootstrap()
 
@@ -100,6 +108,13 @@ func (a *App) awaitShutdown() error {
 // components started (nil servers are skipped), so both the startup-failure and
 // signal paths can share it.
 func (a *App) shutdown() error {
+	// Stop background workers first (geoip refresh, etc.) so they wind down while
+	// the servers drain. Guarded because lifecycle tests build an App directly
+	// without running Run.
+	if a.cancel != nil {
+		a.cancel()
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 

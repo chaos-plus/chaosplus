@@ -1,12 +1,13 @@
 package providers
 
 import (
+	"context"
 	"errors"
 	"net"
+	"net/http"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 	"github.com/oschwald/geoip2-golang"
-	"github.com/robfig/cron/v3"
 )
 
 // Geolite2 uses MaxMind GeoLite2-City database.
@@ -14,28 +15,29 @@ type Geolite2 struct {
 	Owner string
 	Repo  string
 	Db    string
+
+	// client overrides the HTTP client used for downloads; nil uses the shared
+	// defaultDownloadClient. Unexported so tests can inject without exposing it.
+	client *http.Client
 }
 
 func init() {
-	m := &Geolite2{}
-	types.RegisterGeoIpProvider("geolite2", m)
-	go func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			m.DownloadDb()
-		}
-	}()
-	timer := cron.New()
-	timer.AddFunc("@every 1h", func() {
-		m.DownloadDb()
-	})
-	timer.AddFunc("@every 1m", func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			m.DownloadDb()
-		}
-	})
-	timer.Start()
+	types.RegisterGeoIpProvider("geolite2", &Geolite2{})
+}
+
+// httpClient returns the provider's HTTP client, falling back to the shared
+// read-only default when none was injected.
+func (m *Geolite2) httpClient() *http.Client {
+	if m.client != nil {
+		return m.client
+	}
+	return defaultDownloadClient
+}
+
+// Start begins background maintenance of the GeoLite2 database, bound to ctx.
+func (m *Geolite2) Start(ctx context.Context) error {
+	maintainDB(ctx, "geolite2", m.GetDbPath, func() error { return m.DownloadDb() })
+	return nil
 }
 
 func (m *Geolite2) GetIpInfo(ip string) (*types.GeoIp, error) {

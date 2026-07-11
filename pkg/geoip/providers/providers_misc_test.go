@@ -49,9 +49,8 @@ func TestGeolite2_DownloadDb_AssetNotFound(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	m := &Geolite2{Owner: "o", Repo: "r", Db: "GeoLite2-City.mmdb"}
+	m := &Geolite2{Owner: "o", Repo: "r", Db: "GeoLite2-City.mmdb", client: c}
 	err := m.DownloadDb("GeoLite2-City.mmdb")
 	if err == nil || !strings.Contains(err.Error(), "not found in release") {
 		t.Fatalf("expected asset-not-found error, got %v", err)
@@ -65,9 +64,8 @@ func TestGeolite2_DownloadDb_ReleaseError(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	m := &Geolite2{Owner: "o", Repo: "r"}
+	m := &Geolite2{Owner: "o", Repo: "r", client: c}
 	if err := m.DownloadDb("GeoLite2-City.mmdb"); err == nil {
 		t.Fatal("expected error when release fetch fails")
 	}
@@ -95,9 +93,8 @@ func TestGeolite2_DownloadDb_NoArgsWithDb(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	m := &Geolite2{Owner: "o", Repo: "r", Db: "Custom.mmdb"}
+	m := &Geolite2{Owner: "o", Repo: "r", Db: "Custom.mmdb", client: c}
 	err := m.DownloadDb()
 	if err == nil || !strings.Contains(err.Error(), "not found in release") {
 		t.Fatalf("expected asset-not-found for preset Db, got %v", err)
@@ -135,9 +132,8 @@ func TestIP2Location_DownloadDb_DownloadError(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	m := &IP2Location{Token: "tok"}
+	m := &IP2Location{Token: "tok", client: c}
 	if err := m.DownloadDb("DB11LITEBIN"); err == nil {
 		t.Fatal("expected download error")
 	}

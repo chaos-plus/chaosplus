@@ -48,7 +48,7 @@ func (m *IP2Location) downloadDb(code string) (string, error) {
 	slog.Info("ip2location download db url", "url", url)
 
 	target := filepath.Join(cacheDir, code+".zip")
-	if err := downloadFile(url, target); err != nil {
+	if err := downloadFile(m.httpClient(), url, target); err != nil {
 		slog.Error("ip2location download db error", "code", code, "err", err)
 		return "", err
 	}

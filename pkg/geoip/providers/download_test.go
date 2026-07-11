@@ -19,14 +19,6 @@ func sha256Digest(content string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// withHTTPClient swaps the package httpClient for the duration of a test.
-func withHTTPClient(t *testing.T, c *http.Client) {
-	t.Helper()
-	saved := httpClient
-	httpClient = c
-	t.Cleanup(func() { httpClient = saved })
-}
-
 func TestWorkDir_CreatesDir(t *testing.T) {
 	dir, err := workDir("unit-test-sub")
 	if err != nil {
@@ -49,10 +41,9 @@ func TestDownloadFile_Success(t *testing.T) {
 		_, _ = w.Write([]byte("hello-db"))
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
 	dest := filepath.Join(t.TempDir(), "nested", "out.bin")
-	if err := downloadFile(ts.URL, dest); err != nil {
+	if err := downloadFile(ts.Client(), ts.URL, dest); err != nil {
 		t.Fatalf("downloadFile: %v", err)
 	}
 	b, err := os.ReadFile(dest)
@@ -69,9 +60,8 @@ func TestDownloadFile_Non200(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
-	err := downloadFile(ts.URL, filepath.Join(t.TempDir(), "out.bin"))
+	err := downloadFile(ts.Client(), ts.URL, filepath.Join(t.TempDir(), "out.bin"))
 	if err == nil || !strings.Contains(err.Error(), "http 404") {
 		t.Fatalf("expected http 404 error, got %v", err)
 	}
@@ -80,10 +70,10 @@ func TestDownloadFile_Non200(t *testing.T) {
 func TestDownloadFile_TransportError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := ts.URL
+	client := ts.Client()
 	ts.Close()
-	withHTTPClient(t, ts.Client())
 
-	if err := downloadFile(url, filepath.Join(t.TempDir(), "out.bin")); err == nil {
+	if err := downloadFile(client, url, filepath.Join(t.TempDir(), "out.bin")); err == nil {
 		t.Fatal("expected transport error")
 	}
 }
@@ -161,11 +151,11 @@ func TestGetGitHubLatestRelease_Success(t *testing.T) {
 		}`))
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
-	// Point at the test server by overriding via a transport that ignores the URL host.
-	httpClient.Transport = &fixedURLTransport{base: ts.URL}
-	rel, err := getGitHubLatestRelease("owner", "repo")
+	// Point at the test server via a transport that ignores the URL host.
+	c := ts.Client()
+	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
+	rel, err := getGitHubLatestRelease(c, "owner", "repo")
 	if err != nil {
 		t.Fatalf("getGitHubLatestRelease: %v", err)
 	}
@@ -184,9 +174,8 @@ func TestGetGitHubLatestRelease_Non200(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	if _, err := getGitHubLatestRelease("o", "r"); err == nil ||
+	if _, err := getGitHubLatestRelease(c, "o", "r"); err == nil ||
 		!strings.Contains(err.Error(), "github api status") {
 		t.Fatalf("expected github api status error, got %v", err)
 	}
@@ -199,9 +188,8 @@ func TestGetGitHubLatestRelease_BadJSON(t *testing.T) {
 	defer ts.Close()
 	c := ts.Client()
 	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	withHTTPClient(t, c)
 
-	if _, err := getGitHubLatestRelease("o", "r"); err == nil {
+	if _, err := getGitHubLatestRelease(c, "o", "r"); err == nil {
 		t.Fatal("expected decode error")
 	}
 }
@@ -307,10 +295,9 @@ func TestDownloadVerifiedFile_ChecksumMatch(t *testing.T) {
 		_, _ = w.Write([]byte(content))
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
 	dest := filepath.Join(t.TempDir(), "out.mmdb")
-	if err := downloadVerifiedFile(ts.URL, dest, sha256Digest(content)); err != nil {
+	if err := downloadVerifiedFile(ts.Client(), ts.URL, dest, sha256Digest(content)); err != nil {
 		t.Fatalf("downloadVerifiedFile: %v", err)
 	}
 	b, err := os.ReadFile(dest)
@@ -329,10 +316,9 @@ func TestDownloadVerifiedFile_ChecksumMismatchDeletes(t *testing.T) {
 		_, _ = w.Write([]byte("malicious-payload"))
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
 	dest := filepath.Join(t.TempDir(), "out.mmdb")
-	err := downloadVerifiedFile(ts.URL, dest, sha256Digest("the-legit-bytes"))
+	err := downloadVerifiedFile(ts.Client(), ts.URL, dest, sha256Digest("the-legit-bytes"))
 	if err == nil || !strings.Contains(err.Error(), "integrity check failed") {
 		t.Fatalf("expected integrity check failure, got %v", err)
 	}
@@ -348,11 +334,10 @@ func TestDownloadVerifiedFile_NoDigestAccepts(t *testing.T) {
 		_, _ = w.Write([]byte(content))
 	}))
 	defer ts.Close()
-	withHTTPClient(t, ts.Client())
 
 	// Empty digest → accepted with a WARN log, file kept.
 	dest := filepath.Join(t.TempDir(), "out.mmdb")
-	if err := downloadVerifiedFile(ts.URL, dest, ""); err != nil {
+	if err := downloadVerifiedFile(ts.Client(), ts.URL, dest, ""); err != nil {
 		t.Fatalf("downloadVerifiedFile with no digest: %v", err)
 	}
 	if _, err := os.Stat(dest); err != nil {

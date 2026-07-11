@@ -1,13 +1,13 @@
 package providers
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
-	"github.com/robfig/cron/v3"
 )
 
 var ip2regionDatabase = "ip2region_v4.xdb"
@@ -19,28 +19,15 @@ type IP2Region struct {
 }
 
 func init() {
-	m := &IP2Region{version: xdb.IPv4}
-	types.RegisterGeoIpProvider("ip2region", m)
-	go func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			m.DownloadDb()
-		}
-	}()
-	timer := cron.New()
-	timer.AddFunc("@every 1h", func() {
-		m.DownloadDb()
-	})
-	timer.AddFunc("@every 1m", func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			err := m.DownloadDb()
-			if err != nil {
-				slog.Error("ip2region download db error", "err", err)
-			}
-		}
-	})
-	timer.Start()
+	types.RegisterGeoIpProvider("ip2region", &IP2Region{version: xdb.IPv4})
+}
+
+// Start begins background maintenance of the ip2region database, bound to ctx.
+// Unlike the other providers it builds the xdb from the upstream git repo rather
+// than an HTTP download, so it needs no injected HTTP client.
+func (m *IP2Region) Start(ctx context.Context) error {
+	maintainDB(ctx, "ip2region", m.GetDbPath, m.DownloadDb)
+	return nil
 }
 
 func (m *IP2Region) GetIpInfo(ip string) (*types.GeoIp, error) {

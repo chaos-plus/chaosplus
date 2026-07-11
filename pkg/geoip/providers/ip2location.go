@@ -1,43 +1,42 @@
 package providers
 
 import (
+	"context"
 	"errors"
-	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 	"github.com/ip2location/ip2location-go/v9"
-	"github.com/robfig/cron/v3"
 )
 
 // IP2Location uses IP2Location database.
 type IP2Location struct {
 	Token string
+
+	// client overrides the HTTP client used for downloads; nil uses the shared
+	// defaultDownloadClient. Kept unexported so it can be injected in tests
+	// without becoming public API.
+	client *http.Client
 }
 
 func init() {
-	m := &IP2Location{}
-	types.RegisterGeoIpProvider("ip2location", m)
-	go func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			m.DownloadDb()
-		}
-	}()
-	timer := cron.New()
-	timer.AddFunc("@every 1h", func() {
-		m.DownloadDb()
-	})
-	timer.AddFunc("@every 1m", func() {
-		dbPath, err := m.GetDbPath()
-		if err != nil || dbPath == "" {
-			err := m.DownloadDb()
-			if err != nil {
-				slog.Error("ip2location download db error", "err", err)
-			}
-		}
-	})
-	timer.Start()
+	types.RegisterGeoIpProvider("ip2location", &IP2Location{})
+}
+
+// httpClient returns the provider's HTTP client, falling back to the shared
+// read-only default when none was injected.
+func (m *IP2Location) httpClient() *http.Client {
+	if m.client != nil {
+		return m.client
+	}
+	return defaultDownloadClient
+}
+
+// Start begins background maintenance of the IP2Location database, bound to ctx.
+func (m *IP2Location) Start(ctx context.Context) error {
+	maintainDB(ctx, "ip2location", m.GetDbPath, func() error { return m.DownloadDb() })
+	return nil
 }
 
 func (m *IP2Location) GetIpInfo(ip string) (*types.GeoIp, error) {
