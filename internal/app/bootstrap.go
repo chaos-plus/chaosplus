@@ -45,7 +45,7 @@ func (a *App) Bootstrap() error {
 			"default": {Type: "sqlite", Dsn: ":memory:", Writable: true, Readable: true, MaxOpenConns: 1, MaxIdleConns: 1},
 		}
 	}
-	a.dbr = bunx.NewDatasourceRouter(a.name, cfg.Database)
+	a.dbr = bunx.NewDatasourceRouter(a.name, cfg.Debug, cfg.Database)
 
 	// init db-backed infra: schema migrations, worker id and the guid generator.
 	// Skipped when no writable datasource exists so the app can still serve

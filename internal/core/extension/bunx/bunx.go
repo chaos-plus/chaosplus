@@ -115,7 +115,7 @@ func (r *DatasourceRouter) Close() error {
 	return errors.Join(errs...)
 }
 
-func NewDatasourceRouter(tracerName string, datasources map[string]Datasource) DatasourceRouter {
+func NewDatasourceRouter(tracerName string, debug bool, datasources map[string]Datasource) DatasourceRouter {
 	writer := make([]*bun.DB, 0)
 	reader := make([]*bun.DB, 0)
 	for _, datasource := range datasources {
@@ -124,7 +124,11 @@ func NewDatasourceRouter(tracerName string, datasources map[string]Datasource) D
 			slog.Error("failed to create db", "datasource", datasource)
 			continue
 		}
-		ApplyDebugHook(db)
+		// Verbose per-query logging is opt-in via debug mode; it is far too noisy
+		// (and adds overhead) for production.
+		if debug {
+			ApplyDebugHook(db)
+		}
 		ApplySlogHook(db)
 		ApplyOtelHook(db, tracerName)
 		if datasource.Writable {

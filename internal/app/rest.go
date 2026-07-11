@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
+	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid/api"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -61,8 +61,5 @@ func (a *App) StartRestServer() error {
 }
 
 func RegisteRouter(api huma.API) {
-	huma.Get(api, "/demo", func(ctx context.Context, input *struct{}) (*struct{}, error) {
-		// TODO: Implement me!
-		return nil, nil
-	})
+	guidapi.RegisterREST(api)
 }
