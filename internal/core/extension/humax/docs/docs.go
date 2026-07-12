@@ -1,11 +1,8 @@
 // Package docs serves API documentation UIs for a huma API mounted on a chi
-// router.
-//
-// It exposes either huma's single built-in renderer or a tabbed page that hosts
-// all five renderers (Scalar, Swagger UI, ReDoc, Stoplight, openapi-ui) at once,
-// each also reachable at its own /docs/<name> path. The choice is driven by the
-// DOCS_RENDERER value (env var or configs/.env), so it can change without a
-// rebuild. Spec URLs are derived from config.OpenAPIPath, not hardcoded.
+// router. It mounts a tabbed page at /docs hosting all five renderers (Scalar,
+// Swagger UI, ReDoc, Stoplight, openapi-ui), each also reachable at its own
+// /docs/<name> path. Spec URLs are derived from config.OpenAPIPath, not
+// hardcoded, and pages are served as raw HTML and never touch huma.
 package docs
 
 import (
@@ -19,10 +16,10 @@ import (
 const htmlContentType = "text/html; charset=utf-8"
 
 // Register mounts the tabbed docs page and each standalone renderer page on the
-// chi router. The spec URLs are derived from config.OpenAPIPath (the same value
-// huma uses to serve /openapi.json and /openapi.yaml), so custom OpenAPI paths
-// keep working. Pages are served as raw HTML and never touch huma. Call this
-// only when Apply reports multi mode.
+// chi router, and returns a copy of config with huma's built-in /docs disabled
+// (DocsPath cleared) so it does not overwrite the tabbed page. The spec URLs are
+// derived from config.OpenAPIPath (the same value huma uses to serve
+// /openapi.json and /openapi.yaml), so custom OpenAPI paths keep working.
 func Register(r chi.Router, config huma.Config, name string) huma.Config {
 
 	config.DocsPath = ""
