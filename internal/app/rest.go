@@ -9,6 +9,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/ratex"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +32,7 @@ func (app *App) StartRestServer() error {
 	router.Use(middleware.Recoverer)
 	router.Use(respx.Timing) // stamp request start time for response meta
 	router.Use(respx.Locale) // resolve request locale for message i18n
+	app.useRateLimit(router) // per-IP / per-account limiting (after RealIP + Locale)
 
 	config := huma.DefaultConfig(app.name+" API", "1.0.0")
 	// Disable huma's built-in single-renderer /docs so our own tabbed page
@@ -62,4 +64,39 @@ func (app *App) StartRestServer() error {
 	}()
 
 	return nil
+}
+
+// useRateLimit mounts the Redis-backed rate limiter when enabled and a Redis
+// client is configured. Each dimension (per-IP, per-account) is added only when
+// enabled with a positive rate; with no dimensions the middleware is not mounted.
+func (app *App) useRateLimit(router chi.Router) {
+	rl := app.cfg.RateLimit
+	if !rl.Enabled {
+		return
+	}
+	if app.redis == nil {
+		slog.Warn("rate limiting enabled but no redis configured; skipping")
+		return
+	}
+
+	var dims []ratex.Dimension
+	if rl.IP.Enabled && rl.IP.Rate > 0 {
+		dims = append(dims, ratex.Dimension{
+			Name:  "ip",
+			Key:   ratex.IPKey,
+			Limit: ratex.Limit(rl.IP.Rate, rl.IP.Period, rl.IP.Burst),
+		})
+	}
+	if rl.Account.Enabled && rl.Account.Rate > 0 {
+		dims = append(dims, ratex.Dimension{
+			Name:  "account",
+			Key:   ratex.HeaderKey(rl.Account.Header),
+			Limit: ratex.Limit(rl.Account.Rate, rl.Account.Period, rl.Account.Burst),
+		})
+	}
+	if len(dims) == 0 {
+		return
+	}
+	router.Use(ratex.New(app.redis, rl.Prefix, dims...).Handler)
+	slog.Info("rate limiting enabled", "dimensions", len(dims))
 }

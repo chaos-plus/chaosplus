@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 )
@@ -14,8 +16,54 @@ type Config struct {
 	Log         Log                        `mapstructure:"log" group:"log"`
 	RestServer  RestServer                 `mapstructure:"rest" group:"rest"`
 	GrpcServer  GrpcServer                 `mapstructure:"grpc" group:"grpc"`
+	Redis       Redis                      `mapstructure:"redis" group:"redis"`
+	RateLimit   RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
 	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
 	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+}
+
+// Redis configures the shared Redis client, supporting standalone, sentinel, and
+// cluster deployments via go-redis's universal client:
+//   - one Addrs entry, no MasterName     → standalone
+//   - MasterName set (Addrs = sentinels) → sentinel / failover
+//   - multiple Addrs, no MasterName      → cluster
+//
+// Empty Addrs disables Redis (and therefore rate limiting).
+type Redis struct {
+	Addrs      []string `mapstructure:"addrs" description:"redis addresses host:port (1=standalone, N=cluster, or sentinel addrs); empty disables redis"`
+	MasterName string   `mapstructure:"master_name" description:"sentinel master name; set to use sentinel/failover" default:""`
+	Username   string   `mapstructure:"username" description:"redis username" default:""`
+	Password   string   `mapstructure:"password" description:"redis password" default:""`
+	DB         int      `mapstructure:"db" description:"redis database index" default:"0"`
+}
+
+// RateLimit configures the Redis-backed rate limiter. It enforces per-IP and
+// per-account dimensions independently; each is applied only when enabled with a
+// positive rate. Requires a configured Redis; disabled otherwise.
+type RateLimit struct {
+	Enabled bool        `mapstructure:"enabled" description:"enable rate limiting (requires redis)" default:"false"`
+	Prefix  string      `mapstructure:"prefix" description:"redis key prefix" default:"rl"`
+	IP      RateRule    `mapstructure:"ip" group:"ip"`
+	Account AccountRule `mapstructure:"account" group:"account"`
+}
+
+// RateRule is one GCRA rate-limit rule: rate requests per period, allowing bursts
+// up to burst (defaults to rate when zero).
+type RateRule struct {
+	Enabled bool          `mapstructure:"enabled" description:"enable this dimension" default:"false"`
+	Rate    int           `mapstructure:"rate" description:"allowed requests per period" default:"0"`
+	Period  time.Duration `mapstructure:"period" description:"rate window, e.g. 1m" default:"1m"`
+	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
+}
+
+// AccountRule is a RateRule plus the header carrying the account id. When auth is
+// added, the account key can move from this header to the request context.
+type AccountRule struct {
+	Enabled bool          `mapstructure:"enabled" description:"enable this dimension" default:"false"`
+	Rate    int           `mapstructure:"rate" description:"allowed requests per period" default:"0"`
+	Period  time.Duration `mapstructure:"period" description:"rate window, e.g. 1m" default:"1m"`
+	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
+	Header  string        `mapstructure:"header" description:"header carrying the account id" default:"X-Account-Id"`
 }
 
 type Log struct {

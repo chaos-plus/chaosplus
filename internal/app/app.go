@@ -17,6 +17,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
 	_ "github.com/danielgtaylor/huma/v2/formats/cbor"
@@ -31,6 +32,11 @@ type App struct {
 	cfg  Config
 
 	dbr bunx.DatasourceRouter
+
+	// redis is the shared client used by the rate limiter. The universal client
+	// abstracts standalone, sentinel, and cluster deployments. nil when no Redis
+	// is configured (Config.Redis.Addrs empty), in which case rate limiting is off.
+	redis redis.UniversalClient
 
 	// mods are the application modules, in registration order. Their lifecycle
 	// phases (migrate/start/register/stop) are driven by the phase runners.
@@ -165,6 +171,13 @@ func (app *App) shutdown() error {
 	// Close the database connection pools once nothing is serving.
 	if err := app.dbr.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("db close: %w", err))
+	}
+
+	// Close the Redis client used by the rate limiter, if any.
+	if app.redis != nil {
+		if err := app.redis.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("redis close: %w", err))
+		}
 	}
 
 	if len(errs) > 0 {

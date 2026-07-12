@@ -8,6 +8,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/chaos-plus/chaosplus/pkg/timezone"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 )
 
@@ -38,6 +39,19 @@ func (app *App) Bootstrap() error {
 	// init db — a single sqlite connection keeps the private ":memory:" database
 	// alive and consistent for the process lifetime (see SetupDebug).
 	app.dbr = bunx.NewDatasourceRouter(app.name, app.cfg.Debug, app.cfg.Database)
+
+	// init redis — created lazily (no startup ping) so the rate limiter can fail
+	// open if Redis is briefly unavailable. The universal client selects
+	// standalone/sentinel/cluster from the options. Absent when no address is set.
+	if len(app.cfg.Redis.Addrs) > 0 {
+		app.redis = redis.NewUniversalClient(&redis.UniversalOptions{
+			Addrs:      app.cfg.Redis.Addrs,
+			MasterName: app.cfg.Redis.MasterName,
+			Username:   app.cfg.Redis.Username,
+			Password:   app.cfg.Redis.Password,
+			DB:         app.cfg.Redis.DB,
+		})
+	}
 
 	// build modules, then run the migrate and start phases in order.
 	app.mods = app.buildModules()
