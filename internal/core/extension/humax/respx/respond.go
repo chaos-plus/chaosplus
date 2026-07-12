@@ -19,22 +19,28 @@ func Timing(next http.Handler) http.Handler {
 	})
 }
 
-// OK wraps data in a success envelope (code 0, message "ok").
+// OK wraps data in a success envelope (code 0). Message carries the i18n key
+// "success"; LocalizeMessage resolves it to the request locale at serialize time.
 func OK[T any](ctx context.Context, data T) *Body[T] {
-	return &Body[T]{Body: Envelope[T]{Message: "ok", Meta: metaOf(ctx, nil), Data: data}}
+	return &Body[T]{Body: Envelope[T]{Message: "success", Meta: metaOf(ctx, nil), Data: data}}
 }
 
-// List wraps data in a success envelope carrying pagination meta.
+// List wraps data in a success envelope carrying pagination meta. Message carries
+// the i18n key "success" (see OK).
 func List[T any](ctx context.Context, data T, page Page) *Body[T] {
-	return &Body[T]{Body: Envelope[T]{Message: "ok", Meta: metaOf(ctx, &page), Data: data}}
+	return &Body[T]{Body: Envelope[T]{Message: "success", Meta: metaOf(ctx, &page), Data: data}}
 }
 
 // metaOf builds response meta from the request start time stored by Timing. The
 // elapsed time is measured up to here (handler completion), before the response
 // is serialized — that is the price of carrying the duration in the body.
+//
+// RequestAt is emitted in UTC (RFC3339 "Z"): timestamps are UTC end to end and
+// only converted to a display timezone by the client. start keeps its monotonic
+// reading so ElapsedMS stays accurate; only the wall-clock RequestAt is UTC-normalized.
 func metaOf(ctx context.Context, page *Page) Meta {
 	start := startOf(ctx)
-	return Meta{RequestAt: start, ElapsedMS: float64(time.Since(start).Nanoseconds()) / 1e6, Page: page}
+	return Meta{RequestAt: start.UTC(), ElapsedMS: float64(time.Since(start).Nanoseconds()) / 1e6, Page: page}
 }
 
 func startOf(ctx context.Context) time.Time {

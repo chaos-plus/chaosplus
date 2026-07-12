@@ -10,5 +10,9 @@
   "role_not_found": "Role not found",
   "invalid_id": "Invalid ID",
   "validation_failed": "Validation failed",
-  "too_many_requests": "Too many requests, please try again later"
+  "too_many_requests": "Too many requests, please try again later",
+  "invalid_ipv4": "Not a valid IPv4 address (expected x.x.x.x)",
+  "geoip_no_client_ip": "Could not determine an IPv4 address for the client",
+  "geoip_not_found": "No geolocation found for this IP",
+  "guid_not_ready": "ID generator is not ready"
 }

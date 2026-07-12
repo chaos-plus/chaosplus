@@ -10,5 +10,9 @@
   "role_not_found": "角色不存在",
   "invalid_id": "无效的ID",
   "validation_failed": "验证失败",
-  "too_many_requests": "请求过于频繁，请稍后再试"
+  "too_many_requests": "请求过于频繁，请稍后再试",
+  "invalid_ipv4": "不是合法的 IPv4 地址（应为 x.x.x.x）",
+  "geoip_no_client_ip": "无法确定客户端的 IPv4 地址",
+  "geoip_not_found": "未找到该 IP 的地理位置",
+  "guid_not_ready": "ID 生成器尚未就绪"
 }

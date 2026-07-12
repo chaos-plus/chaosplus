@@ -30,11 +30,15 @@ func (app *App) StartRestServer() error {
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
 	router.Use(respx.Timing) // stamp request start time for response meta
+	router.Use(respx.Locale) // resolve request locale for message i18n
 
 	config := huma.DefaultConfig(app.name+" API", "1.0.0")
 	// Disable huma's built-in single-renderer /docs so our own tabbed page
 	// (registered below) is not overwritten when humachi.New registers routes.
 	config = docs.Register(router, config, app.name)
+
+	// Localize every envelope Message into the request locale at serialize time.
+	config.Transformers = append(config.Transformers, respx.LocalizeMessage)
 
 	// Unify every error response into the {code,message,meta,data} envelope.
 	respx.Install()
