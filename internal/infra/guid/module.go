@@ -18,17 +18,19 @@ import (
 // prepares the dlock/wuid tables, Start leases a worker id and installs the
 // generator, and Stop releases the lease.
 type Module struct {
-	db     *bun.DB
-	onLost func(error)
+	db       *bun.DB
+	onLost   func(error)
+	workerID int
 
 	worker *wuid.Worker
 }
 
-// NewModule builds the module against db. onLost is invoked if the worker-id
-// lease is later lost (treat as fatal: ids could collide across nodes); it may
-// be nil.
-func NewModule(db *bun.DB, onLost func(error)) *Module {
-	return &Module{db: db, onLost: onLost}
+// NewModule builds the module against db. workerID pins the worker id when > 0
+// (a conflict with another live node is fatal); 0 auto-allocates via the lease.
+// onLost is invoked if the worker-id lease is later lost (treat as fatal: ids
+// could collide across nodes); it may be nil.
+func NewModule(db *bun.DB, onLost func(error), workerID int) *Module {
+	return &Module{db: db, onLost: onLost, workerID: workerID}
 }
 
 // Migrate applies the dlock and wuid schemas (each with its own goose version
@@ -46,7 +48,15 @@ func (m *Module) Migrate(ctx context.Context) error {
 // Start leases a worker id and installs the process-wide generator seeded with
 // it. Requires Migrate to have run first.
 func (m *Module) Start(ctx context.Context) error {
-	w, err := wuid.Open(ctx, m.db, wuid.OnLost(m.onWorkerLost))
+	opts := []wuid.Option{wuid.OnLost(m.onWorkerLost)}
+	if m.workerID != 0 {
+		if m.workerID < 0 || m.workerID > wuid.MaxWorkerID {
+			return fmt.Errorf("guid: worker id %d out of range (0..%d)", m.workerID, wuid.MaxWorkerID)
+		}
+		opts = append(opts, wuid.WithID(uint16(m.workerID)))
+	}
+
+	w, err := wuid.Open(ctx, m.db, opts...)
 	if err != nil {
 		return fmt.Errorf("open worker id: %w", err)
 	}

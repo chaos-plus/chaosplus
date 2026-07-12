@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
 )
@@ -195,6 +196,48 @@ func TestFromEnv(t *testing.T) {
 		_, _, err := fromEnv(EnvKey)
 		assert.Error(t, err)
 	})
+}
+
+func TestClaimPinnedID(t *testing.T) {
+	ctx := context.Background()
+	database := newDB(t)
+	nowExpr := bunx.NowMillisExpr(database.Dialect().Name().String())
+	const lease = int64(30_000)
+
+	// Free id -> claimed by insert.
+	id, err := claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", lease, nowExpr)
+	require.NoError(t, err)
+	assert.Equal(t, 7, id)
+
+	// Same owner (restart on the same host) reclaims it even though it is live.
+	id, err = claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", lease, nowExpr)
+	require.NoError(t, err)
+	assert.Equal(t, 7, id)
+
+	// A different host, while the lease is live, is a hard conflict.
+	_, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", lease, nowExpr)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "already held by another node")
+
+	// Once the holder releases (expires_at = 0), another host may claim it.
+	_, err = database.NewUpdate().Model((*workerRow)(nil)).
+		Set("expires_at = ?", int64(0)).Where("id = ?", 7).Exec(ctx)
+	require.NoError(t, err)
+	id, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", lease, nowExpr)
+	require.NoError(t, err)
+	assert.Equal(t, 7, id)
+}
+
+func TestOpen_WithID(t *testing.T) {
+	ctx := context.Background()
+	database := newDB(t)
+
+	w, err := Open(ctx, database, WithID(3))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close(ctx) })
+
+	assert.Equal(t, uint16(3), w.ID())
+	assert.False(t, w.static, "a pinned id uses the lease, not the static path")
 }
 
 func TestParseOrdinal(t *testing.T) {

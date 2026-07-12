@@ -34,7 +34,7 @@ func List[T any](ctx context.Context, data T, page Page) *Body[T] {
 // is serialized — that is the price of carrying the duration in the body.
 func metaOf(ctx context.Context, page *Page) Meta {
 	start := startOf(ctx)
-	return Meta{RequestAt: start, ElapsedMS: time.Since(start).Milliseconds(), Page: page}
+	return Meta{RequestAt: start, ElapsedMS: float64(time.Since(start).Nanoseconds()) / 1e6, Page: page}
 }
 
 func startOf(ctx context.Context) time.Time {

@@ -7,6 +7,7 @@ type Config struct {
 	Name       string                     `mapstructure:"name" description:"app name" default:""`
 	Debug      bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
 	Timezone   string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
+	WorkerID   int                        `mapstructure:"worker_id" description:"fixed guid worker id; 0 = auto-allocate via dlock, >0 = pin this id (conflict is fatal)" default:"0"`
 	Log        Log                        `mapstructure:"log" group:"log"`
 	RestServer RestServer                 `mapstructure:"rest" group:"rest"`
 	GrpcServer GrpcServer                 `mapstructure:"grpc" group:"grpc"`

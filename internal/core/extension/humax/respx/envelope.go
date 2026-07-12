@@ -24,7 +24,7 @@ type Envelope[T any] struct {
 // Meta carries per-request metadata. Page is set only for list responses.
 type Meta struct {
 	RequestAt time.Time `json:"request_at" doc:"when the server received the request"`
-	ElapsedMS int64     `json:"elapsed_ms" doc:"server processing time in milliseconds"`
+	ElapsedMS float64   `json:"elapsed_ms" doc:"server processing time in milliseconds (sub-millisecond precision)"`
 	Page      *Page     `json:"page,omitempty" doc:"pagination; present on list responses only"`
 }
 

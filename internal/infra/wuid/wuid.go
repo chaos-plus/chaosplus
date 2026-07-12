@@ -66,6 +66,7 @@ type config struct {
 	lease      time.Duration
 	onLost     func(error)
 	useOrdinal bool
+	pinnedID   *uint16 // set by WithID: claim this exact id via the lease
 }
 
 // Option configures worker-id allocation.
@@ -92,6 +93,15 @@ func OnLost(fn func(error)) Option {
 // Deployment pod's random suffix could coincidentally look like an ordinal.
 func WithHostnameOrdinal() Option {
 	return func(c *config) { c.useOrdinal = true }
+}
+
+// WithID pins the worker id to a specific value, claimed through the database
+// lease rather than the static path: the id is verified free and held with a
+// heartbeat, and Open fails if another live node already holds it. Use for
+// hand-assigned ids that must stay collision-safe. A restart on the same host
+// reclaims its own id; a different host holding it live is a conflict.
+func WithID(id uint16) Option {
+	return func(c *config) { c.pinnedID = &id }
 }
 
 func newConfig(opts ...Option) config {
@@ -140,13 +150,20 @@ func newStatic(id uint16) *Worker {
 	return w
 }
 
-// Open picks a worker id using, in order: the WUID env var, the Kubernetes
-// StatefulSet ordinal (only when WithHostnameOrdinal is set), and finally a
-// database lease. This makes the same code work across static config, K8s
-// StatefulSets, and ephemeral Deployment/VM nodes. The returned Worker owns a
-// lease + heartbeat on the database path, so callers must Close it.
+// Open picks a worker id using, in order: a pinned id (WithID, claimed via the
+// lease), the WUID env var, the Kubernetes StatefulSet ordinal (only when
+// WithHostnameOrdinal is set), and finally an auto database lease. This makes the
+// same code work across pinned config, static config, K8s StatefulSets, and
+// ephemeral Deployment/VM nodes. On any lease path the returned Worker owns a
+// lease + heartbeat, so callers must Close it.
 func Open(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
 	cfg := newConfig(opts...)
+
+	// A pinned id takes precedence and always goes through the lease so it can be
+	// verified and held; a conflict is fatal rather than silently reassigned.
+	if cfg.pinnedID != nil {
+		return allocate(ctx, db, opts...)
+	}
 
 	if id, ok, err := fromEnv(EnvKey); err != nil {
 		return nil, err
@@ -184,7 +201,15 @@ func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) 
 	// statement, so nodes with skewed local clocks agree on when a slot is free.
 	nowExpr := bunx.NowMillisExpr(db.Dialect().Name().String())
 
-	id, err := claimID(ctx, db, owner, host, cfg.lease.Milliseconds(), nowExpr)
+	var id int
+	if cfg.pinnedID != nil {
+		// A pinned id uses a stable per-host owner so a restart reclaims its own
+		// id, while a different host holding it live is reported as a conflict.
+		owner = pinnedOwner(host)
+		id, err = claimPinnedID(ctx, db, int(*cfg.pinnedID), owner, host, cfg.lease.Milliseconds(), nowExpr)
+	} else {
+		id, err = claimID(ctx, db, owner, host, cfg.lease.Milliseconds(), nowExpr)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +276,52 @@ func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64,
 		return 0, err
 	}
 	return next, nil
+}
+
+// pinnedOwner is the lease owner for a WithID worker. It is stable per host so a
+// restart reclaims its own id, but differs across hosts so two hosts pinned to
+// the same id are detected as a conflict.
+func pinnedOwner(host string) string {
+	if host == "" {
+		host = "unknown"
+	}
+	return "pin:" + host
+}
+
+// claimPinnedID claims a specific worker id inside the allocation lock. It takes
+// the id over when the row is absent, expired, or already owned by this host (a
+// restart). A live lease held by a different owner is a hard conflict.
+func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host string, leaseMs int64, nowExpr string) (int, error) {
+	existing := new(workerRow)
+	err := db.NewSelect().Model(existing).Where("id = ?", id).Scan(ctx)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if _, ierr := db.NewInsert().Model(&workerRow{ID: id, Owner: owner, Host: host}).
+			Value("expires_at", nowExpr+" + ?", leaseMs).
+			Exec(ctx); ierr != nil {
+			return 0, ierr
+		}
+		return id, nil
+	case err != nil:
+		return 0, err
+	}
+
+	// Row exists: take it over only if it is ours or already expired.
+	res, err := db.NewUpdate().Model((*workerRow)(nil)).
+		Set("owner = ?", owner).
+		Set("host = ?", host).
+		Set("expires_at = "+nowExpr+" + ?", leaseMs).
+		Where("id = ?", id).
+		Where("(owner = ? OR expires_at < "+nowExpr+")", owner).
+		Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return id, nil
+	}
+	return 0, fmt.Errorf("wuid: worker id %d is already held by another node (owner %q); "+
+		"check for a duplicate worker_id configuration", id, existing.Owner)
 }
 
 func (w *Worker) startHeartbeat(ctx context.Context) {
