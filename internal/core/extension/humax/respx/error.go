@@ -1,6 +1,8 @@
 package respx
 
 import (
+	"context"
+	"net/http"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -27,6 +29,20 @@ type ErrorDetail struct {
 
 func (e *errorEnvelope) Error() string  { return e.Message }
 func (e *errorEnvelope) GetStatus() int { return e.status }
+
+// Err returns a business error carried in the envelope: a business Code
+// (100000+) and message, with meta filled from ctx. Return it from a handler and
+// huma renders it as the standard error envelope. The transport status is 400 so
+// the response stays under the documented error schema; the specific failure is
+// conveyed by Code.
+func Err(ctx context.Context, code int, message string) error {
+	return &errorEnvelope{
+		status:  http.StatusBadRequest,
+		Code:    code,
+		Message: message,
+		Meta:    metaOf(ctx, nil),
+	}
+}
 
 // Install replaces huma.NewError so every built-in error response (validation,
 // 4xx, 5xx) is rendered as the uniform envelope. Call once at startup BEFORE any

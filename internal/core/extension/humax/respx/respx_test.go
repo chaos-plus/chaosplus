@@ -58,3 +58,21 @@ func TestInstall_UnifiesErrorsIntoEnvelope(t *testing.T) {
 	assert.Equal(t, "expected integer", env.Data[0].Message)
 	assert.Equal(t, "path.count", env.Data[0].Location)
 }
+
+func TestErr_BusinessEnvelope(t *testing.T) {
+	e := Err(context.Background(), 100001, "insufficient balance")
+
+	se, ok := e.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, 400, se.GetStatus())
+
+	raw, err := json.Marshal(e)
+	require.NoError(t, err)
+	var env struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &env))
+	assert.Equal(t, 100001, env.Code)
+	assert.Equal(t, "insufficient balance", env.Message)
+}
