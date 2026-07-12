@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -34,7 +35,13 @@ func (m *IP2Location) httpClient() *http.Client {
 }
 
 // Start begins background maintenance of the IP2Location database, bound to ctx.
+// It no-ops without a token: the download endpoint requires one, so attempting it
+// would only fetch an error page. Set Token to enable the provider.
 func (m *IP2Location) Start(ctx context.Context) error {
+	if m.Token == "" {
+		slog.Info("geoip ip2location disabled: no token configured")
+		return nil
+	}
 	maintainDB(ctx, "ip2location", m.GetDbPath, func() error { return m.DownloadDb() })
 	return nil
 }
