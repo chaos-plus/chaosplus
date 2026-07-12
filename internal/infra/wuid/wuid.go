@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -203,9 +204,9 @@ func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) 
 
 	var id int
 	if cfg.pinnedID != nil {
-		// A pinned id uses a stable per-host owner so a restart reclaims its own
-		// id, while a different host holding it live is reported as a conflict.
-		owner = pinnedOwner(host)
+		// A pinned id uses a stable per-node owner so a restart reclaims its own
+		// id, while a different machine holding it live is reported as a conflict.
+		owner = pinnedOwner()
 		id, err = claimPinnedID(ctx, db, int(*cfg.pinnedID), owner, host, cfg.lease.Milliseconds(), nowExpr)
 	} else {
 		id, err = claimID(ctx, db, owner, host, cfg.lease.Milliseconds(), nowExpr)
@@ -278,14 +279,42 @@ func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64,
 	return next, nil
 }
 
-// pinnedOwner is the lease owner for a WithID worker. It is stable per host so a
-// restart reclaims its own id, but differs across hosts so two hosts pinned to
-// the same id are detected as a conflict.
-func pinnedOwner(host string) string {
+// pinnedOwner is the lease owner for a WithID worker: a stable per-node identity
+// so a restart reclaims its own id, but distinct across machines so two nodes
+// pinned to the same id are detected as a conflict.
+func pinnedOwner() string {
+	return "pin:" + nodeIdentity()
+}
+
+// nodeIdentity is a stable, reasonably-unique identifier for this host. Hostname
+// is stable and human-readable; the first non-loopback MAC disambiguates hosts
+// that happen to share a hostname. IP is deliberately excluded — it is too
+// volatile (DHCP/reschedule) to anchor identity and would break restart reuse.
+func nodeIdentity() string {
+	host, _ := os.Hostname()
 	if host == "" {
 		host = "unknown"
 	}
-	return "pin:" + host
+	if mac := firstMAC(); mac != "" {
+		return host + "@" + mac
+	}
+	return host
+}
+
+// firstMAC returns the hardware address of the first non-loopback interface, or
+// "" when none is available.
+func firstMAC() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || len(ifc.HardwareAddr) == 0 {
+			continue
+		}
+		return ifc.HardwareAddr.String()
+	}
+	return ""
 }
 
 // claimPinnedID claims a specific worker id inside the allocation lock. It takes

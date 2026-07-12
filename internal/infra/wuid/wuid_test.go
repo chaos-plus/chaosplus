@@ -2,6 +2,7 @@ package wuid
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -226,6 +227,18 @@ func TestClaimPinnedID(t *testing.T) {
 	id, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", lease, nowExpr)
 	require.NoError(t, err)
 	assert.Equal(t, 7, id)
+}
+
+func TestNodeIdentity_StableAndNonEmpty(t *testing.T) {
+	a := nodeIdentity()
+	b := nodeIdentity()
+	assert.NotEmpty(t, a)
+	assert.Equal(t, a, b, "identity must be deterministic across calls")
+
+	host, _ := os.Hostname()
+	if host != "" {
+		assert.Contains(t, a, host, "identity carries the hostname for readability")
+	}
 }
 
 func TestOpen_WithID(t *testing.T) {
