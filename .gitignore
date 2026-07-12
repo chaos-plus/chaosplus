@@ -16,6 +16,8 @@
 coverage.*
 *.prof
 
+*.db
+
 # Runtime logs
 /logs/
 *.log

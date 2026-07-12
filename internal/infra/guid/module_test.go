@@ -28,7 +28,7 @@ func TestModule_FullChain(t *testing.T) {
 	db := newDB(t)
 
 	var lostCalled bool
-	m := NewModule(db, func(error) { lostCalled = true }, 0)
+	m := NewModule(db, func(error) { lostCalled = true }, 0, 0)
 
 	require.NoError(t, m.Migrate(ctx))
 	require.NoError(t, m.Start(ctx))
@@ -58,7 +58,7 @@ func TestModule_StartWithoutMigrate_Errors(t *testing.T) {
 	db := newDB(t)
 
 	// No tables exist, so leasing a worker id (which takes a dlock) fails.
-	m := NewModule(db, nil, 0)
+	m := NewModule(db, nil, 0, 0)
 	assert.Error(t, m.Start(ctx))
 }
 
@@ -67,12 +67,12 @@ func TestModule_MigrateError_OnClosedDB(t *testing.T) {
 	db := newDB(t)
 	require.NoError(t, db.Close())
 
-	m := NewModule(db, nil, 0)
+	m := NewModule(db, nil, 0, 0)
 	assert.Error(t, m.Migrate(ctx))
 }
 
 func TestModule_StopWithoutStart_IsNoop(t *testing.T) {
-	m := NewModule(newDB(t), nil, 0)
+	m := NewModule(newDB(t), nil, 0, 0)
 	assert.NoError(t, m.Stop(context.Background()))
 }
 
@@ -80,7 +80,7 @@ func TestModule_PinnedWorkerID_Starts(t *testing.T) {
 	ctx := context.Background()
 	db := newDB(t)
 
-	m := NewModule(db, nil, 12)
+	m := NewModule(db, nil, 12, 0)
 	require.NoError(t, m.Migrate(ctx))
 	require.NoError(t, m.Start(ctx))
 	t.Cleanup(func() { _ = m.Stop(ctx) })
@@ -90,7 +90,7 @@ func TestModule_PinnedWorkerID_Starts(t *testing.T) {
 }
 
 func TestModule_WorkerID_OutOfRange_Errors(t *testing.T) {
-	m := NewModule(newDB(t), nil, 70000)
+	m := NewModule(newDB(t), nil, 70000, 0)
 	assert.ErrorContains(t, m.Start(context.Background()), "out of range")
 }
 
@@ -100,7 +100,7 @@ func TestModule_WorkerLost_DisablesGeneratorAndEscalates(t *testing.T) {
 	SetDefault(g)
 
 	var lost error
-	m := NewModule(nil, func(e error) { lost = e }, 0)
+	m := NewModule(nil, func(e error) { lost = e }, 0, 0)
 
 	m.onWorkerLost(errors.New("lease gone"))
 

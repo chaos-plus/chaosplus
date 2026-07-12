@@ -12,6 +12,6 @@ func (app *App) SetupDebug() {
 	}
 
 	app.cfg.Database = map[string]bunx.Datasource{
-		"debug": {Type: "sqlite", Dsn: ":memory:", Writable: true, Readable: true, MaxOpenConns: 1, MaxIdleConns: 1},
+		"debug": {Type: "sqlite", Dsn: "file:debug.db?cache=shared&mode=rwc", Writable: true, Readable: true, MaxOpenConns: 1, MaxIdleConns: 1},
 	}
 }

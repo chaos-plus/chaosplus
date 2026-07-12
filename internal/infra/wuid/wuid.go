@@ -20,11 +20,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +63,7 @@ type workerRow struct {
 	Owner     string `bun:"owner,notnull"`
 	Host      string `bun:"host,notnull"`
 	ExpiresAt int64  `bun:"expires_at,notnull"` // unix millis
+	Meta      string `bun:"meta"`               // JSON node diagnostics (ip/mac/docker/os)
 }
 
 type config struct {
@@ -201,15 +204,16 @@ func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) 
 	// Judge expiry by the database clock (nowExpr), evaluated inside each
 	// statement, so nodes with skewed local clocks agree on when a slot is free.
 	nowExpr := bunx.NowMillisExpr(db.Dialect().Name().String())
+	meta := nodeMeta()
 
 	var id int
 	if cfg.pinnedID != nil {
 		// A pinned id uses a stable per-node owner so a restart reclaims its own
 		// id, while a different machine holding it live is reported as a conflict.
 		owner = pinnedOwner()
-		id, err = claimPinnedID(ctx, db, int(*cfg.pinnedID), owner, host, cfg.lease.Milliseconds(), nowExpr)
+		id, err = claimPinnedID(ctx, db, int(*cfg.pinnedID), owner, host, meta, cfg.lease.Milliseconds(), nowExpr)
 	} else {
-		id, err = claimID(ctx, db, owner, host, cfg.lease.Milliseconds(), nowExpr)
+		id, err = claimID(ctx, db, owner, host, meta, cfg.lease.Milliseconds(), nowExpr)
 	}
 	if err != nil {
 		return nil, err
@@ -230,7 +234,7 @@ func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) 
 // evaluated against the database clock (nowExpr) in every statement, so a leased
 // id is never reclaimed early because of a skewed local clock; leaseMs is the
 // lease length in milliseconds added to that clock.
-func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64, nowExpr string) (int, error) {
+func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs int64, nowExpr string) (int, error) {
 	// 1. Prefer reusing the lowest expired slot.
 	var reuse int
 	err := db.NewSelect().Model((*workerRow)(nil)).
@@ -243,6 +247,7 @@ func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64,
 		res, uerr := db.NewUpdate().Model((*workerRow)(nil)).
 			Set("owner = ?", owner).
 			Set("host = ?", host).
+			Set("meta = ?", meta).
 			Set("expires_at = "+nowExpr+" + ?", leaseMs).
 			Where("id = ?", reuse).
 			Where("expires_at < " + nowExpr).
@@ -271,7 +276,7 @@ func claimID(ctx context.Context, db *bun.DB, owner, host string, leaseMs int64,
 		return 0, fmt.Errorf("wuid: worker id pool exhausted (max %d)", MaxWorkerID)
 	}
 
-	if _, err := db.NewInsert().Model(&workerRow{ID: next, Owner: owner, Host: host}).
+	if _, err := db.NewInsert().Model(&workerRow{ID: next, Owner: owner, Host: host, Meta: meta}).
 		Value("expires_at", nowExpr+" + ?", leaseMs).
 		Exec(ctx); err != nil {
 		return 0, err
@@ -301,6 +306,56 @@ func nodeIdentity() string {
 	return host
 }
 
+// nodeMeta is a JSON blob of node diagnostics stored on the claimed row so a
+// conflict (or an operator inspecting the table) can see who holds a worker id.
+// It is informational only and never used for matching.
+func nodeMeta() string {
+	host, _ := os.Hostname()
+	b, _ := json.Marshal(map[string]any{
+		"host":   host,
+		"ip":     firstIP(),
+		"mac":    firstMAC(),
+		"docker": isContainer(),
+		"os":     runtime.GOOS + "/" + runtime.GOARCH,
+	})
+	return string(b)
+}
+
+// firstIP returns the first non-loopback IPv4 address, or "" when none is found.
+func firstIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
+}
+
+// isContainer is a best-effort check for running inside a container. It is safe
+// on any OS: the Linux-only files simply fail elsewhere.
+func isContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "kubepods") || strings.Contains(s, "containerd") {
+			return true
+		}
+	}
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != ""
+}
+
 // firstMAC returns the hardware address of the first non-loopback interface, or
 // "" when none is available.
 func firstMAC() string {
@@ -320,12 +375,12 @@ func firstMAC() string {
 // claimPinnedID claims a specific worker id inside the allocation lock. It takes
 // the id over when the row is absent, expired, or already owned by this host (a
 // restart). A live lease held by a different owner is a hard conflict.
-func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host string, leaseMs int64, nowExpr string) (int, error) {
+func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host, meta string, leaseMs int64, nowExpr string) (int, error) {
 	existing := new(workerRow)
 	err := db.NewSelect().Model(existing).Where("id = ?", id).Scan(ctx)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if _, ierr := db.NewInsert().Model(&workerRow{ID: id, Owner: owner, Host: host}).
+		if _, ierr := db.NewInsert().Model(&workerRow{ID: id, Owner: owner, Host: host, Meta: meta}).
 			Value("expires_at", nowExpr+" + ?", leaseMs).
 			Exec(ctx); ierr != nil {
 			return 0, ierr
@@ -339,6 +394,7 @@ func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host string, 
 	res, err := db.NewUpdate().Model((*workerRow)(nil)).
 		Set("owner = ?", owner).
 		Set("host = ?", host).
+		Set("meta = ?", meta).
 		Set("expires_at = "+nowExpr+" + ?", leaseMs).
 		Where("id = ?", id).
 		Where("(owner = ? OR expires_at < "+nowExpr+")", owner).
@@ -349,8 +405,8 @@ func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host string, 
 	if n, _ := res.RowsAffected(); n == 1 {
 		return id, nil
 	}
-	return 0, fmt.Errorf("wuid: worker id %d is already held by another node (owner %q); "+
-		"check for a duplicate worker_id configuration", id, existing.Owner)
+	return 0, fmt.Errorf("wuid: worker id %d is already held by another node (owner %q, meta %s); "+
+		"check for a duplicate worker_id configuration", id, existing.Owner, existing.Meta)
 }
 
 func (w *Worker) startHeartbeat(ctx context.Context) {

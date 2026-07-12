@@ -206,17 +206,17 @@ func TestClaimPinnedID(t *testing.T) {
 	const lease = int64(30_000)
 
 	// Free id -> claimed by insert.
-	id, err := claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", lease, nowExpr)
+	id, err := claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", "{}", lease, nowExpr)
 	require.NoError(t, err)
 	assert.Equal(t, 7, id)
 
 	// Same owner (restart on the same host) reclaims it even though it is live.
-	id, err = claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", lease, nowExpr)
+	id, err = claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", "{}", lease, nowExpr)
 	require.NoError(t, err)
 	assert.Equal(t, 7, id)
 
 	// A different host, while the lease is live, is a hard conflict.
-	_, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", lease, nowExpr)
+	_, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", "{}", lease, nowExpr)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "already held by another node")
 
@@ -224,7 +224,7 @@ func TestClaimPinnedID(t *testing.T) {
 	_, err = database.NewUpdate().Model((*workerRow)(nil)).
 		Set("expires_at = ?", int64(0)).Where("id = ?", 7).Exec(ctx)
 	require.NoError(t, err)
-	id, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", lease, nowExpr)
+	id, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", "{}", lease, nowExpr)
 	require.NoError(t, err)
 	assert.Equal(t, 7, id)
 }

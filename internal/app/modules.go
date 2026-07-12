@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/pkg/geoip"
@@ -19,7 +20,7 @@ func (app *App) buildModules() []any {
 	// Identity generation needs a writable database. Skipped when none exists so
 	// the app can still serve endpoints that don't need one.
 	if len(app.dbr.Writer) > 0 {
-		mods = append(mods, guid.NewModule(app.dbr.Write(), app.failStop, app.cfg.WorkerID))
+		mods = append(mods, guid.NewModule(app.dbr.Write(), app.failStop, app.cfg.WorkerID, time.Duration(app.cfg.WorkerLease)*time.Second))
 	} else {
 		slog.Warn("no writable database; skipping id generator")
 	}

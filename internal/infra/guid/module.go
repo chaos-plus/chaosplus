@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
@@ -21,16 +22,18 @@ type Module struct {
 	db       *bun.DB
 	onLost   func(error)
 	workerID int
+	lease    time.Duration
 
 	worker *wuid.Worker
 }
 
 // NewModule builds the module against db. workerID pins the worker id when > 0
 // (a conflict with another live node is fatal); 0 auto-allocates via the lease.
-// onLost is invoked if the worker-id lease is later lost (treat as fatal: ids
-// could collide across nodes); it may be nil.
-func NewModule(db *bun.DB, onLost func(error), workerID int) *Module {
-	return &Module{db: db, onLost: onLost, workerID: workerID}
+// lease sets the worker-id lease duration (0 uses wuid's default). onLost is
+// invoked if the worker-id lease is later lost (treat as fatal: ids could
+// collide across nodes); it may be nil.
+func NewModule(db *bun.DB, onLost func(error), workerID int, lease time.Duration) *Module {
+	return &Module{db: db, onLost: onLost, workerID: workerID, lease: lease}
 }
 
 // Migrate applies the dlock and wuid schemas (each with its own goose version
@@ -49,6 +52,9 @@ func (m *Module) Migrate(ctx context.Context) error {
 // it. Requires Migrate to have run first.
 func (m *Module) Start(ctx context.Context) error {
 	opts := []wuid.Option{wuid.OnLost(m.onWorkerLost)}
+	if m.lease > 0 {
+		opts = append(opts, wuid.WithLease(m.lease))
+	}
 	if m.workerID != 0 {
 		if m.workerID < 0 || m.workerID > wuid.MaxWorkerID {
 			return fmt.Errorf("guid: worker id %d out of range (0..%d)", m.workerID, wuid.MaxWorkerID)
