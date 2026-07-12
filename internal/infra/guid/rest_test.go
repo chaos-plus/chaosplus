@@ -22,11 +22,13 @@ func TestNextGUID_ReturnsStringEncodedID(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.Code)
 
 	var body struct {
-		ID string `json:"id"`
+		Code int    `json:"code"`
+		Data string `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, 0, body.Code)
 	// The id must cross the wire as a decimal string, not a bare JSON number.
-	assert.Regexp(t, `^\d+$`, body.ID)
+	assert.Regexp(t, `^\d+$`, body.Data)
 }
 
 func TestNextGUIDBatch_ReturnsDistinctStringEncodedIDs(t *testing.T) {
@@ -41,13 +43,23 @@ func TestNextGUIDBatch_ReturnsDistinctStringEncodedIDs(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.Code)
 
 	var body struct {
-		IDs []string `json:"ids"`
+		Code int      `json:"code"`
+		Data []string `json:"data"`
+		Meta struct {
+			Page struct {
+				Count int   `json:"count"`
+				Total int64 `json:"total"`
+			} `json:"page"`
+		} `json:"meta"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
-	require.Len(t, body.IDs, 5)
+	assert.Equal(t, 0, body.Code)
+	require.Len(t, body.Data, 5)
+	assert.Equal(t, 5, body.Meta.Page.Count)
+	assert.Equal(t, int64(5), body.Meta.Page.Total)
 
-	seen := make(map[string]struct{}, len(body.IDs))
-	for _, id := range body.IDs {
+	seen := make(map[string]struct{}, len(body.Data))
+	for _, id := range body.Data {
 		assert.Regexp(t, `^\d+$`, id) // decimal string, not a bare JSON number
 		_, dup := seen[id]
 		assert.False(t, dup, "batch ids must be unique")

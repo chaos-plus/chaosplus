@@ -39,10 +39,12 @@ func TestModule_FullChain(t *testing.T) {
 	resp := api.Get("/guid")
 	require.Equal(t, http.StatusOK, resp.Code)
 	var body struct {
-		ID string `json:"id"`
+		Code int    `json:"code"`
+		Data string `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
-	assert.Regexp(t, `^\d+$`, body.ID)
+	assert.Equal(t, 0, body.Code)
+	assert.Regexp(t, `^\d+$`, body.Data)
 
 	// Stop releases the lease cleanly and is idempotent.
 	require.NoError(t, m.Stop(ctx))

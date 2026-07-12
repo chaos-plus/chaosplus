@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -28,11 +29,15 @@ func (app *App) StartRestServer() error {
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
+	router.Use(respx.Timing) // stamp request start time for response meta
 
 	config := huma.DefaultConfig(app.name+" API", "1.0.0")
 	// Disable huma's built-in single-renderer /docs so our own tabbed page
 	// (registered below) is not overwritten when humachi.New registers routes.
 	config = docs.Register(router, config, app.name)
+
+	// Unify every error response into the {code,message,meta,data} envelope.
+	respx.Install()
 
 	api := humachi.New(router, config)
 	app.registerREST(api)
