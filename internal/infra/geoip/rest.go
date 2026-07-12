@@ -15,10 +15,10 @@ import (
 // module a full feature unit (like the guid module), not just background work.
 func (m *Module) RegisterREST(api huma.API) {
 	huma.Register(api, huma.Operation{
-		OperationID:   "lookup-geoip-self",
-		Method:        http.MethodGet,
-		Path:          "/geoip",
-		Summary:       "Look up the geolocation of the caller's own IP",
+		OperationID: "lookup-geoip-self",
+		Method:      http.MethodGet,
+		Path:        "/geoip",
+		Summary:     "Look up the geolocation of the caller's own IP",
 		Description: "Detects the client's IPv4 address from X-Forwarded-For/X-Real-IP and " +
 			"the transport peer, preferring a public address (public > private > loopback), " +
 			"and redirects to GET /geoip/{ip}. IPv6 loopback maps to 127.0.0.1.",
@@ -55,10 +55,11 @@ type redirectOutput struct {
 	Location string `header:"Location"`
 }
 
-// lookupSelf redirects the caller to the lookup for its own detected IPv4.
+// lookupSelf redirects the caller to the lookup for its own detected IPv4. Error
+// messages are i18n keys (see pkg/i18n/locales); respx localizes them per request.
 func lookupSelf(_ context.Context, in *selfInput) (*redirectOutput, error) {
 	if in.clientIP == "" {
-		return nil, huma.Error400BadRequest("could not determine an IPv4 address for the client")
+		return nil, huma.Error400BadRequest("geoip_no_client_ip")
 	}
 	return &redirectOutput{Location: "/geoip/" + in.clientIP}, nil
 }
@@ -70,11 +71,11 @@ type lookupInput struct {
 
 // Resolve rejects anything that is not a valid IPv4 address so providers never
 // receive garbage input. huma turns the returned detail into a 422 with a
-// path.ip location pointer.
+// path.ip location pointer. Message is an i18n key localized by respx per request.
 func (i *lookupInput) Resolve(_ huma.Context) []error {
 	if !isIPv4(i.IP) {
 		return []error{&huma.ErrorDetail{
-			Message:  "not a valid IPv4 address (expected x.x.x.x)",
+			Message:  "invalid_ipv4",
 			Location: "path.ip",
 			Value:    i.IP,
 		}}
@@ -87,10 +88,10 @@ func (i *lookupInput) Resolve(_ huma.Context) []error {
 func lookupGeoIP(ctx context.Context, in *lookupInput) (*respx.Body[[]*geoiplib.GeoIp], error) {
 	infos, err := geoiplib.GetIpLocations(in.IP)
 	if err != nil {
-		return nil, huma.Error404NotFound("no geolocation for ip", err)
+		return nil, huma.Error404NotFound("geoip_not_found", err)
 	}
 	if len(infos) == 0 {
-		return nil, huma.Error404NotFound("no geolocation for ip")
+		return nil, huma.Error404NotFound("geoip_not_found")
 	}
 	return respx.OK(ctx, infos), nil
 }

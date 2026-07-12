@@ -46,7 +46,8 @@ func TestModule_LookupGeoIP_RejectsNonIPv4(t *testing.T) {
 	resp := api.Get("/geoip/123.123.123.1234")
 	require.Equal(t, http.StatusUnprocessableEntity, resp.Code)
 	assert.Contains(t, resp.Body.String(), "path.ip")
-	assert.Contains(t, resp.Body.String(), "valid IPv4")
+	// The detail is emitted as an i18n key; respx localizes it per request.
+	assert.Contains(t, resp.Body.String(), "invalid_ipv4")
 }
 
 func TestModule_LookupSelf_Redirects(t *testing.T) {

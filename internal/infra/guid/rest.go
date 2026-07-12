@@ -41,7 +41,7 @@ func nextGUID(ctx context.Context, _ *struct{}) (*respx.Body[ID], error) {
 	if err != nil {
 		// The generator is installed at startup once a worker id is leased; if it
 		// is missing, the service isn't ready to mint ids yet.
-		return nil, huma.Error503ServiceUnavailable("guid generator not ready", err)
+		return nil, huma.Error503ServiceUnavailable("guid_not_ready", err)
 	}
 	return respx.OK(ctx, ID(id)), nil
 }
@@ -65,7 +65,7 @@ func nextGUIDBatch(ctx context.Context, in *BatchInput) (*respx.Body[[]ID], erro
 	for range in.Count {
 		id, err := Next()
 		if err != nil {
-			return nil, huma.Error503ServiceUnavailable("guid generator not ready", err)
+			return nil, huma.Error503ServiceUnavailable("guid_not_ready", err)
 		}
 		ids = append(ids, ID(id))
 	}
