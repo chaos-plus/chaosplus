@@ -3,6 +3,7 @@ package guid
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -73,4 +74,21 @@ func TestModule_MigrateError_OnClosedDB(t *testing.T) {
 func TestModule_StopWithoutStart_IsNoop(t *testing.T) {
 	m := NewModule(newDB(t), nil)
 	assert.NoError(t, m.Stop(context.Background()))
+}
+
+func TestModule_WorkerLost_DisablesGeneratorAndEscalates(t *testing.T) {
+	g, err := New(5)
+	require.NoError(t, err)
+	SetDefault(g)
+
+	var lost error
+	m := NewModule(nil, func(e error) { lost = e })
+
+	m.onWorkerLost(errors.New("lease gone"))
+
+	assert.Nil(t, Default(), "generator cleared so GET /guid returns 503")
+	_, nextErr := Next()
+	assert.ErrorIs(t, nextErr, ErrNotInitialized)
+	require.Error(t, lost)
+	assert.ErrorContains(t, lost, "lease gone")
 }

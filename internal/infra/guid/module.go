@@ -46,7 +46,7 @@ func (m *Module) Migrate(ctx context.Context) error {
 // Start leases a worker id and installs the process-wide generator seeded with
 // it. Requires Migrate to have run first.
 func (m *Module) Start(ctx context.Context) error {
-	w, err := wuid.Open(ctx, m.db, wuid.OnLost(m.onLost))
+	w, err := wuid.Open(ctx, m.db, wuid.OnLost(m.onWorkerLost))
 	if err != nil {
 		return fmt.Errorf("open worker id: %w", err)
 	}
@@ -60,6 +60,17 @@ func (m *Module) Start(ctx context.Context) error {
 
 	slog.Info("guid generator ready", "worker_id", w.ID())
 	return nil
+}
+
+// onWorkerLost fires when the worker-id lease can no longer be renewed. It clears
+// the process-wide generator first, so GET /guid returns 503 immediately rather
+// than minting ids with a worker id another node may now hold, then escalates to
+// onLost to fail-stop the app.
+func (m *Module) onWorkerLost(err error) {
+	SetDefault(nil)
+	if m.onLost != nil {
+		m.onLost(err)
+	}
 }
 
 // Stop releases the worker-id lease so the slot is freed for reuse rather than
