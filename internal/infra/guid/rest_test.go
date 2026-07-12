@@ -45,18 +45,10 @@ func TestNextGUIDBatch_ReturnsDistinctStringEncodedIDs(t *testing.T) {
 	var body struct {
 		Code int      `json:"code"`
 		Data []string `json:"data"`
-		Meta struct {
-			Page struct {
-				Count int   `json:"count"`
-				Total int64 `json:"total"`
-			} `json:"page"`
-		} `json:"meta"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
 	assert.Equal(t, 0, body.Code)
 	require.Len(t, body.Data, 5)
-	assert.Equal(t, 5, body.Meta.Page.Count)
-	assert.Equal(t, int64(5), body.Meta.Page.Total)
 
 	seen := make(map[string]struct{}, len(body.Data))
 	for _, id := range body.Data {

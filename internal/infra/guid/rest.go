@@ -57,8 +57,9 @@ type BatchInput struct {
 	Count int `path:"count" minimum:"1" maximum:"10000" doc:"how many ids to generate"`
 }
 
-// nextGUIDBatch returns Count new ids from the process-wide generator, with
-// pagination meta describing the batch.
+// nextGUIDBatch returns Count new ids from the process-wide generator. This is a
+// generate-on-demand batch, not a slice of a collection, so it carries no page
+// meta — the count is exactly what the caller asked for.
 func nextGUIDBatch(ctx context.Context, in *BatchInput) (*respx.Body[[]ID], error) {
 	ids := make([]ID, 0, in.Count)
 	for range in.Count {
@@ -68,6 +69,5 @@ func nextGUIDBatch(ctx context.Context, in *BatchInput) (*respx.Body[[]ID], erro
 		}
 		ids = append(ids, ID(id))
 	}
-	page := respx.Page{Limit: in.Count, Count: len(ids), Total: int64(len(ids))}
-	return respx.List(ctx, ids, page), nil
+	return respx.OK(ctx, ids), nil
 }
