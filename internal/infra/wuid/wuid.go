@@ -1,6 +1,6 @@
 // Package wuid allocates a process-unique worker id for building Sonyflake-style
 // ids across a cluster. It supports three deployment models, tried in order by
-// Resolve:
+// Open:
 //
 //  1. Static via env (WUID=<n>) — explicit, no lease needed.
 //  2. Kubernetes StatefulSet ordinal parsed from the hostname (opt-in) — stable
@@ -43,7 +43,7 @@ const MaxWorkerID = 1<<16 - 1 // 65535
 // DefaultLease is the worker-id lease duration when no WithLease option is set.
 const DefaultLease = 30 * time.Second
 
-// EnvKey is the environment variable Resolve reads for an explicit worker id.
+// EnvKey is the environment variable Open reads for an explicit worker id.
 const EnvKey = "WUID"
 
 const allocLockName = "wuid:alloc"
@@ -87,7 +87,7 @@ func OnLost(fn func(error)) Option {
 	return func(c *config) { c.onLost = fn }
 }
 
-// WithHostnameOrdinal lets Resolve derive the worker id from a Kubernetes
+// WithHostnameOrdinal lets Open derive the worker id from a Kubernetes
 // StatefulSet pod ordinal (hostname ending in "-<n>"). Off by default because a
 // Deployment pod's random suffix could coincidentally look like an ordinal.
 func WithHostnameOrdinal() Option {
@@ -131,45 +131,45 @@ func (w *Worker) ID() uint16 { return uint16(w.id) }
 // its lease is lost. Callers should stop generating ids when this is false.
 func (w *Worker) Alive() bool { return w.alive.Load() }
 
-// New returns a static worker for an externally-guaranteed-unique id (e.g. from
-// config or a StatefulSet ordinal). It has no lease or heartbeat.
-func New(id uint16) *Worker {
+// newStatic returns a static worker for an externally-guaranteed-unique id
+// (the WUID env var or a StatefulSet ordinal). It has no lease or heartbeat and
+// is always Alive.
+func newStatic(id uint16) *Worker {
 	w := &Worker{id: int(id), static: true}
 	w.alive.Store(true)
 	return w
 }
 
-// Resolve picks a worker id using, in order: the WUID env var, the Kubernetes
+// Open picks a worker id using, in order: the WUID env var, the Kubernetes
 // StatefulSet ordinal (only when WithHostnameOrdinal is set), and finally a
 // database lease. This makes the same code work across static config, K8s
-// StatefulSets, and ephemeral Deployment/VM nodes.
-func Resolve(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
+// StatefulSets, and ephemeral Deployment/VM nodes. The returned Worker owns a
+// lease + heartbeat on the database path, so callers must Close it.
+func Open(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
 	cfg := newConfig(opts...)
 
-	if id, ok, err := FromEnv(EnvKey); err != nil {
+	if id, ok, err := fromEnv(EnvKey); err != nil {
 		return nil, err
 	} else if ok {
-		return New(id), nil
+		return newStatic(id), nil
 	}
 
 	if cfg.useOrdinal {
-		if id, ok, err := FromHostnameOrdinal(); err != nil {
+		if id, ok, err := fromHostnameOrdinal(); err != nil {
 			return nil, err
 		} else if ok {
-			return New(id), nil
+			return newStatic(id), nil
 		}
 	}
 
-	return allocate(ctx, db, cfg)
+	return allocate(ctx, db, opts...)
 }
 
-// Allocate acquires a worker id via a database lease (skipping the static
-// sources). Prefer Resolve unless you specifically want the lease path.
-func Allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
-	return allocate(ctx, db, newConfig(opts...))
-}
-
-func allocate(ctx context.Context, db *bun.DB, cfg config) (*Worker, error) {
+// allocate acquires a worker id via a database lease, skipping the static
+// (env/ordinal) sources. Open calls it once those are exhausted; tests call
+// it directly to drive the lease path deterministically.
+func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
+	cfg := newConfig(opts...)
 	locker := dlock.New(db, dlock.WithTTL(cfg.lease))
 	lk, err := locker.Lock(ctx, allocLockName)
 	if err != nil {
@@ -357,9 +357,9 @@ func (w *Worker) Close(ctx context.Context) error {
 	return err
 }
 
-// FromEnv reads a worker id from the given environment variable. ok is false
+// fromEnv reads a worker id from the given environment variable. ok is false
 // when the variable is unset/empty.
-func FromEnv(key string) (id uint16, ok bool, err error) {
+func fromEnv(key string) (id uint16, ok bool, err error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return 0, false, nil
@@ -376,10 +376,10 @@ func FromEnv(key string) (id uint16, ok bool, err error) {
 
 var ordinalRe = regexp.MustCompile(`-(\d+)$`)
 
-// FromHostnameOrdinal derives a worker id from a Kubernetes StatefulSet pod
+// fromHostnameOrdinal derives a worker id from a Kubernetes StatefulSet pod
 // ordinal (hostname ending in "-<n>", e.g. "api-3"). ok is false when the
 // hostname does not end in an ordinal.
-func FromHostnameOrdinal() (id uint16, ok bool, err error) {
+func fromHostnameOrdinal() (id uint16, ok bool, err error) {
 	host, herr := os.Hostname()
 	if herr != nil {
 		return 0, false, herr

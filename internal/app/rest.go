@@ -23,34 +23,32 @@ const readHeaderTimeout = 10 * time.Second
 // App so awaitShutdown can drain it gracefully. A bind failure is returned; a
 // serve failure after bind is reported on a.serveErr so awaitShutdown can bring
 // the whole app down.
-func (a *App) StartRestServer() error {
+func (app *App) StartRestServer() error {
 	router := chi.NewMux()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
 
-	config := huma.DefaultConfig(a.name+" API", "1.0.0")
-	config, multi := docs.Apply("all", nil, config)
+	config := huma.DefaultConfig(app.name+" API", "1.0.0")
+	// Disable huma's built-in single-renderer /docs so our own tabbed page
+	// (registered below) is not overwritten when humachi.New registers routes.
+	config = docs.Register(router, config, app.name)
 
 	api := humachi.New(router, config)
-	a.registerREST(api)
+	app.registerREST(api)
 
-	if multi {
-		docs.Register(router, config, a.name)
-	}
-
-	addr := fmt.Sprintf("%s:%d", a.cfg.RestServer.Host, a.cfg.RestServer.Port)
+	addr := fmt.Sprintf("%s:%d", app.cfg.RestServer.Host, app.cfg.RestServer.Port)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
-	a.rest = server
+	app.rest = server
 
 	go func() {
 		slog.Info("rest server listening", "addr", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			a.serveErr <- fmt.Errorf("rest serve: %w", err)
+			app.serveErr <- fmt.Errorf("rest serve: %w", err)
 		}
 	}()
 

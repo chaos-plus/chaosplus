@@ -3,9 +3,6 @@ package docs
 import (
 	"strings"
 	"testing"
-
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/stretchr/testify/assert"
 )
 
 // TestBuildersEmbedSpecURL proves the pages reference the spec URL passed in
@@ -26,36 +23,5 @@ func TestBuildersEmbedSpecURL(t *testing.T) {
 		if !strings.Contains(string(build(spec)), spec) {
 			t.Errorf("%s page does not reference spec URL %q", name, spec)
 		}
-	}
-}
-
-func TestApply(t *testing.T) {
-	cases := []struct {
-		env          string
-		multi        bool
-		renderer     string
-		docsDisabled bool
-	}{
-		{"all", true, "", true},
-		{"tabs", true, "", true},
-		{"scalar", false, huma.DocsRendererScalar, false},
-		{"swagger", false, huma.DocsRendererSwaggerUI, false},
-		{"stoplight", false, huma.DocsRendererStoplightElements, false},
-		{"none", false, "", true},
-		{"bogus", true, "", true},
-	}
-
-	for _, c := range cases {
-		t.Run(c.env, func(t *testing.T) {
-			config, multi := Apply(c.env, nil, huma.DefaultConfig("T", "1.0.0"))
-
-			assert.Equal(t, c.multi, multi)
-			if c.renderer != "" {
-				assert.Equal(t, c.renderer, config.DocsRenderer)
-			}
-			if c.docsDisabled {
-				assert.Equal(t, "", config.DocsPath)
-			}
-		})
 	}
 }

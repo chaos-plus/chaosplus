@@ -1,7 +1,13 @@
 // Package guid generates globally-unique, roughly time-ordered 64-bit ids using
-// Sonyflake, seeded with a unique worker id (typically from the wuid package).
-// Because the id is produced in-process from time + worker id + sequence, it
-// needs no database round-trip and stays unique across cluster nodes.
+// Sonyflake. Because an id is produced in-process from time + worker id +
+// sequence, it needs no database round-trip and stays unique across cluster
+// nodes.
+//
+// The package spans the whole id-generation feature:
+//   - Generator / New — the raw Sonyflake wrapper, seeded with a worker id.
+//   - ID — the wire/DB type (string-encoded JSON, huma schema, sql driver).
+//   - Module — the application-lifecycle unit that leases a worker id via wuid,
+//     installs the process-wide Generator, and serves GET /guid.
 package guid
 
 import (
@@ -14,7 +20,7 @@ import (
 
 // epoch is the Sonyflake start time. Fixed so generated ids stay comparable and
 // the 39-bit time field lasts ~174 years from here.
-var epoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ErrNotInitialized is returned by the package-level helpers before SetDefault.
 var ErrNotInitialized = errors.New("guid: default generator not initialized")

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/chaos-plus/chaosplus/internal/infra/idgen"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/pkg/geoip"
 	_ "github.com/chaos-plus/chaosplus/pkg/geoip/providers" // register geoip providers
 )
@@ -13,13 +13,13 @@ import (
 // buildModules is the composition root: the single place that constructs the
 // application's modules and their dependencies, in registration order. Adding a
 // feature means adding a module here — nothing else in the app changes.
-func (a *App) buildModules() []any {
+func (app *App) buildModules() []any {
 	mods := make([]any, 0, 2)
 
 	// Identity generation needs a writable database. Skipped when none exists so
 	// the app can still serve endpoints that don't need one.
-	if len(a.dbr.Writer) > 0 {
-		mods = append(mods, idgen.New(a.dbr.Write(), a.failStop))
+	if len(app.dbr.Writer) > 0 {
+		mods = append(mods, guid.NewModule(app.dbr.Write(), app.failStop))
 	} else {
 		slog.Warn("no writable database; skipping id generator")
 	}
@@ -33,10 +33,10 @@ func (a *App) buildModules() []any {
 // serveErr so awaitShutdown brings the whole app down. Non-blocking: serveErr is
 // buffered for every fatal source, and a full channel already means the app is
 // going down.
-func (a *App) failStop(err error) {
+func (app *App) failStop(err error) {
 	slog.Error("fatal background failure; shutting down", "err", err)
 	select {
-	case a.serveErr <- fmt.Errorf("worker id lost: %w", err):
+	case app.serveErr <- fmt.Errorf("worker id lost: %w", err):
 	default:
 	}
 }

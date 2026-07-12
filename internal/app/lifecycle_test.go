@@ -10,9 +10,9 @@ import (
 )
 
 // withCtx gives an App the root context its lifecycle methods expect.
-func withCtx(a *App) *App {
-	a.ctx, a.cancel = context.WithCancel(context.Background())
-	return a
+func withCtx(app *App) *App {
+	app.ctx, app.cancel = context.WithCancel(context.Background())
+	return app
 }
 
 func TestStartGrpcServer_SuccessThenShutdown(t *testing.T) {

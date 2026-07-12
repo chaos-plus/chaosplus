@@ -182,11 +182,11 @@ func docsWrapperHTML(name, specJSON string) []byte {
     <header class="bar">
       <div class="brand">` + name + ` API <span>docs</span></div>
       <nav class="tabs" role="tablist" aria-label="Documentation renderer">
-        <button class="tab" role="tab" data-src="/docs/scalar" aria-selected="true">scalar</button>
+        <button class="tab" role="tab" data-src="/docs/swagger" aria-selected="true">swagger-ui</button>
+        <button class="tab" role="tab" data-src="/docs/openapi-ui" aria-selected="false">openapi-ui</button>
+        <button class="tab" role="tab" data-src="/docs/scalar" aria-selected="false">scalar</button>
         <button class="tab" role="tab" data-src="/docs/stoplight" aria-selected="false">stoplight</button>
         <button class="tab" role="tab" data-src="/docs/redoc" aria-selected="false">redoc</button>
-        <button class="tab" role="tab" data-src="/docs/openapi-ui" aria-selected="false">openapi-ui</button>
-        <button class="tab" role="tab" data-src="/docs/swagger" aria-selected="false">swagger-ui</button>
       </nav>
       <div class="spacer"></div>
       <a class="ext" href="` + specJSON + `" target="_blank" rel="noreferrer">` + specJSON + ` &#8599;</a>

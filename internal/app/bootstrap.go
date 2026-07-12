@@ -13,36 +13,27 @@ import (
 // services (timezone, logging, database), then the application modules through
 // their migrate and start phases. It returns an error so a failed migration or
 // module start aborts startup instead of leaving the app half-initialised.
-func (a *App) Bootstrap() error {
-	cfg := a.cfg
+func (app *App) Bootstrap() error {
 
 	// init timezone
-	timezone.SetTimezone(cfg.Timezone)
+	timezone.SetTimezone(app.cfg.Timezone)
 
 	// init logger — always to stdout, optionally also to a file when configured.
 	var handlers []slog.Handler
 	handlers = append(handlers, slog.NewJSONHandler(os.Stdout, nil))
-	handlers = append(handlers, otelslog.NewHandler(a.name))
+	handlers = append(handlers, otelslog.NewHandler(app.name))
 	slog.SetDefault(slog.New(slog.NewMultiHandler(handlers...)))
 
-	// init db — in debug mode with no datasource configured, fall back to an
-	// in-memory sqlite so the full stack runs with no external database. A single
-	// connection keeps the private ":memory:" database alive and consistent for
-	// the process lifetime.
-	if len(cfg.Database) == 0 && cfg.Debug {
-		slog.Warn("debug mode: no database configured, falling back to in-memory sqlite")
-		cfg.Database = map[string]bunx.Datasource{
-			"default": {Type: "sqlite", Dsn: ":memory:", Writable: true, Readable: true, MaxOpenConns: 1, MaxIdleConns: 1},
-		}
-	}
-	a.dbr = bunx.NewDatasourceRouter(a.name, cfg.Debug, cfg.Database)
+	// init db — a single sqlite connection keeps the private ":memory:" database
+	// alive and consistent for the process lifetime (see SetupDebug).
+	app.dbr = bunx.NewDatasourceRouter(app.name, app.cfg.Debug, app.cfg.Database)
 
 	// build modules, then run the migrate and start phases in order.
-	a.mods = a.buildModules()
-	if err := a.migrateModules(a.ctx); err != nil {
+	app.mods = app.buildModules()
+	if err := app.migrateModules(app.ctx); err != nil {
 		return err
 	}
-	if err := a.startModules(a.ctx); err != nil {
+	if err := app.startModules(app.ctx); err != nil {
 		return err
 	}
 

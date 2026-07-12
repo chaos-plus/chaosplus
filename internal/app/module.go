@@ -36,8 +36,8 @@ type (
 
 // migrateModules runs the Migrate phase, stopping at the first failure so the
 // app never starts against a half-migrated schema.
-func (a *App) migrateModules(ctx context.Context) error {
-	for _, m := range a.mods {
+func (app *App) migrateModules(ctx context.Context) error {
+	for _, m := range app.mods {
 		if x, ok := m.(Migrator); ok {
 			if err := x.Migrate(ctx); err != nil {
 				return fmt.Errorf("%T migrate: %w", m, err)
@@ -48,8 +48,8 @@ func (a *App) migrateModules(ctx context.Context) error {
 }
 
 // startModules runs the Start phase, stopping at the first failure.
-func (a *App) startModules(ctx context.Context) error {
-	for _, m := range a.mods {
+func (app *App) startModules(ctx context.Context) error {
+	for _, m := range app.mods {
 		if x, ok := m.(Starter); ok {
 			if err := x.Start(ctx); err != nil {
 				return fmt.Errorf("%T start: %w", m, err)
@@ -60,8 +60,8 @@ func (a *App) startModules(ctx context.Context) error {
 }
 
 // registerREST runs the REST-registration phase across all modules.
-func (a *App) registerREST(api huma.API) {
-	for _, m := range a.mods {
+func (app *App) registerREST(api huma.API) {
+	for _, m := range app.mods {
 		if x, ok := m.(RESTRegistrar); ok {
 			x.RegisterREST(api)
 		}
@@ -69,8 +69,8 @@ func (a *App) registerREST(api huma.API) {
 }
 
 // registerGRPC runs the gRPC-registration phase across all modules.
-func (a *App) registerGRPC(server *grpc.Server) {
-	for _, m := range a.mods {
+func (app *App) registerGRPC(server *grpc.Server) {
+	for _, m := range app.mods {
 		if x, ok := m.(GRPCRegistrar); ok {
 			x.RegisterGRPC(server)
 		}
@@ -80,10 +80,10 @@ func (a *App) registerGRPC(server *grpc.Server) {
 // stopModules runs the Stop phase in reverse registration order (so dependents
 // stop before their dependencies), joining every error rather than bailing on
 // the first so one failing module can't strand the rest.
-func (a *App) stopModules(ctx context.Context) error {
+func (app *App) stopModules(ctx context.Context) error {
 	var errs []error
-	for i := len(a.mods) - 1; i >= 0; i-- {
-		m := a.mods[i]
+	for i := len(app.mods) - 1; i >= 0; i-- {
+		m := app.mods[i]
 		if x, ok := m.(Stopper); ok {
 			if err := x.Stop(ctx); err != nil {
 				errs = append(errs, fmt.Errorf("%T stop: %w", m, err))

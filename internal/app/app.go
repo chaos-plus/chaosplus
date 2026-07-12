@@ -67,33 +67,37 @@ func NewApp(cfg Config) *App {
 // background, then blocks in awaitShutdown until a termination signal arrives or
 // a server fails. If a server fails to start, whatever was already started is
 // torn down before returning, so Run never leaks a running server.
-func (a *App) Run() error {
+func (app *App) Run() error {
 	// Root context for background workers; cancelled in shutdown.
-	a.ctx, a.cancel = context.WithCancel(context.Background())
+	app.ctx, app.cancel = context.WithCancel(context.Background())
+
+	if app.cfg.Debug {
+		app.SetupDebug()
+	}
 
 	// bootstrap
-	if err := a.Bootstrap(); err != nil {
-		return errors.Join(fmt.Errorf("bootstrap: %w", err), a.shutdown())
+	if err := app.Bootstrap(); err != nil {
+		return errors.Join(fmt.Errorf("bootstrap: %w", err), app.shutdown())
 	}
 
 	// grpc server
-	if err := a.StartGrpcServer(); err != nil {
-		return errors.Join(fmt.Errorf("start grpc server: %w", err), a.shutdown())
+	if err := app.StartGrpcServer(); err != nil {
+		return errors.Join(fmt.Errorf("start grpc server: %w", err), app.shutdown())
 	}
 
 	// http server
-	if err := a.StartRestServer(); err != nil {
-		return errors.Join(fmt.Errorf("start rest server: %w", err), a.shutdown())
+	if err := app.StartRestServer(); err != nil {
+		return errors.Join(fmt.Errorf("start rest server: %w", err), app.shutdown())
 	}
 
 	// graceful shutdown
-	return a.awaitShutdown()
+	return app.awaitShutdown()
 }
 
 // awaitShutdown blocks until either a termination signal (SIGINT/SIGTERM) or a
 // server goroutine reports a fatal error, then tears everything down. A serve
 // failure is included in the returned error so the process exits non-zero.
-func (a *App) awaitShutdown() error {
+func (app *App) awaitShutdown() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -101,25 +105,25 @@ func (a *App) awaitShutdown() error {
 	select {
 	case <-ctx.Done():
 		slog.Info("shutdown signal received, gracefully stopping servers")
-	case err := <-a.serveErr:
+	case err := <-app.serveErr:
 		// A server died after binding; take the whole app down.
 		slog.Error("server failed, shutting down", "error", err)
 		startErr = err
 	}
 
-	return errors.Join(startErr, a.shutdown())
+	return errors.Join(startErr, app.shutdown())
 }
 
 // shutdown stops the REST server, the gRPC server and the database within
 // shutdownTimeout, joining any errors. It is safe to call with only some
 // components started (nil servers are skipped), so both the startup-failure and
 // signal paths can share it.
-func (a *App) shutdown() error {
+func (app *App) shutdown() error {
 	// Stop background workers first (geoip refresh, etc.) so they wind down while
 	// the servers drain. Guarded because lifecycle tests build an App directly
 	// without running Run.
-	if a.cancel != nil {
-		a.cancel()
+	if app.cancel != nil {
+		app.cancel()
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -128,8 +132,8 @@ func (a *App) shutdown() error {
 	var errs []error
 
 	// Stop the REST server first: refuse new connections, drain in-flight ones.
-	if a.rest != nil {
-		if err := a.rest.Shutdown(shutdownCtx); err != nil {
+	if app.rest != nil {
+		if err := app.rest.Shutdown(shutdownCtx); err != nil {
 			errs = append(errs, fmt.Errorf("rest shutdown: %w", err))
 		} else {
 			slog.Info("rest server stopped")
@@ -137,29 +141,29 @@ func (a *App) shutdown() error {
 	}
 
 	// Stop the gRPC server, falling back to a forced stop on timeout.
-	if a.grpc != nil {
+	if app.grpc != nil {
 		stopped := make(chan struct{})
 		go func() {
-			a.grpc.GracefulStop()
+			app.grpc.GracefulStop()
 			close(stopped)
 		}()
 		select {
 		case <-stopped:
 			slog.Info("grpc server stopped")
 		case <-shutdownCtx.Done():
-			a.grpc.Stop() // force-close remaining connections
+			app.grpc.Stop() // force-close remaining connections
 			errs = append(errs, fmt.Errorf("grpc graceful stop timed out: %w", shutdownCtx.Err()))
 		}
 	}
 
 	// Stop modules (reverse order) before closing the database they use, so e.g.
 	// the worker-id lease is released rather than left to expire.
-	if err := a.stopModules(shutdownCtx); err != nil {
+	if err := app.stopModules(shutdownCtx); err != nil {
 		errs = append(errs, err)
 	}
 
 	// Close the database connection pools once nothing is serving.
-	if err := a.dbr.Close(); err != nil {
+	if err := app.dbr.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("db close: %w", err))
 	}
 

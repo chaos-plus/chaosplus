@@ -38,7 +38,7 @@ func TestAllocate_SequentialIDs(t *testing.T) {
 
 	var got []uint16
 	for i := 0; i < 3; i++ {
-		w, err := Allocate(ctx, database)
+		w, err := allocate(ctx, database)
 		require.NoError(t, err)
 		got = append(got, w.ID())
 		t.Cleanup(func() { _ = w.Close(ctx) })
@@ -50,11 +50,11 @@ func TestAllocate_ReuseExpiredSlot(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
 
-	w0, err := Allocate(ctx, database)
+	w0, err := allocate(ctx, database)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), w0.ID())
 
-	w1, err := Allocate(ctx, database)
+	w1, err := allocate(ctx, database)
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), w1.ID())
 	t.Cleanup(func() { _ = w1.Close(ctx) })
@@ -62,7 +62,7 @@ func TestAllocate_ReuseExpiredSlot(t *testing.T) {
 	// Releasing id 0 frees the slot for reuse.
 	require.NoError(t, w0.Close(ctx))
 
-	w2, err := Allocate(ctx, database)
+	w2, err := allocate(ctx, database)
 	require.NoError(t, err)
 	assert.Equal(t, uint16(0), w2.ID(), "lowest expired slot should be reused")
 	t.Cleanup(func() { _ = w2.Close(ctx) })
@@ -72,7 +72,7 @@ func TestHeartbeat_RenewsLease(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
 
-	w, err := Allocate(ctx, database, WithLease(300*time.Millisecond))
+	w, err := allocate(ctx, database, WithLease(300*time.Millisecond))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close(ctx) })
 
@@ -88,7 +88,7 @@ func TestHeartbeat_LostTriggersOnLost(t *testing.T) {
 	database := newDB(t)
 
 	lost := make(chan error, 1)
-	w, err := Allocate(ctx, database,
+	w, err := allocate(ctx, database,
 		WithLease(200*time.Millisecond),
 		OnLost(func(e error) { lost <- e }),
 	)
@@ -117,7 +117,7 @@ func TestHeartbeat_TransientErrorEventuallyLost(t *testing.T) {
 	database := newDB(t)
 
 	lost := make(chan error, 1)
-	w, err := Allocate(ctx, database,
+	w, err := allocate(ctx, database,
 		WithLease(150*time.Millisecond),
 		OnLost(func(e error) { lost <- e }),
 	)
@@ -137,7 +137,7 @@ func TestHeartbeat_TransientErrorEventuallyLost(t *testing.T) {
 }
 
 func TestStaticWorker(t *testing.T) {
-	w := New(42)
+	w := newStatic(42)
 	assert.Equal(t, uint16(42), w.ID())
 	assert.True(t, w.Alive())
 	// Static workers have no lease; Close is a no-op and needs no database.
@@ -145,26 +145,26 @@ func TestStaticWorker(t *testing.T) {
 	assert.False(t, w.Alive())
 }
 
-func TestResolve_FromEnv(t *testing.T) {
+func TestOpen_FromEnv(t *testing.T) {
 	t.Setenv(EnvKey, "123")
-	w, err := Resolve(context.Background(), nil) // no DB needed for the env path
+	w, err := Open(context.Background(), nil) // no DB needed for the env path
 	require.NoError(t, err)
 	assert.Equal(t, uint16(123), w.ID())
 	assert.True(t, w.Alive())
 }
 
-func TestResolve_EnvInvalid(t *testing.T) {
+func TestOpen_EnvInvalid(t *testing.T) {
 	t.Setenv(EnvKey, "not-a-number")
-	_, err := Resolve(context.Background(), nil)
+	_, err := Open(context.Background(), nil)
 	assert.Error(t, err)
 }
 
-func TestResolve_FallsBackToLease(t *testing.T) {
+func TestOpen_FallsBackToLease(t *testing.T) {
 	t.Setenv(EnvKey, "") // force the env source to be skipped
 	ctx := context.Background()
 	database := newDB(t)
 
-	w, err := Resolve(ctx, database)
+	w, err := Open(ctx, database)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close(ctx) })
 	assert.Equal(t, uint16(0), w.ID())
@@ -174,25 +174,25 @@ func TestResolve_FallsBackToLease(t *testing.T) {
 func TestFromEnv(t *testing.T) {
 	t.Run("unset", func(t *testing.T) {
 		t.Setenv(EnvKey, "")
-		_, ok, err := FromEnv(EnvKey)
+		_, ok, err := fromEnv(EnvKey)
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
 	t.Run("valid", func(t *testing.T) {
 		t.Setenv(EnvKey, "7")
-		id, ok, err := FromEnv(EnvKey)
+		id, ok, err := fromEnv(EnvKey)
 		require.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, uint16(7), id)
 	})
 	t.Run("not a number", func(t *testing.T) {
 		t.Setenv(EnvKey, "abc")
-		_, _, err := FromEnv(EnvKey)
+		_, _, err := fromEnv(EnvKey)
 		assert.Error(t, err)
 	})
 	t.Run("out of range", func(t *testing.T) {
 		t.Setenv(EnvKey, "70000")
-		_, _, err := FromEnv(EnvKey)
+		_, _, err := fromEnv(EnvKey)
 		assert.Error(t, err)
 	})
 }
@@ -217,7 +217,7 @@ func TestParseOrdinal(t *testing.T) {
 
 func TestFromHostnameOrdinal_NoError(t *testing.T) {
 	// Whatever the test host is named, the call must not error.
-	_, _, err := FromHostnameOrdinal()
+	_, _, err := fromHostnameOrdinal()
 	assert.NoError(t, err)
 }
 
@@ -230,7 +230,7 @@ func TestClose_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
 
-	w, err := Allocate(ctx, database)
+	w, err := allocate(ctx, database)
 	require.NoError(t, err)
 
 	require.NoError(t, w.Close(ctx))
@@ -258,7 +258,7 @@ func TestAllocate_PoolExhausted(t *testing.T) {
 	}).Exec(ctx)
 	require.NoError(t, err)
 
-	_, err = Allocate(ctx, database)
+	_, err = allocate(ctx, database)
 	assert.ErrorContains(t, err, "pool exhausted")
 }
 
@@ -267,7 +267,7 @@ func TestAllocate_LockAcquireError(t *testing.T) {
 	database := newDB(t)
 	require.NoError(t, database.Close())
 
-	_, err := Allocate(ctx, database)
+	_, err := allocate(ctx, database)
 	assert.ErrorContains(t, err, "acquire alloc lock")
 }
 
@@ -281,7 +281,7 @@ func TestAllocate_ClaimError(t *testing.T) {
 	// because worker_ids is missing.
 	require.NoError(t, dlock.Migrate(ctx, database))
 
-	_, err = Allocate(ctx, database)
+	_, err = allocate(ctx, database)
 	assert.Error(t, err)
 }
 
@@ -289,7 +289,7 @@ func TestClose_AfterDBClosed(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
 
-	w, err := Allocate(ctx, database)
+	w, err := allocate(ctx, database)
 	require.NoError(t, err)
 
 	require.NoError(t, database.Close())
