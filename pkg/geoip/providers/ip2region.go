@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
 	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 )
 
@@ -19,7 +19,7 @@ type IP2Region struct {
 }
 
 func init() {
-	types.RegisterGeoIpProvider("ip2region", &IP2Region{version: xdb.IPv4})
+	geoip.RegisterGeoIpProvider("ip2region", &IP2Region{version: xdb.IPv4})
 }
 
 // Start begins background maintenance of the ip2region database, bound to ctx.
@@ -30,7 +30,7 @@ func (m *IP2Region) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *IP2Region) GetIpInfo(ip string) (*types.GeoIp, error) {
+func (m *IP2Region) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {
 		return nil, errors.New("ip is empty")
 	}
@@ -70,7 +70,7 @@ func (m *IP2Region) GetIpInfo(ip string) (*types.GeoIp, error) {
 		return nil, errors.New("invalid record")
 	}
 
-	return &types.GeoIp{
+	return &geoip.GeoIp{
 		Provider: "ip2region",
 		Ip:       ip,
 		Country:  regions[0],

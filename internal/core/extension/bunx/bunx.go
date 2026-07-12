@@ -22,9 +22,9 @@ type Datasource struct {
 	Readable bool `mapstructure:"readable" description:"readable" default:"true"`
 
 	MaxOpenConns    int           `mapstructure:"max_open_conns" description:"max open conns" default:"25"`
-	MaxIdleConns    int           `mapstructure:"max_idle_conns" description:"max idle conns" default:"10"`
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime" description:"conn max lifetime" default:"5m"`
-	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time" description:"conn max idle time" default:"5m"`
+	MaxIdleConns    int           `mapstructure:"max_idle_conns" description:"max idle conns" default:"0"`
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime" description:"conn max lifetime" default:"30m"`
+	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time" description:"conn max idle time" default:"1m"`
 }
 
 func (d *Datasource) NewDB() *bun.DB {

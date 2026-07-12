@@ -44,19 +44,17 @@ func TestInstall_UnifiesErrorsIntoEnvelope(t *testing.T) {
 	require.NoError(t, mErr)
 
 	var env struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    []struct {
-			Message  string `json:"message"`
-			Location string `json:"location"`
-		} `json:"data"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &env))
 	assert.Equal(t, 422, env.Code)
-	assert.Equal(t, "validation failed", env.Message)
-	require.Len(t, env.Data, 1)
-	assert.Equal(t, "expected integer", env.Data[0].Message)
-	assert.Equal(t, "path.count", env.Data[0].Location)
+	// The field-level detail is folded into message; data stays null.
+	assert.Contains(t, env.Message, "validation failed")
+	assert.Contains(t, env.Message, "path.count")
+	assert.Contains(t, env.Message, "expected integer")
+	assert.JSONEq(t, "null", string(env.Data), "data is null on error")
 }
 
 func TestErr_BusinessEnvelope(t *testing.T) {

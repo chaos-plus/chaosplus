@@ -19,21 +19,16 @@ import (
 // prepares the dlock/wuid tables, Start leases a worker id and installs the
 // generator, and Stop releases the lease.
 type Module struct {
-	db       *bun.DB
-	onLost   func(error)
-	workerID int
-	lease    time.Duration
+	db    *bun.DB
+	lease time.Duration
 
 	worker *wuid.Worker
 }
 
-// NewModule builds the module against db. workerID pins the worker id when > 0
-// (a conflict with another live node is fatal); 0 auto-allocates via the lease.
-// lease sets the worker-id lease duration (0 uses wuid's default). onLost is
-// invoked if the worker-id lease is later lost (treat as fatal: ids could
-// collide across nodes); it may be nil.
-func NewModule(db *bun.DB, onLost func(error), workerID int, lease time.Duration) *Module {
-	return &Module{db: db, onLost: onLost, workerID: workerID, lease: lease}
+// NewModule builds the module against db. lease sets the worker-id lease duration
+// (0 uses wuid's default). The worker id is always auto-allocated via the lease.
+func NewModule(db *bun.DB, lease time.Duration) *Module {
+	return &Module{db: db, lease: lease}
 }
 
 // Migrate applies the dlock and wuid schemas (each with its own goose version
@@ -51,15 +46,12 @@ func (m *Module) Migrate(ctx context.Context) error {
 // Start leases a worker id and installs the process-wide generator seeded with
 // it. Requires Migrate to have run first.
 func (m *Module) Start(ctx context.Context) error {
-	opts := []wuid.Option{wuid.OnLost(m.onWorkerLost)}
+	opts := []wuid.Option{
+		wuid.OnLost(m.onWorkerLost),
+		wuid.OnReacquire(m.onWorkerReacquire),
+	}
 	if m.lease > 0 {
 		opts = append(opts, wuid.WithLease(m.lease))
-	}
-	if m.workerID != 0 {
-		if m.workerID < 0 || m.workerID > wuid.MaxWorkerID {
-			return fmt.Errorf("guid: worker id %d out of range (0..%d)", m.workerID, wuid.MaxWorkerID)
-		}
-		opts = append(opts, wuid.WithID(uint16(m.workerID)))
 	}
 
 	w, err := wuid.Open(ctx, m.db, opts...)
@@ -68,25 +60,40 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	m.worker = w
 
-	g, err := New(w.ID())
-	if err != nil {
-		return fmt.Errorf("init guid generator: %w", err)
+	if err := m.installGenerator(w.ID()); err != nil {
+		return err
 	}
-	SetDefault(g)
-
 	slog.Info("guid generator ready", "worker_id", w.ID())
 	return nil
 }
 
-// onWorkerLost fires when the worker-id lease can no longer be renewed. It clears
-// the process-wide generator first, so GET /guid returns 503 immediately rather
-// than minting ids with a worker id another node may now hold, then escalates to
-// onLost to fail-stop the app.
-func (m *Module) onWorkerLost(err error) {
-	SetDefault(nil)
-	if m.onLost != nil {
-		m.onLost(err)
+// installGenerator builds and installs the process-wide generator for id.
+func (m *Module) installGenerator(id uint16) error {
+	g, err := New(id)
+	if err != nil {
+		return fmt.Errorf("init guid generator: %w", err)
 	}
+	SetDefault(g)
+	return nil
+}
+
+// onWorkerLost fires when the worker-id lease is lost. It clears the process-wide
+// generator so GET /guid returns 503 (id generation suspended) rather than
+// minting ids with an id another node may now hold. The process keeps running;
+// the wuid worker retries re-allocation in the background.
+func (m *Module) onWorkerLost(error) {
+	SetDefault(nil)
+	slog.Error("guid generation suspended: worker id lost, waiting for re-allocation")
+}
+
+// onWorkerReacquire fires when the wuid worker re-allocates a fresh id after a
+// loss. It reinstalls the generator so id generation resumes.
+func (m *Module) onWorkerReacquire(id uint16) {
+	if err := m.installGenerator(id); err != nil {
+		slog.Error("guid generation stays suspended: generator reinstall failed", "worker_id", id, "err", err)
+		return
+	}
+	slog.Info("guid generation resumed", "worker_id", id)
 }
 
 // Stop releases the worker-id lease so the slot is freed for reuse rather than

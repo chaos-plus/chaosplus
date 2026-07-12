@@ -3,26 +3,24 @@ package geoip
 import (
 	"errors"
 	"testing"
-
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 )
 
 // fakeProvider is a deterministic GeoIpProvider for tests, so orchestration logic
 // can be verified without depending on which real databases happen to be installed.
 type fakeProvider struct {
-	info *types.GeoIp
+	info *GeoIp
 	err  error
 }
 
-func (f fakeProvider) GetIpInfo(string) (*types.GeoIp, error) { return f.info, f.err }
+func (f fakeProvider) GetIpInfo(string) (*GeoIp, error) { return f.info, f.err }
 
 // withProviders swaps the global provider registry for the duration of a test and
 // restores the real providers afterward.
-func withProviders(t *testing.T, m map[string]types.GeoIpProvider) {
+func withProviders(t *testing.T, m map[string]GeoIpProvider) {
 	t.Helper()
-	saved := types.GeoIpProviders
-	types.GeoIpProviders = m
-	t.Cleanup(func() { types.GeoIpProviders = saved })
+	saved := GeoIpProviders
+	GeoIpProviders = m
+	t.Cleanup(func() { GeoIpProviders = saved })
 }
 
 func TestGetIpLocation_EmptyIP(t *testing.T) {
@@ -36,8 +34,8 @@ func TestGetIpLocation_ReturnsProviderResult(t *testing.T) {
 	// A registered provider that returns data → GetIpLocation returns it (no error).
 	// Uses a fake provider so the result is deterministic regardless of which real
 	// GeoIP databases are installed locally.
-	withProviders(t, map[string]types.GeoIpProvider{
-		"fake": fakeProvider{info: &types.GeoIp{Provider: "fake", Country: "Testland"}},
+	withProviders(t, map[string]GeoIpProvider{
+		"fake": fakeProvider{info: &GeoIp{Provider: "fake", Country: "Testland"}},
 	})
 	info, err := GetIpLocation("8.8.8.8")
 	if err != nil {
@@ -50,7 +48,7 @@ func TestGetIpLocation_ReturnsProviderResult(t *testing.T) {
 
 func TestGetIpLocation_SkipsFailingProvider(t *testing.T) {
 	// A failing provider is skipped; the next successful one is returned.
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"broken": fakeProvider{err: errors.New("no db found")},
 	})
 	if _, err := GetIpLocation("8.8.8.8"); err == nil {
@@ -67,9 +65,9 @@ func TestGetIpLocation_InvalidIP(t *testing.T) {
 
 func TestGetIpLocations_SortedByProvider(t *testing.T) {
 	// All successful providers are returned, sorted ascending by provider name.
-	withProviders(t, map[string]types.GeoIpProvider{
-		"zeta":  fakeProvider{info: &types.GeoIp{Provider: "zeta", Country: "Z"}},
-		"alpha": fakeProvider{info: &types.GeoIp{Provider: "alpha", Country: "A"}},
+	withProviders(t, map[string]GeoIpProvider{
+		"zeta":  fakeProvider{info: &GeoIp{Provider: "zeta", Country: "Z"}},
+		"alpha": fakeProvider{info: &GeoIp{Provider: "alpha", Country: "A"}},
 	})
 	results, err := GetIpLocations("8.8.8.8")
 	if err != nil {
@@ -85,9 +83,9 @@ func TestGetIpLocations_SortedByProvider(t *testing.T) {
 
 func TestGetIpLocations_DropsEmptyResults(t *testing.T) {
 	// A provider returning a result with no location fields is dropped.
-	withProviders(t, map[string]types.GeoIpProvider{
-		"empty": fakeProvider{info: &types.GeoIp{Provider: "empty"}},
-		"good":  fakeProvider{info: &types.GeoIp{Provider: "good", City: "Somewhere"}},
+	withProviders(t, map[string]GeoIpProvider{
+		"empty": fakeProvider{info: &GeoIp{Provider: "empty"}},
+		"good":  fakeProvider{info: &GeoIp{Provider: "good", City: "Somewhere"}},
 	})
 	results, err := GetIpLocations("8.8.8.8")
 	if err != nil {

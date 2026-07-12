@@ -3,14 +3,12 @@ package geoip
 import (
 	"errors"
 	"testing"
-
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 )
 
 // --- GetIpLocation: empty registry returns the "no geoip provider" error ---
 
 func TestGetIpLocation_NoProviders(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{})
+	withProviders(t, map[string]GeoIpProvider{})
 	_, err := GetIpLocation("8.8.8.8")
 	if err == nil {
 		t.Fatal("expected error when no providers are registered")
@@ -22,9 +20,9 @@ func TestGetIpLocation_NoProviders(t *testing.T) {
 func TestGetIpLocation_SkipsNilResult(t *testing.T) {
 	// First provider yields nil data with no error (the geoip == nil branch); the
 	// second provider supplies the answer.
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"nil":  fakeProvider{info: nil, err: nil},
-		"good": fakeProvider{info: &types.GeoIp{Provider: "good", Country: "US"}},
+		"good": fakeProvider{info: &GeoIp{Provider: "good", Country: "US"}},
 	})
 	info, err := GetIpLocation("8.8.8.8")
 	if err != nil {
@@ -38,7 +36,7 @@ func TestGetIpLocation_SkipsNilResult(t *testing.T) {
 // --- GetIpLocation: all providers yield nil → "no geoip provider found" ---
 
 func TestGetIpLocation_AllNil(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"nil": fakeProvider{info: nil, err: nil},
 	})
 	if _, err := GetIpLocation("8.8.8.8"); err == nil {
@@ -49,7 +47,7 @@ func TestGetIpLocation_AllNil(t *testing.T) {
 // --- GetIpLocations: empty registry returns the "no geoip provider" error ---
 
 func TestGetIpLocations_NoProviders(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{})
+	withProviders(t, map[string]GeoIpProvider{})
 	_, err := GetIpLocations("8.8.8.8")
 	if err == nil {
 		t.Fatal("expected error when no providers are registered")
@@ -59,9 +57,9 @@ func TestGetIpLocations_NoProviders(t *testing.T) {
 // --- GetIpLocations: a (nil, nil) provider result is skipped ---
 
 func TestGetIpLocations_SkipsNilResult(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"nil":  fakeProvider{info: nil, err: nil},
-		"good": fakeProvider{info: &types.GeoIp{Provider: "good", City: "Town"}},
+		"good": fakeProvider{info: &GeoIp{Provider: "good", City: "Town"}},
 	})
 	results, err := GetIpLocations("8.8.8.8")
 	if err != nil {
@@ -75,9 +73,9 @@ func TestGetIpLocations_SkipsNilResult(t *testing.T) {
 // --- GetIpLocations: a failing provider is skipped, error ones dropped silently ---
 
 func TestGetIpLocations_SkipsFailingProvider(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"broken": fakeProvider{err: errors.New("db missing")},
-		"good":   fakeProvider{info: &types.GeoIp{Provider: "good", Country: "US"}},
+		"good":   fakeProvider{info: &GeoIp{Provider: "good", Country: "US"}},
 	})
 	results, err := GetIpLocations("8.8.8.8")
 	if err != nil {
@@ -91,7 +89,7 @@ func TestGetIpLocations_SkipsFailingProvider(t *testing.T) {
 // --- GetIpLocations: when all providers fail, the result slice is empty (not nil) ---
 
 func TestGetIpLocations_AllFail(t *testing.T) {
-	withProviders(t, map[string]types.GeoIpProvider{
+	withProviders(t, map[string]GeoIpProvider{
 		"broken": fakeProvider{err: errors.New("db missing")},
 	})
 	results, err := GetIpLocations("8.8.8.8")

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
 )
 
 // maxResponseBytes caps how much of the external provider's response we read into
@@ -19,7 +19,7 @@ import (
 const maxResponseBytes = 64 * 1024
 
 func init() {
-	types.RegisterGeoIpProvider("ipapi", &IPAPIProvider{})
+	geoip.RegisterGeoIpProvider("ipapi", &IPAPI{})
 }
 
 // defaultLookupClient is the shared, read-only HTTP client for live lookups. It
@@ -27,7 +27,7 @@ func init() {
 var defaultLookupClient = &http.Client{Timeout: 3 * time.Second}
 
 // IPAPIProvider uses ipapi.co free tier for lookups.
-type IPAPIProvider struct {
+type IPAPI struct {
 	// client overrides the HTTP client used for lookups; nil uses the shared
 	// defaultLookupClient. Unexported so tests can inject without exposing it.
 	client *http.Client
@@ -35,19 +35,19 @@ type IPAPIProvider struct {
 
 // httpClient returns the provider's HTTP client, falling back to the shared
 // read-only default when none was injected.
-func (p *IPAPIProvider) httpClient() *http.Client {
+func (p *IPAPI) httpClient() *http.Client {
 	if p.client != nil {
 		return p.client
 	}
 	return defaultLookupClient
 }
 
-func (p *IPAPIProvider) GetIpInfo(ip string) (*types.GeoIp, error) {
+func (p *IPAPI) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {
 		return nil, errors.New("ip is empty")
 	}
 	if ip == "127.0.0.1" || ip == "::1" {
-		return &types.GeoIp{Provider: "ipapi", Ip: ip, Country: "Local", Province: "Local", City: "Local"}, nil
+		return &geoip.GeoIp{Provider: "ipapi", Ip: ip, Country: "Local", Province: "Local", City: "Local"}, nil
 	}
 	if net.ParseIP(ip) == nil {
 		return nil, fmt.Errorf("invalid IP address: %s", ip)
@@ -78,7 +78,7 @@ func (p *IPAPIProvider) GetIpInfo(ip string) (*types.GeoIp, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return &types.GeoIp{
+	return &geoip.GeoIp{
 		Provider: "ipapi",
 		Ip:       raw.Ip,
 		Country:  raw.CountryName,

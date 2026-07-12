@@ -5,9 +5,27 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
-
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
 )
+
+// GeoIp holds geolocation data for an IP address.
+type GeoIp struct {
+	Provider string `json:"provider"`
+	Ip       string `json:"ip"`
+	Country  string `json:"country"`
+	Province string `json:"province"`
+	City     string `json:"city"`
+}
+
+// Configure hands the loaded config to every registered provider that implements
+// Configurable; each provider reads its own section. Providers without config are
+// ignored. Call this after loading application config and before StartProviders.
+func Configure(cfg GeoIpConfig) {
+	for _, provider := range GeoIpProviders {
+		if c, ok := provider.(Configurable); ok {
+			c.Configure(cfg)
+		}
+	}
+}
 
 // StartProviders starts the background database maintenance of every registered
 // provider that implements types.Startable, tying it to ctx. Providers without
@@ -15,8 +33,8 @@ import (
 // on shutdown to stop all refresh goroutines. Until it is called, no provider
 // downloads anything — importing the providers package has no side effects.
 func StartProviders(ctx context.Context) {
-	for name, provider := range types.GeoIpProviders {
-		s, ok := provider.(types.Startable)
+	for name, provider := range GeoIpProviders {
+		s, ok := provider.(Startable)
 		if !ok {
 			continue
 		}
@@ -27,14 +45,14 @@ func StartProviders(ctx context.Context) {
 }
 
 // GetIpLocation returns geolocation info for an IP using the first successful provider.
-func GetIpLocation(ip string) (*types.GeoIp, error) {
+func GetIpLocation(ip string) (*GeoIp, error) {
 	if ip == "" {
 		return nil, errors.New("ip is empty")
 	}
-	if len(types.GeoIpProviders) == 0 {
+	if len(GeoIpProviders) == 0 {
 		return nil, errors.New("no geoip provider")
 	}
-	for name, provider := range types.GeoIpProviders {
+	for name, provider := range GeoIpProviders {
 		geoip, err := provider.GetIpInfo(ip)
 		if err != nil {
 			slog.Error("get ip info by provider error", "provider", name, "err", err.Error())
@@ -50,15 +68,15 @@ func GetIpLocation(ip string) (*types.GeoIp, error) {
 }
 
 // GetIpLocations returns geolocation info from all providers.
-func GetIpLocations(ip string) ([]*types.GeoIp, error) {
+func GetIpLocations(ip string) ([]*GeoIp, error) {
 	if ip == "" {
 		return nil, errors.New("ip is empty")
 	}
-	if len(types.GeoIpProviders) == 0 {
+	if len(GeoIpProviders) == 0 {
 		return nil, errors.New("no geoip provider")
 	}
-	results := make([]*types.GeoIp, 0)
-	for name, provider := range types.GeoIpProviders {
+	results := make([]*GeoIp, 0)
+	for name, provider := range GeoIpProviders {
 		geoip, err := provider.GetIpInfo(ip)
 		if err != nil {
 			slog.Error("get ip info error", "provider", name, "err", err)

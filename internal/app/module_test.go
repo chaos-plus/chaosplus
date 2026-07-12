@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 )
 
 // fakeModule implements every capability interface, with configurable errors and
@@ -97,24 +98,10 @@ func TestBuildModules(t *testing.T) {
 	a := &App{}
 	mods := a.buildModules()
 	require.Len(t, mods, 1)
-	_, isGeoip := mods[0].(geoipModule)
+	_, isGeoip := mods[0].(*geoip.Module)
 	assert.True(t, isGeoip)
 
 	// With a writer → id generator is prepended.
 	a = &App{dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
 	require.Len(t, a.buildModules(), 2)
-}
-
-func TestFailStop(t *testing.T) {
-	a := &App{serveErr: make(chan error, 1)}
-	a.failStop(errors.New("lease gone"))
-	select {
-	case err := <-a.serveErr:
-		assert.ErrorContains(t, err, "lease gone")
-	default:
-		t.Fatal("expected a fatal error on serveErr")
-	}
-
-	// Full channel must not block (app is already going down).
-	a.failStop(errors.New("second"))
 }

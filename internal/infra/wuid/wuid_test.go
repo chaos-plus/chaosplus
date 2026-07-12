@@ -2,7 +2,6 @@ package wuid
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 
-	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
 )
@@ -78,11 +76,18 @@ func TestHeartbeat_RenewsLease(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close(ctx) })
 
-	before := rowExpiresAt(t, database, int(w.ID()))
-	time.Sleep(400 * time.Millisecond) // > 3 heartbeat intervals
-	after := rowExpiresAt(t, database, int(w.ID()))
+	// Force the lease near expiry; the heartbeat must renew it back to ~now+lease
+	// (resolution-independent: the sqlite clock advances too coarsely to observe a
+	// sub-second bump directly).
+	_, err = database.NewUpdate().Model((*workerRow)(nil)).
+		Set("expires_at = ?", int64(1)).
+		Where("id = ?", w.ID()).
+		Exec(ctx)
+	require.NoError(t, err)
 
-	assert.Greater(t, after, before, "heartbeat should extend the lease")
+	require.Eventually(t, func() bool {
+		return rowExpiresAt(t, database, int(w.ID())) > 1000
+	}, 2*time.Second, 20*time.Millisecond, "heartbeat should renew the lease")
 }
 
 func TestHeartbeat_LostTriggersOnLost(t *testing.T) {
@@ -98,9 +103,9 @@ func TestHeartbeat_LostTriggersOnLost(t *testing.T) {
 	t.Cleanup(func() { _ = w.Close(ctx) })
 	assert.True(t, w.Alive())
 
-	// Simulate another node stealing the worker id.
+	// Simulate another node stealing the worker id (its token changes).
 	_, err = database.NewUpdate().Model((*workerRow)(nil)).
-		Set("owner = ?", "thief").
+		Set("token = ?", "thief").
 		Where("id = ?", w.ID()).
 		Exec(ctx)
 	require.NoError(t, err)
@@ -136,6 +141,32 @@ func TestHeartbeat_TransientErrorEventuallyLost(t *testing.T) {
 		t.Fatal("OnLost was not called after repeated renew failures")
 	}
 	assert.False(t, w.Alive())
+}
+
+func TestHeartbeat_ReacquiresAfterLoss(t *testing.T) {
+	ctx := context.Background()
+	database := newDB(t)
+
+	reacquired := make(chan uint16, 1)
+	w, err := allocate(ctx, database,
+		WithLease(150*time.Millisecond),
+		OnReacquire(func(id uint16) { reacquired <- id }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close(ctx) })
+
+	// Steal the id (change its token); the worker declares it lost, then
+	// re-allocates a fresh id in the background and resumes.
+	_, err = database.NewUpdate().Model((*workerRow)(nil)).
+		Set("token = ?", "thief").Where("id = ?", w.ID()).Exec(ctx)
+	require.NoError(t, err)
+
+	select {
+	case <-reacquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not re-acquire an id after loss")
+	}
+	assert.True(t, w.Alive(), "worker is Alive again after re-acquiring")
 }
 
 func TestStaticWorker(t *testing.T) {
@@ -199,89 +230,6 @@ func TestFromEnv(t *testing.T) {
 	})
 }
 
-func TestClaimPinnedID(t *testing.T) {
-	ctx := context.Background()
-	database := newDB(t)
-	nowExpr := bunx.NowMillisExpr(database.Dialect().Name().String())
-	const lease = int64(30_000)
-
-	// Free id -> claimed by insert.
-	id, err := claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", "{}", lease, nowExpr)
-	require.NoError(t, err)
-	assert.Equal(t, 7, id)
-
-	// Same owner (restart on the same host) reclaims it even though it is live.
-	id, err = claimPinnedID(ctx, database, 7, "pin:hostA", "hostA", "{}", lease, nowExpr)
-	require.NoError(t, err)
-	assert.Equal(t, 7, id)
-
-	// A different host, while the lease is live, is a hard conflict.
-	_, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", "{}", lease, nowExpr)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "already held by another node")
-
-	// Once the holder releases (expires_at = 0), another host may claim it.
-	_, err = database.NewUpdate().Model((*workerRow)(nil)).
-		Set("expires_at = ?", int64(0)).Where("id = ?", 7).Exec(ctx)
-	require.NoError(t, err)
-	id, err = claimPinnedID(ctx, database, 7, "pin:hostB", "hostB", "{}", lease, nowExpr)
-	require.NoError(t, err)
-	assert.Equal(t, 7, id)
-}
-
-func TestNodeIdentity_StableAndNonEmpty(t *testing.T) {
-	a := nodeIdentity()
-	b := nodeIdentity()
-	assert.NotEmpty(t, a)
-	assert.Equal(t, a, b, "identity must be deterministic across calls")
-
-	host, _ := os.Hostname()
-	if host != "" {
-		assert.Contains(t, a, host, "identity carries the hostname for readability")
-	}
-}
-
-func TestOpen_WithID(t *testing.T) {
-	ctx := context.Background()
-	database := newDB(t)
-
-	w, err := Open(ctx, database, WithID(3))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close(ctx) })
-
-	assert.Equal(t, uint16(3), w.ID())
-	assert.False(t, w.static, "a pinned id uses the lease, not the static path")
-}
-
-func TestParseOrdinal(t *testing.T) {
-	id, ok, err := parseOrdinal("api-3")
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, uint16(3), id)
-
-	_, ok, err = parseOrdinal("api-7d8f-abc12") // Deployment-style suffix
-	require.NoError(t, err)
-	assert.False(t, ok)
-
-	_, ok, err = parseOrdinal("standalone")
-	require.NoError(t, err)
-	assert.False(t, ok)
-
-	_, _, err = parseOrdinal("api-70000") // exceeds MaxWorkerID
-	assert.Error(t, err)
-}
-
-func TestFromHostnameOrdinal_NoError(t *testing.T) {
-	// Whatever the test host is named, the call must not error.
-	_, _, err := fromHostnameOrdinal()
-	assert.NoError(t, err)
-}
-
-func TestWithHostnameOrdinal_Option(t *testing.T) {
-	assert.True(t, newConfig(WithHostnameOrdinal()).useOrdinal)
-	assert.False(t, newConfig().useOrdinal)
-}
-
 func TestClose_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
@@ -310,7 +258,7 @@ func TestAllocate_PoolExhausted(t *testing.T) {
 	// reused and MAX(id)+1 overflows the pool.
 	future := time.Now().Add(time.Hour).UnixMilli()
 	_, err := database.NewInsert().Model(&workerRow{
-		ID: MaxWorkerID, Owner: "x", Host: "h", ExpiresAt: future,
+		ID: MaxWorkerID, Token: "x", ExpiresAt: future,
 	}).Exec(ctx)
 	require.NoError(t, err)
 

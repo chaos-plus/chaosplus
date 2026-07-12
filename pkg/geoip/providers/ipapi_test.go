@@ -9,7 +9,7 @@ import (
 )
 
 func TestIPAPI_GetIpInfo_EmptyIP(t *testing.T) {
-	p := &IPAPIProvider{}
+	p := &IPAPI{}
 	_, err := p.GetIpInfo("")
 	if err == nil {
 		t.Fatal("expected error for empty ip")
@@ -17,7 +17,7 @@ func TestIPAPI_GetIpInfo_EmptyIP(t *testing.T) {
 }
 
 func TestIPAPI_GetIpInfo_Localhost(t *testing.T) {
-	p := &IPAPIProvider{}
+	p := &IPAPI{}
 	for _, ip := range []string{"127.0.0.1", "::1"} {
 		geo, err := p.GetIpInfo(ip)
 		if err != nil {
@@ -33,7 +33,7 @@ func TestIPAPI_GetIpInfo_Localhost(t *testing.T) {
 }
 
 func TestIPAPI_GetIpInfo_InvalidIP(t *testing.T) {
-	p := &IPAPIProvider{}
+	p := &IPAPI{}
 	_, err := p.GetIpInfo("not-an-ip")
 	if err == nil {
 		t.Fatal("expected error for invalid ip")
@@ -57,7 +57,7 @@ func TestIPAPI_GetIpInfo_Success(t *testing.T) {
 	defer ts.Close()
 
 	// Inject a client that redirects ipapi.co to the test server.
-	p := &IPAPIProvider{client: rewriteClient(ts.URL)}
+	p := &IPAPI{client: rewriteClient(ts.URL)}
 	geo, err := p.GetIpInfo("8.8.8.8")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -76,7 +76,7 @@ func TestIPAPI_GetIpInfo_Non200(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	p := &IPAPIProvider{client: rewriteClient(ts.URL)}
+	p := &IPAPI{client: rewriteClient(ts.URL)}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "unexpected status") {
 		t.Fatalf("expected unexpected status error, got %v", err)
@@ -89,7 +89,7 @@ func TestIPAPI_GetIpInfo_BadJSON(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	p := &IPAPIProvider{client: rewriteClient(ts.URL)}
+	p := &IPAPI{client: rewriteClient(ts.URL)}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("expected decode error, got %v", err)
@@ -102,7 +102,7 @@ func TestIPAPI_GetIpInfo_TransportError(t *testing.T) {
 	url := ts.URL
 	ts.Close()
 
-	p := &IPAPIProvider{client: rewriteClient(url)}
+	p := &IPAPI{client: rewriteClient(url)}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "http request") {
 		t.Fatalf("expected http request error, got %v", err)
@@ -110,7 +110,7 @@ func TestIPAPI_GetIpInfo_TransportError(t *testing.T) {
 }
 
 func TestIPAPI_HTTPClient_Default(t *testing.T) {
-	p := &IPAPIProvider{}
+	p := &IPAPI{}
 	c := p.httpClient()
 	if c == nil {
 		t.Fatal("expected non-nil default client")
@@ -125,7 +125,7 @@ func TestIPAPI_HTTPClient_Default(t *testing.T) {
 
 	// An injected client takes precedence over the default.
 	injected := &http.Client{}
-	p = &IPAPIProvider{client: injected}
+	p = &IPAPI{client: injected}
 	if p.httpClient() != injected {
 		t.Fatal("expected the injected client to be used")
 	}

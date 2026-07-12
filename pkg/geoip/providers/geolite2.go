@@ -6,15 +6,15 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/chaos-plus/chaosplus/pkg/geoip/types"
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
 	"github.com/oschwald/geoip2-golang"
 )
 
 // Geolite2 uses MaxMind GeoLite2-City database.
 type Geolite2 struct {
-	Owner string
-	Repo  string
-	Db    string
+	Owner string `mapstructure:"owner" description:"geolite2 github owner"`
+	Repo  string `mapstructure:"repo" description:"geolite2 github repo"`
+	Db    string `mapstructure:"db" description:"geolite2 db asset name"`
 
 	// client overrides the HTTP client used for downloads; nil uses the shared
 	// defaultDownloadClient. Unexported so tests can inject without exposing it.
@@ -22,7 +22,7 @@ type Geolite2 struct {
 }
 
 func init() {
-	types.RegisterGeoIpProvider("geolite2", &Geolite2{})
+	geoip.RegisterGeoIpProvider("geolite2", &Geolite2{})
 }
 
 // httpClient returns the provider's HTTP client, falling back to the shared
@@ -34,13 +34,27 @@ func (m *Geolite2) httpClient() *http.Client {
 	return defaultDownloadClient
 }
 
+// Configure applies provider settings: Geolite2.Owner/Repo/Db override the GitHub
+// mirror the database is fetched from.
+func (m *Geolite2) Configure(c geoip.GeoIpConfig) {
+	if c.Geolite2.Owner != "" {
+		m.Owner = c.Geolite2.Owner
+	}
+	if c.Geolite2.Repo != "" {
+		m.Repo = c.Geolite2.Repo
+	}
+	if c.Geolite2.Db != "" {
+		m.Db = c.Geolite2.Db
+	}
+}
+
 // Start begins background maintenance of the GeoLite2 database, bound to ctx.
 func (m *Geolite2) Start(ctx context.Context) error {
 	maintainDB(ctx, "geolite2", m.GetDbPath, func() error { return m.DownloadDb() })
 	return nil
 }
 
-func (m *Geolite2) GetIpInfo(ip string) (*types.GeoIp, error) {
+func (m *Geolite2) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {
 		return nil, errors.New("ip is empty")
 	}
@@ -80,7 +94,7 @@ func (m *Geolite2) GetIpInfo(ip string) (*types.GeoIp, error) {
 		city = record.City.Names["en"]
 	}
 
-	return &types.GeoIp{
+	return &geoip.GeoIp{
 		Provider: "geolite2",
 		Ip:       ip,
 		Country:  country,

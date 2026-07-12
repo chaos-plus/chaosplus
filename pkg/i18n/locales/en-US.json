@@ -1,0 +1,14 @@
+{
+  "success": "Success",
+  "created": "Created successfully",
+  "not_found": "Resource not found",
+  "bad_request": "Bad request",
+  "unauthorized": "Unauthorized",
+  "forbidden": "Forbidden",
+  "internal_server_error": "Internal server error",
+  "user_not_found": "User not found",
+  "role_not_found": "Role not found",
+  "invalid_id": "Invalid ID",
+  "validation_failed": "Validation failed",
+  "too_many_requests": "Too many requests, please try again later"
+}

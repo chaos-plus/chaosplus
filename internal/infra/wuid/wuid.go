@@ -1,15 +1,15 @@
 // Package wuid allocates a process-unique worker id for building Sonyflake-style
-// ids across a cluster. It supports three deployment models, tried in order by
+// ids across a cluster. It supports two deployment models, tried in order by
 // Open:
 //
 //  1. Static via env (WUID=<n>) — explicit, no lease needed.
-//  2. Kubernetes StatefulSet ordinal parsed from the hostname (opt-in) — stable
-//     per-pod, no lease needed.
-//  3. Database lease coordinated by the dlock distributed lock — for ephemeral
-//     nodes (Deployments, VMs) with no stable identity. A background heartbeat
-//     renews the lease; if it can no longer be renewed the worker is marked not
-//     Alive and onLost fires, so the process can fail-stop before another node
-//     reuses the id. A leased id is never "acquire once, use forever".
+//  2. Database lease coordinated by the dlock distributed lock — for ephemeral
+//     nodes (Deployments, VMs) with no stable identity. Allocation reuses the
+//     lowest expired slot or creates a new id, stamping the row with a random
+//     token kept only in memory. A background heartbeat renews the lease with
+//     that token as an optimistic lock; if renewal fails past the safety margin,
+//     or the token is taken over, the id is declared lost (id generation stops)
+//     and the worker keeps trying to re-allocate a fresh id in the background.
 //
 // The id space (0..MaxWorkerID) matches Sonyflake's 16-bit machine id, so
 // Worker.ID() feeds directly into the guid package.
@@ -23,9 +23,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -44,33 +44,45 @@ import (
 const MaxWorkerID = 1<<16 - 1 // 65535
 
 // DefaultLease is the worker-id lease duration when no WithLease option is set.
-const DefaultLease = 30 * time.Second
+// It is deliberately long (hour-level) so the heartbeat is infrequent, which
+// keeps database chatter — and serverless cost — low for stable nodes.
+const DefaultLease = time.Hour
+
+// renewRetryInterval is how often the heartbeat retries after a failed renewal
+// or while re-allocating a lost id, instead of waiting a full renew interval.
+const renewRetryInterval = 5 * time.Second
 
 // EnvKey is the environment variable Open reads for an explicit worker id.
 const EnvKey = "WUID"
 
 const allocLockName = "wuid:alloc"
 
-// errTakenOver marks a definitive lease loss (another owner holds the row),
-// distinct from a transient database error which is retried.
+// errTakenOver marks a definitive lease loss (another node holds the row under a
+// different token), distinct from a transient database error which is retried.
 var errTakenOver = errors.New("wuid: lease taken over")
 
-// workerRow is one row of the worker_ids table (one row per allocated id).
+// workerRow is one row of the worker_ids table (one row per allocated id). The
+// diagnostic columns are flattened node info; token is the optimistic lock.
 type workerRow struct {
 	bun.BaseModel `bun:"table:worker_ids"`
 
 	ID        int    `bun:"id,pk"` // worker id, app-assigned (not auto-increment)
-	Owner     string `bun:"owner,notnull"`
-	Host      string `bun:"host,notnull"`
+	Token     string `bun:"token,notnull"`
 	ExpiresAt int64  `bun:"expires_at,notnull"` // unix millis
-	Meta      string `bun:"meta"`               // JSON node diagnostics (ip/mac/docker/os)
+
+	OS        string `bun:"os"`
+	Host      string `bun:"host"`
+	IPv4Lan   string `bun:"ipv4_lan"` // comma-separated
+	MAC       string `bun:"mac"`      // comma-separated
+	Disk      string `bun:"disk"`     // JSON array
+	Container bool   `bun:"container"`
+	KVM       bool   `bun:"kvm"`
 }
 
 type config struct {
-	lease      time.Duration
-	onLost     func(error)
-	useOrdinal bool
-	pinnedID   *uint16 // set by WithID: claim this exact id via the lease
+	lease       time.Duration
+	onLost      func(error)
+	onReacquire func(uint16)
 }
 
 // Option configures worker-id allocation.
@@ -86,26 +98,17 @@ func WithLease(d time.Duration) Option {
 }
 
 // OnLost registers a callback invoked when a leased worker can no longer renew
-// its lease. Treat this as fatal: stop generating ids and shut the process down,
-// otherwise another node may reuse the id and produce duplicates.
+// its lease. Treat this as "id generation must stop": callers should refuse to
+// mint ids until OnReacquire fires, otherwise another node may reuse the id.
 func OnLost(fn func(error)) Option {
 	return func(c *config) { c.onLost = fn }
 }
 
-// WithHostnameOrdinal lets Open derive the worker id from a Kubernetes
-// StatefulSet pod ordinal (hostname ending in "-<n>"). Off by default because a
-// Deployment pod's random suffix could coincidentally look like an ordinal.
-func WithHostnameOrdinal() Option {
-	return func(c *config) { c.useOrdinal = true }
-}
-
-// WithID pins the worker id to a specific value, claimed through the database
-// lease rather than the static path: the id is verified free and held with a
-// heartbeat, and Open fails if another live node already holds it. Use for
-// hand-assigned ids that must stay collision-safe. A restart on the same host
-// reclaims its own id; a different host holding it live is a conflict.
-func WithID(id uint16) Option {
-	return func(c *config) { c.pinnedID = &id }
+// OnReacquire registers a callback invoked when a previously-lost worker manages
+// to allocate a fresh id in the background, so callers can resume id generation
+// with the new id.
+func OnReacquire(fn func(uint16)) Option {
+	return func(c *config) { c.onReacquire = fn }
 }
 
 func newConfig(opts ...Option) config {
@@ -116,15 +119,17 @@ func newConfig(opts ...Option) config {
 	return c
 }
 
-// Worker is a worker id. A leased worker renews its lease in the background
-// until Close; a static worker (env / ordinal) has no lease and is always Alive.
+// Worker is a worker id. A leased worker renews its lease in the background until
+// Close; a static worker (env / ordinal) has no lease and is always Alive. On a
+// leased worker the id may change if the lease is lost and re-allocated.
 type Worker struct {
 	db      *bun.DB
 	nowExpr string // SQL for the DB server's unix-millis clock
-	id      int
-	owner   string
 	lease   time.Duration
 	static  bool
+
+	id    atomic.Int64 // current worker id (changes on re-allocation)
+	token atomic.Value // string; current lease token
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -132,109 +137,93 @@ type Worker struct {
 	alive     atomic.Bool
 	lastRenew atomic.Int64 // unix millis of the last successful renew/alloc
 
-	mu     sync.Mutex
-	onLost func(error)
-	closed bool
+	mu          sync.Mutex
+	onLost      func(error)
+	onReacquire func(uint16)
+	closed      bool
 }
 
 // ID returns the worker id, ready to use as a Sonyflake machine id.
-func (w *Worker) ID() uint16 { return uint16(w.id) }
+func (w *Worker) ID() uint16 { return uint16(w.id.Load()) }
 
 // Alive reports whether the worker id is still valid to generate with. It is
-// always true for static workers, and becomes false for a leased worker once
-// its lease is lost. Callers should stop generating ids when this is false.
+// always true for static workers, and becomes false for a leased worker while
+// its lease is lost (until it re-allocates). Callers must stop generating ids
+// when this is false.
 func (w *Worker) Alive() bool { return w.alive.Load() }
 
-// newStatic returns a static worker for an externally-guaranteed-unique id
-// (the WUID env var or a StatefulSet ordinal). It has no lease or heartbeat and
-// is always Alive.
+// newStatic returns a static worker for an externally-guaranteed-unique id (the
+// WUID env var or a StatefulSet ordinal). No lease, no heartbeat, always Alive.
 func newStatic(id uint16) *Worker {
-	w := &Worker{id: int(id), static: true}
+	w := &Worker{static: true}
+	w.id.Store(int64(id))
 	w.alive.Store(true)
 	return w
 }
 
-// Open picks a worker id using, in order: a pinned id (WithID, claimed via the
-// lease), the WUID env var, the Kubernetes StatefulSet ordinal (only when
-// WithHostnameOrdinal is set), and finally an auto database lease. This makes the
-// same code work across pinned config, static config, K8s StatefulSets, and
-// ephemeral Deployment/VM nodes. On any lease path the returned Worker owns a
-// lease + heartbeat, so callers must Close it.
+// Open picks a worker id using, in order: the WUID env var and then an auto
+// database lease. On the lease path the returned Worker owns a lease + heartbeat,
+// so callers must Close it.
 func Open(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
-	cfg := newConfig(opts...)
-
-	// A pinned id takes precedence and always goes through the lease so it can be
-	// verified and held; a conflict is fatal rather than silently reassigned.
-	if cfg.pinnedID != nil {
-		return allocate(ctx, db, opts...)
-	}
-
 	if id, ok, err := fromEnv(EnvKey); err != nil {
 		return nil, err
 	} else if ok {
 		return newStatic(id), nil
 	}
 
-	if cfg.useOrdinal {
-		if id, ok, err := fromHostnameOrdinal(); err != nil {
-			return nil, err
-		} else if ok {
-			return newStatic(id), nil
-		}
-	}
-
 	return allocate(ctx, db, opts...)
 }
 
 // allocate acquires a worker id via a database lease, skipping the static
-// (env/ordinal) sources. Open calls it once those are exhausted; tests call
-// it directly to drive the lease path deterministically.
+// (env/ordinal) sources. Open calls it once those are exhausted; tests call it
+// directly to drive the lease path deterministically.
 func allocate(ctx context.Context, db *bun.DB, opts ...Option) (*Worker, error) {
 	cfg := newConfig(opts...)
-	locker := dlock.New(db, dlock.WithTTL(cfg.lease))
-	lk, err := locker.Lock(ctx, allocLockName)
-	if err != nil {
-		return nil, fmt.Errorf("wuid: acquire alloc lock: %w", err)
-	}
-	defer func() { _ = lk.Unlock(context.WithoutCancel(ctx)) }()
-
-	host, _ := os.Hostname()
-	owner := newOwner()
-
-	// Judge expiry by the database clock (nowExpr), evaluated inside each
-	// statement, so nodes with skewed local clocks agree on when a slot is free.
 	nowExpr := bunx.NowMillisExpr(db.Dialect().Name().String())
-	meta := nodeMeta()
 
-	var id int
-	if cfg.pinnedID != nil {
-		// A pinned id uses a stable per-node owner so a restart reclaims its own
-		// id, while a different machine holding it live is reported as a conflict.
-		owner = pinnedOwner()
-		id, err = claimPinnedID(ctx, db, int(*cfg.pinnedID), owner, host, meta, cfg.lease.Milliseconds(), nowExpr)
-	} else {
-		id, err = claimID(ctx, db, owner, host, meta, cfg.lease.Milliseconds(), nowExpr)
-	}
+	id, token, err := claimUnderLock(ctx, db, cfg.lease, nowExpr)
 	if err != nil {
 		return nil, err
 	}
 
-	w := &Worker{db: db, nowExpr: nowExpr, id: id, owner: owner, lease: cfg.lease, onLost: cfg.onLost}
+	w := &Worker{db: db, nowExpr: nowExpr, lease: cfg.lease, onLost: cfg.onLost, onReacquire: cfg.onReacquire}
+	w.id.Store(int64(id))
+	w.token.Store(token)
 	w.alive.Store(true)
 	w.lastRenew.Store(time.Now().UnixMilli())
 
 	hbCtx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
-	w.startHeartbeat(hbCtx)
+	w.wg.Add(1)
+	go w.run(hbCtx)
 
 	return w, nil
 }
 
-// claimID picks and claims a worker id inside the allocation lock. Expiry is
-// evaluated against the database clock (nowExpr) in every statement, so a leased
-// id is never reclaimed early because of a skewed local clock; leaseMs is the
-// lease length in milliseconds added to that clock.
-func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs int64, nowExpr string) (int, error) {
+// claimUnderLock claims a worker id under the shared allocation lock and returns
+// it with a fresh random token.
+func claimUnderLock(ctx context.Context, db *bun.DB, lease time.Duration, nowExpr string) (int, string, error) {
+	token := newToken()
+	si := collectSysinfo()
+
+	locker := dlock.New(db, dlock.WithTTL(lease))
+	lk, err := locker.Lock(ctx, allocLockName)
+	if err != nil {
+		return 0, "", fmt.Errorf("wuid: acquire alloc lock: %w", err)
+	}
+	id, err := claimID(ctx, db, token, si, lease.Milliseconds(), nowExpr)
+	_ = lk.Unlock(context.WithoutCancel(ctx))
+	if err != nil {
+		return 0, "", err
+	}
+	return id, token, nil
+}
+
+// claimID picks and claims a worker id inside the allocation lock: it reuses the
+// lowest expired slot when one exists, otherwise allocates MAX(id)+1. Expiry is
+// evaluated against the database clock (nowExpr) so a leased id is never reclaimed
+// early because of a skewed local clock.
+func claimID(ctx context.Context, db *bun.DB, token string, si sysinfo, leaseMs int64, nowExpr string) (int, error) {
 	// 1. Prefer reusing the lowest expired slot.
 	var reuse int
 	err := db.NewSelect().Model((*workerRow)(nil)).
@@ -245,10 +234,15 @@ func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs 
 	switch {
 	case err == nil:
 		res, uerr := db.NewUpdate().Model((*workerRow)(nil)).
-			Set("owner = ?", owner).
-			Set("host = ?", host).
-			Set("meta = ?", meta).
+			Set("token = ?", token).
 			Set("expires_at = "+nowExpr+" + ?", leaseMs).
+			Set("os = ?", si.OS).
+			Set("host = ?", si.Host).
+			Set("ipv4_lan = ?", si.IPv4Lan).
+			Set("mac = ?", si.MAC).
+			Set("disk = ?", si.Disk).
+			Set("container = ?", si.Container).
+			Set("kvm = ?", si.KVM).
 			Where("id = ?", reuse).
 			Where("expires_at < " + nowExpr).
 			Exec(ctx)
@@ -258,7 +252,8 @@ func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs 
 		if n, _ := res.RowsAffected(); n == 1 {
 			return reuse, nil
 		}
-		// Extremely unlikely under the lock; fall through to allocate a new id.
+		// Lost the race for this slot under the lock (extremely unlikely); fall
+		// through to allocate a new id.
 	case errors.Is(err, sql.ErrNoRows):
 		// No expired slot to reuse.
 	default:
@@ -276,7 +271,12 @@ func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs 
 		return 0, fmt.Errorf("wuid: worker id pool exhausted (max %d)", MaxWorkerID)
 	}
 
-	if _, err := db.NewInsert().Model(&workerRow{ID: next, Owner: owner, Host: host, Meta: meta}).
+	row := &workerRow{
+		ID: next, Token: token,
+		OS: si.OS, Host: si.Host, IPv4Lan: si.IPv4Lan, MAC: si.MAC,
+		Disk: si.Disk, Container: si.Container, KVM: si.KVM,
+	}
+	if _, err := db.NewInsert().Model(row).
 		Value("expires_at", nowExpr+" + ?", leaseMs).
 		Exec(ctx); err != nil {
 		return 0, err
@@ -284,185 +284,80 @@ func claimID(ctx context.Context, db *bun.DB, owner, host, meta string, leaseMs 
 	return next, nil
 }
 
-// pinnedOwner is the lease owner for a WithID worker: a stable per-node identity
-// so a restart reclaims its own id, but distinct across machines so two nodes
-// pinned to the same id are detected as a conflict.
-func pinnedOwner() string {
-	return "pin:" + nodeIdentity()
-}
-
-// nodeIdentity is a stable, reasonably-unique identifier for this host. Hostname
-// is stable and human-readable; the first non-loopback MAC disambiguates hosts
-// that happen to share a hostname. IP is deliberately excluded — it is too
-// volatile (DHCP/reschedule) to anchor identity and would break restart reuse.
-func nodeIdentity() string {
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "unknown"
-	}
-	if mac := firstMAC(); mac != "" {
-		return host + "@" + mac
-	}
-	return host
-}
-
-// nodeMeta is a JSON blob of node diagnostics stored on the claimed row so a
-// conflict (or an operator inspecting the table) can see who holds a worker id.
-// It is informational only and never used for matching.
-func nodeMeta() string {
-	host, _ := os.Hostname()
-	b, _ := json.Marshal(map[string]any{
-		"host":   host,
-		"ip":     firstIP(),
-		"mac":    firstMAC(),
-		"docker": isContainer(),
-		"os":     runtime.GOOS + "/" + runtime.GOARCH,
-	})
-	return string(b)
-}
-
-// firstIP returns the first non-loopback IPv4 address, or "" when none is found.
-func firstIP() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
-			continue
+// run is the background heartbeat/recovery loop. It renews the lease on the renew
+// interval; on failure it retries quickly, and once the lease is lost it keeps
+// trying to re-allocate a fresh id.
+func (w *Worker) run(ctx context.Context) {
+	defer w.wg.Done()
+	timer := time.NewTimer(w.renewInterval())
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
 		}
-		addrs, _ := ifc.Addrs()
-		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
-				return ipnet.IP.String()
-			}
-		}
+		timer.Reset(w.step(ctx))
 	}
-	return ""
 }
 
-// isContainer is a best-effort check for running inside a container. It is safe
-// on any OS: the Linux-only files simply fail elsewhere.
-func isContainer() bool {
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		s := string(data)
-		if strings.Contains(s, "docker") || strings.Contains(s, "kubepods") || strings.Contains(s, "containerd") {
-			return true
+// step performs one heartbeat action and returns the delay until the next one.
+func (w *Worker) step(ctx context.Context) time.Duration {
+	if !w.alive.Load() {
+		// Lost: keep trying to re-allocate a fresh id so the process can recover.
+		if err := w.reacquire(ctx); err != nil {
+			slog.Error("wuid: re-allocation failed, will retry", "err", err)
+			return w.retryInterval()
 		}
-	}
-	return os.Getenv("KUBERNETES_SERVICE_HOST") != ""
-}
-
-// firstMAC returns the hardware address of the first non-loopback interface, or
-// "" when none is available.
-func firstMAC() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagLoopback != 0 || len(ifc.HardwareAddr) == 0 {
-			continue
-		}
-		return ifc.HardwareAddr.String()
-	}
-	return ""
-}
-
-// claimPinnedID claims a specific worker id inside the allocation lock. It takes
-// the id over when the row is absent, expired, or already owned by this host (a
-// restart). A live lease held by a different owner is a hard conflict.
-func claimPinnedID(ctx context.Context, db *bun.DB, id int, owner, host, meta string, leaseMs int64, nowExpr string) (int, error) {
-	existing := new(workerRow)
-	err := db.NewSelect().Model(existing).Where("id = ?", id).Scan(ctx)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		if _, ierr := db.NewInsert().Model(&workerRow{ID: id, Owner: owner, Host: host, Meta: meta}).
-			Value("expires_at", nowExpr+" + ?", leaseMs).
-			Exec(ctx); ierr != nil {
-			return 0, ierr
-		}
-		return id, nil
-	case err != nil:
-		return 0, err
+		return w.renewInterval()
 	}
 
-	// Row exists: take it over only if it is ours or already expired.
-	res, err := db.NewUpdate().Model((*workerRow)(nil)).
-		Set("owner = ?", owner).
-		Set("host = ?", host).
-		Set("meta = ?", meta).
-		Set("expires_at = "+nowExpr+" + ?", leaseMs).
-		Where("id = ?", id).
-		Where("(owner = ? OR expires_at < "+nowExpr+")", owner).
-		Exec(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if n, _ := res.RowsAffected(); n == 1 {
-		return id, nil
-	}
-	return 0, fmt.Errorf("wuid: worker id %d is already held by another node (owner %q, meta %s); "+
-		"check for a duplicate worker_id configuration", id, existing.Owner, existing.Meta)
-}
-
-func (w *Worker) startHeartbeat(ctx context.Context) {
-	interval := w.lease / 3
-	if interval <= 0 {
-		interval = time.Second
-	}
-
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		t := time.NewTicker(interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if done := w.tick(ctx); done {
-					return
-				}
-			}
-		}
-	}()
-}
-
-// tick performs one heartbeat. It returns true when the heartbeat loop should
-// stop (the lease was definitively lost, or transient failures ran out of
-// safety margin before expiry).
-func (w *Worker) tick(ctx context.Context) (done bool) {
 	err := w.renew(ctx)
 	switch {
 	case err == nil:
 		w.lastRenew.Store(time.Now().UnixMilli())
-		return false
+		return w.renewInterval()
 	case errors.Is(err, errTakenOver):
-		// Another node owns the id — definitively lost.
-		w.declareLost(fmt.Errorf("wuid: worker id %d taken over", w.id))
-		return true
+		w.declareLost(fmt.Errorf("wuid: worker id %d taken over", w.ID()))
+		return w.retryInterval()
 	default:
-		// Transient error: keep retrying until we can no longer guarantee the
-		// lease (one heartbeat interval of slack before the lease expires).
+		// Transient error: keep the id (the lease is still valid) and retry fast,
+		// until we can no longer guarantee it (a margin before actual expiry).
 		margin := w.lease / 3
 		if time.Now().UnixMilli()-w.lastRenew.Load() >= (w.lease - margin).Milliseconds() {
-			w.declareLost(fmt.Errorf("wuid: could not renew worker id %d: %w", w.id, err))
-			return true
+			w.declareLost(fmt.Errorf("wuid: could not renew worker id %d: %w", w.ID(), err))
+			return w.retryInterval()
 		}
-		return false
+		slog.Error("wuid: renew failed, will retry", "worker_id", w.ID(), "err", err)
+		return w.retryInterval()
 	}
 }
 
+func (w *Worker) renewInterval() time.Duration {
+	iv := w.lease / 3
+	if iv <= 0 {
+		iv = time.Second
+	}
+	return iv
+}
+
+// retryInterval is how long to wait before the next renew/re-allocate attempt
+// after a failure: a few seconds in production, but never longer than the renew
+// interval so short-lease tests converge quickly.
+func (w *Worker) retryInterval() time.Duration {
+	if iv := w.renewInterval(); iv < renewRetryInterval {
+		return iv
+	}
+	return renewRetryInterval
+}
+
+// renew extends the lease, using the in-memory token as an optimistic lock: if a
+// different node has taken the id (token no longer matches), 0 rows update.
 func (w *Worker) renew(ctx context.Context) error {
 	res, err := w.db.NewUpdate().Model((*workerRow)(nil)).
 		Set("expires_at = "+w.nowExpr+" + ?", w.lease.Milliseconds()).
-		Where("id = ?", w.id).
-		Where("owner = ?", w.owner).
+		Where("id = ?", w.ID()).
+		Where("token = ?", w.token.Load().(string)).
 		Exec(ctx)
 	if err != nil {
 		return err
@@ -473,8 +368,35 @@ func (w *Worker) renew(ctx context.Context) error {
 	return nil
 }
 
+// reacquire allocates a fresh id after the previous one was lost, and notifies
+// the caller (onReacquire) so it can resume id generation.
+func (w *Worker) reacquire(ctx context.Context) error {
+	id, token, err := claimUnderLock(ctx, w.db, w.lease, w.nowExpr)
+	if err != nil {
+		return err
+	}
+	w.id.Store(int64(id))
+	w.token.Store(token)
+	w.lastRenew.Store(time.Now().UnixMilli())
+	w.alive.Store(true)
+	slog.Info("wuid: re-allocated worker id; id generation resumed", "worker_id", id)
+
+	w.mu.Lock()
+	fn := w.onReacquire
+	w.mu.Unlock()
+	if fn != nil {
+		fn(uint16(id))
+	}
+	return nil
+}
+
+// declareLost marks the id lost (id generation must stop) and fires onLost, once.
 func (w *Worker) declareLost(err error) {
-	w.alive.Store(false)
+	if !w.alive.CompareAndSwap(true, false) {
+		return
+	}
+	slog.Error("wuid: worker id lost; id generation suspended", "worker_id", w.ID(), "err", err)
+
 	w.mu.Lock()
 	fn := w.onLost
 	w.mu.Unlock()
@@ -483,8 +405,8 @@ func (w *Worker) declareLost(err error) {
 	}
 }
 
-// Close stops the heartbeat and releases a leased worker id for reuse. It is
-// safe to call multiple times and is a no-op for static workers.
+// Close stops the heartbeat and releases a leased worker id for reuse. It is safe
+// to call multiple times and is a no-op for static workers.
 func (w *Worker) Close(ctx context.Context) error {
 	w.mu.Lock()
 	if w.closed {
@@ -507,14 +429,122 @@ func (w *Worker) Close(ctx context.Context) error {
 
 	_, err := w.db.NewUpdate().Model((*workerRow)(nil)).
 		Set("expires_at = ?", int64(0)).
-		Where("id = ?", w.id).
-		Where("owner = ?", w.owner).
+		Where("id = ?", w.ID()).
+		Where("token = ?", w.token.Load().(string)).
 		Exec(ctx)
 	return err
 }
 
-// fromEnv reads a worker id from the given environment variable. ok is false
-// when the variable is unset/empty.
+// sysinfo is the flattened node diagnostics stored on a claimed row.
+type sysinfo struct {
+	OS        string
+	Host      string
+	IPv4Lan   string
+	MAC       string
+	Disk      string
+	Container bool
+	KVM       bool
+}
+
+func collectSysinfo() sysinfo {
+	host, _ := os.Hostname()
+	return sysinfo{
+		OS:        runtime.GOOS + "/" + runtime.GOARCH,
+		Host:      host,
+		IPv4Lan:   allIPv4(),
+		MAC:       allMAC(),
+		Disk:      disksJSON(),
+		Container: isContainer(),
+		KVM:       isKVM(),
+	}
+}
+
+// allIPv4 returns every non-loopback IPv4 address, comma-separated.
+func allIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	var ips []string
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
+				ips = append(ips, n.IP.String())
+			}
+		}
+	}
+	return strings.Join(ips, ",")
+}
+
+// allMAC returns every non-loopback hardware address, comma-separated.
+func allMAC() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	var macs []string
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || len(ifc.HardwareAddr) == 0 {
+			continue
+		}
+		macs = append(macs, ifc.HardwareAddr.String())
+	}
+	return strings.Join(macs, ",")
+}
+
+// disksJSON is a best-effort JSON array of block device names (Linux); it is
+// "[]" on platforms where it cannot be determined.
+func disksJSON() string {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return "[]"
+	}
+	disks := make([]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") {
+			continue
+		}
+		disks = append(disks, name)
+	}
+	b, _ := json.Marshal(disks)
+	return string(b)
+}
+
+// isContainer is a best-effort check for running inside a container.
+func isContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "kubepods") || strings.Contains(s, "containerd") {
+			return true
+		}
+	}
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != ""
+}
+
+// isKVM is a best-effort check for running inside a virtual machine (Linux).
+func isKVM() bool {
+	if data, err := os.ReadFile("/proc/cpuinfo"); err == nil && strings.Contains(string(data), "hypervisor") {
+		return true
+	}
+	if data, err := os.ReadFile("/sys/class/dmi/id/product_name"); err == nil {
+		s := strings.ToLower(string(data))
+		if strings.Contains(s, "kvm") || strings.Contains(s, "qemu") || strings.Contains(s, "virtual") {
+			return true
+		}
+	}
+	return false
+}
+
+// fromEnv reads a worker id from the given environment variable. ok is false when
+// the variable is unset/empty.
 func fromEnv(key string) (id uint16, ok bool, err error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -530,35 +560,7 @@ func fromEnv(key string) (id uint16, ok bool, err error) {
 	return uint16(n), true, nil
 }
 
-var ordinalRe = regexp.MustCompile(`-(\d+)$`)
-
-// fromHostnameOrdinal derives a worker id from a Kubernetes StatefulSet pod
-// ordinal (hostname ending in "-<n>", e.g. "api-3"). ok is false when the
-// hostname does not end in an ordinal.
-func fromHostnameOrdinal() (id uint16, ok bool, err error) {
-	host, herr := os.Hostname()
-	if herr != nil {
-		return 0, false, herr
-	}
-	return parseOrdinal(host)
-}
-
-func parseOrdinal(host string) (id uint16, ok bool, err error) {
-	m := ordinalRe.FindStringSubmatch(host)
-	if m == nil {
-		return 0, false, nil
-	}
-	n, perr := strconv.ParseUint(m[1], 10, 64)
-	if perr != nil {
-		return 0, false, nil
-	}
-	if n > MaxWorkerID {
-		return 0, false, fmt.Errorf("wuid: hostname ordinal %d exceeds max %d", n, MaxWorkerID)
-	}
-	return uint16(n), true, nil
-}
-
-func newOwner() string {
+func newToken() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)

@@ -3,28 +3,23 @@ package respx
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// errorEnvelope is the error-response body. It mirrors Envelope but carries the
-// structured huma error details in Data so field-level validation errors still
-// reach the client. It implements huma.StatusError.
+// errorEnvelope is the error-response body. It keeps the same shape as the
+// success Envelope — {code, message, meta, data} — with Data always null on
+// error; the failure reason (including any field-level detail) is folded into
+// Message. It implements huma.StatusError.
 type errorEnvelope struct {
 	status int
 
-	Code    int           `json:"code" doc:"the HTTP status code (1..999); business codes are 100000+"`
-	Message string        `json:"message" doc:"human-readable error summary"`
-	Meta    Meta          `json:"meta" doc:"request metadata"`
-	Data    []ErrorDetail `json:"data" doc:"per-field error details; null when none"`
-}
-
-// ErrorDetail is one structured error, mirroring huma.ErrorDetail.
-type ErrorDetail struct {
-	Message  string `json:"message" doc:"what went wrong"`
-	Location string `json:"location,omitempty" doc:"where, e.g. 'path.count' or 'body.email'"`
-	Value    any    `json:"value,omitempty" doc:"the offending value, echoed back"`
+	Code    int    `json:"code" doc:"the HTTP status code (1..999); business codes are 100000+"`
+	Message string `json:"message" doc:"human-readable error summary"`
+	Meta    Meta   `json:"meta" doc:"request metadata"`
+	Data    any    `json:"data" doc:"always null on error"`
 }
 
 func (e *errorEnvelope) Error() string  { return e.Message }
@@ -56,31 +51,37 @@ func Install() {
 		return &errorEnvelope{
 			status:  status,
 			Code:    status,
-			Message: msg,
+			Message: messageOf(msg, errs),
 			Meta:    Meta{RequestAt: time.Now()},
-			Data:    toDetails(errs),
+			Data:    nil,
 		}
 	}
 }
 
-// toDetails converts huma's error details into ErrorDetail, preserving the
-// location/value when present. Returns nil (JSON null) when there are none.
-func toDetails(errs []error) []ErrorDetail {
-	out := make([]ErrorDetail, 0, len(errs))
+// messageOf folds huma's field-level details into the summary so the reason
+// survives even though the payload (data) is null. "validation failed" becomes
+// "validation failed: path.ip not a valid IPv4 address (expected x.x.x.x)".
+func messageOf(msg string, errs []error) string {
+	parts := make([]string, 0, len(errs))
 	for _, err := range errs {
 		if err == nil {
 			continue
 		}
-		d := ErrorDetail{Message: err.Error()}
+		text := err.Error()
 		if de, ok := err.(huma.ErrorDetailer); ok {
 			if ed := de.ErrorDetail(); ed != nil {
-				d = ErrorDetail{Message: ed.Message, Location: ed.Location, Value: ed.Value}
+				text = ed.Message
+				if ed.Location != "" {
+					text = ed.Location + " " + ed.Message
+				}
 			}
 		}
-		out = append(out, d)
+		if text != "" {
+			parts = append(parts, text)
+		}
 	}
-	if len(out) == 0 {
-		return nil
+	if len(parts) == 0 {
+		return msg
 	}
-	return out
+	return msg + ": " + strings.Join(parts, "; ")
 }

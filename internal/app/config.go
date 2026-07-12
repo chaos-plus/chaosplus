@@ -1,18 +1,21 @@
 package app
 
-import "github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+import (
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
+)
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
 type Config struct {
-	Name       string                     `mapstructure:"name" description:"app name" default:""`
-	Debug      bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
-	Timezone   string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
-	WorkerID    int                       `mapstructure:"worker_id" description:"fixed guid worker id; 0 = auto-allocate via dlock, >0 = pin this id (conflict is fatal)" default:"0"`
-	WorkerLease int                       `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"30"`
-	Log        Log                        `mapstructure:"log" group:"log"`
-	RestServer RestServer                 `mapstructure:"rest" group:"rest"`
-	GrpcServer GrpcServer                 `mapstructure:"grpc" group:"grpc"`
-	Database   map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
+	Name        string                     `mapstructure:"name" description:"app name" default:""`
+	Debug       bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
+	Timezone    string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
+	WorkerLease int                        `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"3600"`
+	Log         Log                        `mapstructure:"log" group:"log"`
+	RestServer  RestServer                 `mapstructure:"rest" group:"rest"`
+	GrpcServer  GrpcServer                 `mapstructure:"grpc" group:"grpc"`
+	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
+	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
 }
 
 type Log struct {

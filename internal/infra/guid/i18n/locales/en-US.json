@@ -1,0 +1,4 @@
+{
+  "guid.next.failed": "Failed to generate GUID",
+  "guid.batch.invalid_count": "Invalid count parameter, range 1-100"
+}

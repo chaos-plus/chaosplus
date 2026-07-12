@@ -1,0 +1,4 @@
+{
+  "guid.next.failed": "生成GUID失败",
+  "guid.batch.invalid_count": "count参数无效，范围1-100"
+}
