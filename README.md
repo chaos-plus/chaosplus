@@ -1,20 +1,33 @@
 # Chaosplus API
 
-Go backend for Chaosplus, exposing an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0)
-API built with [huma v2](https://github.com/danielgtaylor/huma) served over a
-[chi](https://github.com/go-chi/chi) router.
+Go backend for Chaosplus. It exposes an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0)
+HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over a
+[chi](https://github.com/go-chi/chi) router, plus a gRPC server on a separate port.
 
 ## Highlights
 
-- **huma on chi** — huma operations are mounted on a chi router via the official
-  `humachi` adapter. The application (`internal/app`) owns its own server
-  lifecycle, structured logging (`log/slog` via `pkg/logx`) and graceful
-  shutdown; no external web framework.
-- **koanf configuration** — layered config (struct defaults → `configs/config.yaml`
-  → `CP_`-prefixed environment overrides), see `internal/app/config.go`.
+- **huma on chi + gRPC** — huma operations are mounted on a chi router via the
+  official `humachi` adapter. The application (`internal/app`) owns its own
+  lifecycle, structured logging (`log/slog`), and graceful shutdown for both the
+  REST (`:8080`) and gRPC (`:9090`, reflection enabled) servers; no external web
+  framework.
+- **Uniform response envelope** — every response, success or error, is shaped as
+  `{code, message, meta, data}` by `internal/core/extension/humax/respx`. The
+  `message` is an i18n key localized per request; timestamps are UTC.
+- **Internationalized messages** — `pkg/i18n` resolves the request locale from
+  `?lang=` → `X-Lang` → `Accept-Language`, normalized to a supported locale
+  (`en-US`, `zh-CN`, `ms-MY`; fallback `en-US`). A huma transformer localizes the
+  envelope message for success, business, and framework errors alike.
+- **Multi-database via bun + goose** — datasources (`internal/core/extension/bunx`)
+  support SQLite, MySQL, and PostgreSQL with read/write routing; schema migrations
+  run per module via goose (`internal/core/extension/goosex`).
 - **Multi-renderer API docs** — a tabbed `/docs` page hosting five renderers
   (Scalar, Swagger UI, ReDoc, Stoplight, openapi-ui), each also reachable at its
-  own path (`/docs/scalar`, `/docs/redoc`, …). See `pkg/extension/huma/docs`.
+  own path. See `internal/core/extension/humax/docs`.
+- **Feature modules** — a single composition root (`internal/app/modules.go`)
+  wires the modules: `guid` (Snowflake-style ID generation with a leased worker
+  id) and `geoip` (IP geolocation). Supporting infra: `wuid` (worker-id lease)
+  and `dlock` (distributed lock).
 
 ## Requirements
 
@@ -26,43 +39,80 @@ API built with [huma v2](https://github.com/danielgtaylor/huma) served over a
 go run ./cmd/chaosplus-server
 ```
 
-The server logs its listening address on startup. By default it serves on
-`http://localhost:8080`.
+The server logs its listening addresses on startup. By default REST serves on
+`http://localhost:8080` and gRPC on `:9090`.
 
-- API docs: `http://localhost:8080/docs`
-- OpenAPI spec: `http://localhost:8080/openapi.json` (and `.yaml`)
+```bash
+# run with an explicit YAML config file
+go run ./cmd/chaosplus-server -c config.yaml
+```
+
+## Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /docs` | Tabbed API docs (also `/docs/scalar`, `/docs/swagger`, `/docs/redoc`, `/docs/stoplight`, `/docs/openapi-ui`) |
+| `GET /openapi.json`, `GET /openapi.yaml` | OpenAPI 3.1 spec |
+| `GET /guid` | Next generated id |
+| `GET /guid/{count}` | A batch of `count` new ids |
+| `GET /geoip` | Detect the caller's IPv4 and 307-redirect to its lookup |
+| `GET /geoip/{ip}` | Geolocation for an IPv4 address, one entry per provider |
 
 ## Configuration
 
-Spring Boot-style layered configuration, lowest to highest precedence:
+Configuration is loaded by `pkg/configurator` (viper + cobra flags). The struct
+in `internal/app/config.go` is the source of truth for every key and default.
+Values are resolved as: **struct defaults → YAML config file (`-c/--config`) →
+environment variables → CLI flags** (later wins). Every config field is also a
+CLI flag; run with `--help` to list them.
 
-1. struct defaults
-2. `configs/application.yaml` (base)
-3. `configs/application-<profile>.yaml` (active profile, selected by `CP_PROFILE`)
-4. `CP_`-prefixed environment variables
+Main settings (YAML path → default):
 
-The config directory defaults to `./configs` (override with `CONFIG_DIR`).
-`.env` and `configs/.env` are loaded into the environment first. Environment
-overrides map `_` to config nesting, e.g. `CP_SERVER_PORT` sets `server.port`.
+| Key | Default | Description |
+|-----|---------|-------------|
+| `name` | _(empty)_ | Application name |
+| `debug` (`-d`) | `false` | Debug mode; uses an in-memory SQLite database |
+| `timezone` | `UTC` | Process timezone; timestamps are emitted in UTC regardless |
+| `worker_lease` | `3600` | GUID worker-id lease seconds (heartbeat renews at a third of this) |
+| `rest.host` / `rest.port` | `0.0.0.0` / `8080` | REST listen address |
+| `grpc.host` / `grpc.port` | `0.0.0.0` / `9090` | gRPC listen address |
+| `log.file` / `log.level` / `log.format` | `logs/app.log` / `info` / `json` | Logging (empty `file` = stdout only) |
+| `database` | _(none)_ | Map of datasources (see below) |
+| `geoip` | _(none)_ | GeoIP provider settings |
 
-```bash
-# run with the dev profile (loads application-dev.yaml over application.yaml)
-CP_PROFILE=dev go run ./cmd/chaosplus-server
+### Databases
+
+`database` is a map of named datasources, each a `bunx.Datasource`:
+
+```yaml
+database:
+  primary:
+    type: mysql          # sqlite | mysql | postgres
+    dsn: "user:pass@tcp(127.0.0.1:3306)/chaosplus?parseTime=true&loc=UTC"
+    writable: true
+    readable: true
 ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CP_PROFILE` | _(none)_ | Active profile, e.g. `dev`, `prod` |
-| `CONFIG_DIR` | `configs` | Directory searched for config files |
-| `CP_SERVER_HOST` | `0.0.0.0` | HTTP listen host |
-| `CP_SERVER_PORT` | `8080` | HTTP listen port |
-| `CP_LOGGER_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `DOCS_RENDERER` | `all` | Docs UI: `all` (tabbed), `scalar`, `swagger-ui`, `stoplight`, or `none` |
+The first writable datasource is the primary — migrations and the GUID worker-id
+lease run against it. With no writable database configured, the `guid` module is
+skipped and the app still serves endpoints that don't need one. In debug mode an
+in-memory SQLite database is used.
 
-Databases are configured under `databases:` in the YAML file (each with `name`,
-`dialect`, `dsn`); with none configured a local SQLite database is used. The
-first database is the primary — migrations and the worker-id lease run against
-it.
+## Project layout
+
+```
+cmd/chaosplus-server        # entry point (cobra root command)
+internal/
+  app/                      # composition root: config, lifecycle, REST + gRPC servers, modules
+  core/extension/           # framework adapters
+    humax/respx             # uniform {code,message,meta,data} envelope + i18n
+    humax/docs              # multi-renderer OpenAPI docs
+    bunx                    # bun datasources + read/write routing
+    goosex                  # per-module goose migrations
+  infra/                    # feature & infra modules: guid, geoip, wuid, dlock
+pkg/                        # reusable libraries
+  configurator  i18n  geoip  interpreter  sysinfo  timezone  utils
+```
 
 ## Test
 
