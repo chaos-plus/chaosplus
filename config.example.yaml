@@ -1,0 +1,85 @@
+# Chaosplus API — example configuration.
+#
+# Copy to config.yaml and run:  go run ./cmd/chaosplus-server -c config.yaml
+# Every field below mirrors internal/app/config.go; values shown are the struct
+# defaults unless noted. Precedence: struct defaults < this file < env vars < CLI flags.
+
+name: chaosplus         # application name (uppercased at startup); empty = executable name
+debug: false            # debug mode: uses an in-memory SQLite database and verbose SQL logs
+timezone: UTC           # process timezone; timestamps are emitted in UTC regardless
+worker_lease: 3600      # GUID worker-id lease seconds; heartbeat renews at a third of this
+
+log:
+  file: logs/app.log    # log file path; empty = stdout only
+  level: info           # debug | info | warn | error
+  format: json          # json | text
+  max_size: 10          # max MB before rotation
+  rotate_size: 10       # size (MB) that triggers rotation
+  rotate_backups: 5     # number of rotated files to keep
+
+rest:
+  host: 0.0.0.0
+  port: 8080
+
+grpc:
+  host: 0.0.0.0
+  port: 9090
+
+# Shared Redis client (used by the rate limiter). Empty addrs disables Redis.
+#   - one addr, no master_name       -> standalone
+#   - master_name set (addrs=sentinels) -> sentinel / failover
+#   - multiple addrs, no master_name -> cluster
+redis:
+  addrs:
+    - 127.0.0.1:6379
+  master_name: ""       # set to a sentinel master name (e.g. mymaster) for sentinel mode
+  username: ""
+  password: ""
+  db: 0
+
+# Rate limiting (requires redis above). Disabled unless enabled=true. Enforces
+# per-IP and per-account dimensions independently; each applies only when enabled
+# with a positive rate.
+ratelimit:
+  enabled: false        # master switch
+  prefix: rl            # redis key prefix
+  ip:
+    enabled: true
+    rate: 100           # requests per period
+    period: 1m          # window (e.g. 1s, 1m, 1h)
+    burst: 20           # max burst; 0 = same as rate
+  account:
+    enabled: true
+    rate: 600
+    period: 1m
+    burst: 60
+    header: X-Account-Id # request header carrying the account id (anonymous requests skip this dimension)
+
+# Named datasources. The first writable one is the primary (migrations + worker-id
+# lease). With none configured, the id generator is skipped. Types: sqlite | mysql | postgres.
+database:
+  primary:
+    type: mysql
+    dsn: "user:pass@tcp(127.0.0.1:3306)/chaosplus?parseTime=true&loc=UTC"
+    writable: true
+    readable: true
+    max_open_conns: 25
+    max_idle_conns: 0
+    conn_max_lifetime: 30m
+    conn_max_idle_time: 1m
+  # Example read replica sharing the same schema:
+  # replica:
+  #   type: mysql
+  #   dsn: "user:pass@tcp(127.0.0.1:3307)/chaosplus?parseTime=true&loc=UTC"
+  #   writable: false
+  #   readable: true
+
+# GeoIP providers. Each provider applies only the fields it understands; empty
+# values leave a provider unconfigured (it simply does not contribute results).
+geoip:
+  geolite2:
+    owner: ""           # github owner hosting the GeoLite2 db release
+    repo: ""            # github repo
+    db: ""              # db asset name
+  ip2location:
+    token: ""           # ip2location download token

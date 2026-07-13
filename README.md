@@ -43,9 +43,12 @@ The server logs its listening addresses on startup. By default REST serves on
 `http://localhost:8080` and gRPC on `:9090`.
 
 ```bash
-# run with an explicit YAML config file
+# copy the annotated example and run with it
+cp config.example.yaml config.yaml
 go run ./cmd/chaosplus-server -c config.yaml
 ```
+
+[`config.example.yaml`](config.example.yaml) documents every setting with its default.
 
 ## Endpoints
 
@@ -77,8 +80,32 @@ Main settings (YAML path → default):
 | `rest.host` / `rest.port` | `0.0.0.0` / `8080` | REST listen address |
 | `grpc.host` / `grpc.port` | `0.0.0.0` / `9090` | gRPC listen address |
 | `log.file` / `log.level` / `log.format` | `logs/app.log` / `info` / `json` | Logging (empty `file` = stdout only) |
+| `redis.addrs` / `redis.master_name` | _(empty)_ | Redis client (see Rate limiting); empty `addrs` disables Redis |
+| `ratelimit.enabled` | `false` | Per-IP / per-account rate limiting (see below) |
 | `database` | _(none)_ | Map of datasources (see below) |
 | `geoip` | _(none)_ | GeoIP provider settings |
+
+### Rate limiting
+
+When `ratelimit.enabled` is true and Redis is configured, a Redis-backed limiter
+(GCRA token bucket) enforces independent **per-IP** and **per-account** dimensions;
+exceeded requests get a localized `429` with `Retry-After` and `X-RateLimit-*`
+headers. The account id comes from the `ratelimit.account.header` request header
+(default `X-Account-Id`); anonymous requests skip the account dimension. It fails
+open — if Redis is unavailable, requests are allowed and a warning is logged.
+
+Redis supports standalone, sentinel, and cluster deployments via one `redis.addrs`
+list plus `redis.master_name`:
+
+```yaml
+redis:
+  addrs: ["127.0.0.1:6379"]   # one = standalone; many = cluster; sentinel addrs + master_name = sentinel
+  master_name: ""             # set (e.g. mymaster) to use sentinel/failover
+ratelimit:
+  enabled: true
+  ip:      { enabled: true, rate: 100, period: 1m, burst: 20 }
+  account: { enabled: true, rate: 600, period: 1m, burst: 60, header: X-Account-Id }
+```
 
 ### Databases
 
