@@ -43,12 +43,18 @@ The server logs its listening addresses on startup. By default REST serves on
 `http://localhost:8080` and gRPC on `:9090`.
 
 ```bash
-# copy the annotated example and run with it
-cp config.example.yaml config.yaml
+# generate an annotated config template, then run with it
+go run ./cmd/chaosplus-server config generate -o config.yaml
 go run ./cmd/chaosplus-server -c config.yaml
 ```
 
-[`config.example.yaml`](config.example.yaml) documents every setting with its default.
+The `config` command has two subcommands, both driven by `internal/app/config.go`
+so they can never drift from the schema:
+
+- `config generate [-o FILE]` — write a template with every key, its default, and
+  a description comment (`-o` defaults to `config.yaml`).
+- `config validate [-c FILE]` — load a config file strictly; unknown or misspelled
+  keys are reported as errors.
 
 ## Endpoints
 

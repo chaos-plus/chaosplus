@@ -29,10 +29,9 @@ go.work.sum
 # Local config & secrets (never commit real credentials)
 .env
 *.env
-# Real config copied from config.example.yaml (may hold DSNs/passwords)
+# Generated/real config (may hold DSNs/passwords); regenerate with `chaosplus config`
 /config.yaml
 /config.*.yaml
-!config.example.yaml
 .env.*
 configs/.env
 !configs/.env.example

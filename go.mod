@@ -9,6 +9,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-redis/redis_rate/v10 v10.0.1
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/redis/go-redis/v9 v9.21.0
@@ -42,7 +43,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
@@ -99,5 +99,5 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0
 	golang.org/x/text v0.38.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 )
