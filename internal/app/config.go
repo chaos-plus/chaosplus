@@ -18,8 +18,29 @@ type Config struct {
 	GrpcServer  GrpcServer                 `mapstructure:"grpc" group:"grpc"`
 	Redis       Redis                      `mapstructure:"redis" group:"redis"`
 	RateLimit   RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
+	Cors        Cors                       `mapstructure:"cors" group:"cors"`
+	Security    Security                   `mapstructure:"security" group:"security"`
 	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
 	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+}
+
+// Cors configures cross-origin resource sharing on the REST server. Disabled by
+// default; enable and set allowed_origins for browser clients on other origins.
+type Cors struct {
+	Enabled          bool     `mapstructure:"enabled" description:"enable CORS" default:"false"`
+	AllowedOrigins   []string `mapstructure:"allowed_origins" description:"allowed origins, e.g. https://app.example.com or *"`
+	AllowedMethods   []string `mapstructure:"allowed_methods" description:"allowed methods; empty = GET,POST,PUT,PATCH,DELETE,OPTIONS"`
+	AllowedHeaders   []string `mapstructure:"allowed_headers" description:"allowed request headers; empty = *"`
+	ExposedHeaders   []string `mapstructure:"exposed_headers" description:"response headers exposed to the browser"`
+	AllowCredentials bool     `mapstructure:"allow_credentials" description:"allow cookies/credentials (not valid with origin *)" default:"false"`
+	MaxAge           int      `mapstructure:"max_age" description:"preflight cache seconds" default:"300"`
+}
+
+// Security configures security response headers on the REST server. HSTS should
+// only be enabled when served over HTTPS.
+type Security struct {
+	Enabled bool `mapstructure:"enabled" description:"send security response headers" default:"true"`
+	HSTS    bool `mapstructure:"hsts" description:"send Strict-Transport-Security (enable only behind TLS)" default:"false"`
 }
 
 // Redis configures the shared Redis client, supporting standalone, sentinel, and

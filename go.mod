@@ -7,6 +7,7 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/cors v1.2.2
 	github.com/go-redis/redis_rate/v10 v10.0.1
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
@@ -31,6 +32,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.2
 	go.opentelemetry.io/otel v1.44.0
 	google.golang.org/grpc v1.82.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -72,7 +74,6 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	lukechampine.com/uint128 v1.2.0 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 	modernc.org/libc v1.73.4 // indirect

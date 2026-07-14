@@ -10,10 +10,12 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/ratex"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/secure"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 )
 
 // readHeaderTimeout bounds how long the server waits for request headers,
@@ -30,6 +32,8 @@ func (app *App) StartRestServer() error {
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
+	app.useSecurity(router)  // security response headers
+	app.useCors(router)      // CORS (handles preflight before routing)
 	router.Use(respx.Timing) // stamp request start time for response meta
 	router.Use(respx.Locale) // resolve request locale for message i18n
 	app.useRateLimit(router) // per-IP / per-account limiting (after RealIP + Locale)
@@ -64,6 +68,40 @@ func (app *App) StartRestServer() error {
 	}()
 
 	return nil
+}
+
+// useSecurity mounts the security-headers middleware when enabled.
+func (app *App) useSecurity(router chi.Router) {
+	if app.cfg.Security.Enabled {
+		router.Use(secure.Headers(app.cfg.Security.HSTS))
+	}
+}
+
+// useCors mounts CORS when enabled, filling sensible defaults for any unset list
+// (all origins/methods/headers) so a bare `cors.enabled: true` is usable.
+func (app *App) useCors(router chi.Router) {
+	c := app.cfg.Cors
+	if !c.Enabled {
+		return
+	}
+	opts := cors.Options{
+		AllowedOrigins:   c.AllowedOrigins,
+		AllowedMethods:   c.AllowedMethods,
+		AllowedHeaders:   c.AllowedHeaders,
+		ExposedHeaders:   c.ExposedHeaders,
+		AllowCredentials: c.AllowCredentials,
+		MaxAge:           c.MaxAge,
+	}
+	if len(opts.AllowedOrigins) == 0 {
+		opts.AllowedOrigins = []string{"*"}
+	}
+	if len(opts.AllowedMethods) == 0 {
+		opts.AllowedMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
+	}
+	if len(opts.AllowedHeaders) == 0 {
+		opts.AllowedHeaders = []string{"*"}
+	}
+	router.Use(cors.Handler(opts))
 }
 
 // useRateLimit mounts the Redis-backed rate limiter when enabled and a Redis
