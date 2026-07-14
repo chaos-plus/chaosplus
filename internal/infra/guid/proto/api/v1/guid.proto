@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package chaosplus.guid.v1;
+
+// go_package is the single source of truth for both the import path and the
+// on-disk location: buf.gen.yaml's `module=` opt strips the Go module prefix and
+// writes the remainder under out (.). The gen path mirrors the source (api/v1),
+// so this lands in proto/gen/go/api/v1/. The proto package stays descriptive
+// (chaosplus.guid.v1) so the gRPC service is chaosplus.guid.v1.GuidService.
+option go_package = "github.com/chaos-plus/chaosplus/internal/infra/guid/proto/gen/go/api/v1;guidv1";
+
+// GuidService mints globally-unique, time-ordered ids (Sonyflake). Ids cross the
+// wire as decimal strings so they survive 53-bit float limits without precision
+// loss, matching the REST contract.
+service GuidService {
+  // Next returns a single new id.
+  rpc Next(NextRequest) returns (NextResponse);
+  // NextBatch returns `count` new ids (1..10000).
+  rpc NextBatch(NextBatchRequest) returns (NextBatchResponse);
+}
+
+message NextRequest {}
+
+message NextResponse {
+  string id = 1;
+}
+
+message NextBatchRequest {
+  uint32 count = 1;
+}
+
+message NextBatchResponse {
+  repeated string ids = 1;
+}

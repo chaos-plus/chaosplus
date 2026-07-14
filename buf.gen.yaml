@@ -1,0 +1,17 @@
+version: v2
+# managed mode OFF: each .proto declares its own go_package. `module=<go module>`
+# strips that prefix and writes the remainder as the on-disk path under out (.),
+# so files land exactly where go_package says (…/proto/gen/go/<mod>/v1/…). This
+# makes go_package the single source of truth for both import path and location.
+managed:
+  enabled: false
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/chaos-plus/chaosplus
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: module=github.com/chaos-plus/chaosplus
+# Inputs to generate; keep in sync with buf.yaml modules.
+inputs:
+  - directory: internal/infra/guid/proto

@@ -1,0 +1,16 @@
+version: v2
+# Module roots: each directory contains api/v1/*.proto, so a cross-module
+# `import "api/v1/<name>.proto"` resolves across the workspace. Keep this list in
+# sync with buf.gen.yaml inputs. Add a line per module as protos are introduced.
+modules:
+  - path: internal/infra/guid/proto
+lint:
+  use:
+    - STANDARD
+  # Sources live at api/v1/ while the package is chaosplus.<mod>.v1, so the file
+  # path intentionally does not mirror the package path.
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

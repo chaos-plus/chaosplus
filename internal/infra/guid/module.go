@@ -8,8 +8,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
+	"google.golang.org/grpc"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
+	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid/api"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 )
 
@@ -105,7 +107,13 @@ func (m *Module) Stop(ctx context.Context) error {
 	return m.worker.Close(ctx)
 }
 
-// RegisterREST mounts the guid HTTP endpoints on the huma API.
+// RegisterREST mounts the guid HTTP endpoints, injecting the package-level id
+// source so the transport layer stays decoupled from the generator.
 func (m *Module) RegisterREST(api huma.API) {
-	registerREST(api)
+	guidapi.RegisterREST(api, Next)
+}
+
+// RegisterGRPC registers the guid gRPC service, injecting the same id source.
+func (m *Module) RegisterGRPC(server *grpc.Server) {
+	guidapi.RegisterGRPC(server, Next)
 }
