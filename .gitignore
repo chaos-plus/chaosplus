@@ -36,6 +36,9 @@ go.work.sum
 configs/.env
 !configs/.env.example
 
+# Local-only dev notes & scratch (credentials, server info — never commit)
+/.local/
+
 # Editor / OS
 .idea/
 .vscode/
