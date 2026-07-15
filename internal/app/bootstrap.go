@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/chaos-plus/chaosplus/pkg/timezone"
 	"github.com/redis/go-redis/v9"
@@ -51,6 +54,25 @@ func (app *App) Bootstrap() error {
 			Password:   app.cfg.Redis.Password,
 			DB:         app.cfg.Redis.DB,
 		})
+	}
+
+	verifier, err := authn.NewVerifier(app.cfg.Authn)
+	if err != nil {
+		return fmt.Errorf("init authn: %w", err)
+	}
+	app.authnVerifier = verifier
+
+	if app.cfg.Authz.SpiceDB.Enabled {
+		client, err := spicedbx.Open(app.cfg.Authz.SpiceDB)
+		if err != nil {
+			return fmt.Errorf("connect spicedb: %w", err)
+		}
+		app.spicedb = client
+		if app.cfg.Authz.SpiceDB.ApplySchema {
+			if _, err := client.WriteSchema(app.ctx, authz.DefaultSchema()); err != nil {
+				return fmt.Errorf("apply spicedb schema: %w", err)
+			}
+		}
 	}
 
 	// build modules, then run the migrate and start phases in order.

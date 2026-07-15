@@ -6,13 +6,15 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
+	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 )
 
 // buildModules is the composition root: the single place that constructs the
 // application's modules and their dependencies, in registration order. Adding a
 // feature means adding a module here — nothing else in the app changes.
 func (app *App) buildModules() []any {
-	mods := make([]any, 0, 2)
+	mods := make([]any, 0, 3)
 
 	// Identity generation needs a writable database. Skipped when none exists so
 	// the app can still serve endpoints that don't need one.
@@ -22,6 +24,10 @@ func (app *App) buildModules() []any {
 		slog.Warn("no writable database; skipping id generator")
 	}
 
+	if app.cfg.Authn.Enabled {
+		mods = append(mods, authnmod.NewModule(app.authnVerifier))
+	}
+	mods = append(mods, iam.NewModule())
 	mods = append(mods, geoip.NewModule(app.cfg.GeoIP))
 
 	return mods

@@ -3,7 +3,9 @@ package app
 import (
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 )
 
@@ -20,8 +22,14 @@ type Config struct {
 	RateLimit   RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
 	Cors        Cors                       `mapstructure:"cors" group:"cors"`
 	Security    Security                   `mapstructure:"security" group:"security"`
+	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
+	Authz       Authz                      `mapstructure:"authz" group:"authz"`
 	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
 	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+}
+
+type Authz struct {
+	SpiceDB spicedbx.Config `mapstructure:"spicedb" group:"spicedb"`
 }
 
 // Cors configures cross-origin resource sharing on the REST server. Disabled by

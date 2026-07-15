@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -41,6 +43,9 @@ type App struct {
 	// mods are the application modules, in registration order. Their lifecycle
 	// phases (migrate/start/register/stop) are driven by the phase runners.
 	mods []any
+
+	authnVerifier *authn.Verifier
+	spicedb       *spicedbx.AuthzedClient
 
 	rest *http.Server
 	grpc *grpc.Server
@@ -177,6 +182,12 @@ func (app *App) shutdown() error {
 	if app.redis != nil {
 		if err := app.redis.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("redis close: %w", err))
+		}
+	}
+
+	if app.spicedb != nil {
+		if err := app.spicedb.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("spicedb close: %w", err))
 		}
 	}
 
