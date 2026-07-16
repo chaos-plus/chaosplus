@@ -60,6 +60,10 @@ func (r *Registrar) Registry() *Registry {
 	return r.registry
 }
 
+func (r *Registrar) IsDeclarationOnly() bool {
+	return r.verifier == nil && r.checker == nil
+}
+
 // Register declares and registers one guarded Huma operation.
 func Register[I, O any](r *Registrar, api huma.API, op huma.Operation, guard Guard, handler func(context.Context, *I) (*O, error)) {
 	if r == nil {

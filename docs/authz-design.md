@@ -1,7 +1,7 @@
 # Chaosplus 身份认证与权限设计
 
 状态：**实施中**
-当前分支：`feat/zitadel-spicedb-auth`
+当前里程碑：`feat/iam-authorization-writes`
 
 ## 1. 结论
 
@@ -178,7 +178,7 @@ id, parent_id, route, icon, order, permission_code
 
 ## 9. 一致性与写入
 
-- 关系写使用 SpiceDB `TOUCH`，保证幂等重试。
+- 关系写使用 SpiceDB `TOUCH` / `DELETE`，保证幂等重试与撤权。
 - 写入返回的 ZedToken 用于后续 `at_least_as_fresh` Check。
 - 没有 token 的关键检查使用 `fully_consistent`。
 - Lookup 使用 `minimize_latency`，最终对象读取仍需按一致性要求校验。
@@ -187,8 +187,8 @@ id, parent_id, route, icon, order, permission_code
 业务 DB 与 SpiceDB 的双写必须通过 outbox：
 
 ```text
-业务事务：业务元数据 + authz_outbox
-worker：WriteRelationships(TOUCH)
+业务事务：业务元数据 + relationship desired-state authz_outbox
+worker：WriteRelationshipUpdates(TOUCH/DELETE)
 成功：记录 ZedToken，标记 outbox 完成
 ```
 
@@ -228,23 +228,22 @@ SpiceDB 关系。只有 Zitadel authn 与 SpiceDB authz 同时启用时才挂载
 
 | 阶段 | 状态 | 已完成 | 未完成 |
 |---|---|---|---|
-| P0 基础 | 部分完成 | Zitadel 部署、OIDC verifier、SpiceDB client/schema apply、真实 smoke | audience 固化、outbox、生产 TLS |
-| P1 接口权限 | 进行中 | catalog、Guard 注册、OpenAPI 扩展、单条 Check、启动/CI 门禁 | CheckBulk、完整业务路由、角色授权写 API |
+| P0 基础 | 部分完成 | Zitadel 部署、正式 PKCE/JWT 应用与固定 audience、OIDC verifier、SpiceDB client/schema apply、事务 outbox、真实 smoke | 生产 TLS |
+| P1 接口权限 | 进行中 | catalog、Guard 注册、OpenAPI 扩展、单条 Check、启动/CI 门禁、角色授权与成员写 API | CheckBulk、完整业务路由 |
 | P2 层级和数据权限 | 未开始 | 基础 merchant/store/dept schema | LookupResources 下推、分享、层级用例 |
 | P3 菜单权限 | 部分完成 | menu metadata catalog | 按用户批量检查与树裁剪 |
-| P4 管理面 | 未开始 | 只读 catalog/schema/scope API | role/menu/member CRUD、有效权限查询 |
+| P4 管理面 | 进行中 | catalog/schema/scope、role CRUD、permission grant/revoke、member add/remove | menu CRUD、有效权限查询、bootstrap CLI |
 
 新增 authn/authz/spicedbx/iam 包要求保持 90% 以上测试覆盖率；远程依赖通过显式 smoke
 环境变量运行，不让普通单元测试依赖 10.0.0.100。
 
 ## 13. 下一步
 
-1. 为 Chaosplus 创建正式 Zitadel OIDC application，配置固定 audience。
-2. 实现 CheckBulk，用于菜单和多权限查询。
-3. 实现 role/member/grant 的业务表、outbox 和 SpiceDB 写关系 worker。
-4. 增加 merchant/store/dept 管理 API，并全部使用 guarded registration。
-5. 实现 `/me/menus` 与有效权限查询。
-6. 进入 LookupResources 数据权限下推和对象分享。
+1. 实现非 HTTP 的初始 platform/tenant administrator bootstrap CLI。
+2. 增加 tenant/merchant/store/dept 管理 API，并同步层级关系。
+3. 实现 LookupResources 数据权限下推和对象分享。
+4. 在 `/me/menus` 前实现 CheckBulk 与有效权限查询。
+5. 根据真实延迟和流量决定是否增加 Redis perm-set cache。
 
 ## 14. 非目标与边界
 

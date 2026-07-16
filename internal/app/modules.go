@@ -2,6 +2,7 @@ package app
 
 import (
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
@@ -28,7 +29,14 @@ func (app *App) buildModules() []any {
 		mods = append(mods, authnmod.NewModule(app.authnVerifier))
 	}
 	if app.authzRegistrar != nil {
-		mods = append(mods, iam.NewModule(app.authzRegistrar))
+		if app.authzRegistrar.IsDeclarationOnly() {
+			mods = append(mods, iam.NewDeclarationOnlyModule(app.authzRegistrar))
+		} else {
+			mods = append(mods, iam.NewModule(app.dbr.Write(), app.authzRegistrar, app.spicedb, func() (string, error) {
+				id, err := guid.Next()
+				return strconv.FormatInt(id, 10), err
+			}, app.cfg.Authz.Outbox))
+		}
 	} else {
 		slog.Warn("authorization stack disabled; skipping iam management API")
 	}

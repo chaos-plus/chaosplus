@@ -167,6 +167,8 @@ func DefaultActions() []Action {
 		{Resource: "role", Verb: "view", Scope: "tenant", Summary: "view roles", Menu: true},
 		{Resource: "role", Verb: "update", Scope: "tenant", Summary: "update roles"},
 		{Resource: "role", Verb: "delete", Scope: "tenant", Summary: "delete roles"},
+		{Resource: "role", Verb: "grant_permission", Scope: "tenant", Summary: "grant and revoke role permissions"},
+		{Resource: "role", Verb: "manage_member", Scope: "tenant", Summary: "add and remove role members"},
 
 		{Resource: "menu", Verb: "create", Scope: "tenant", Summary: "create menus"},
 		{Resource: "menu", Verb: "view", Scope: "tenant", Summary: "view menus", Menu: true},

@@ -77,6 +77,22 @@ func TestAuthzedClientMethods(t *testing.T) {
 	require.Len(t, fake.relationships, 1)
 	assert.Equal(t, v1.RelationshipUpdate_OPERATION_TOUCH, fake.relationships[0].Operation)
 
+	token, err = client.WriteRelationshipUpdates(context.Background(), []RelationshipUpdate{{
+		Operation: RelationshipDelete,
+		Relationship: Relationship{
+			Resource: ObjectRef{Type: "role", ID: "r1"},
+			Relation: "member",
+			Subject:  SubjectRef{Object: ObjectRef{Type: "user", ID: "u1"}},
+		},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, ZedToken("rel-token"), token)
+	require.Len(t, fake.relationships, 1)
+	assert.Equal(t, v1.RelationshipUpdate_OPERATION_DELETE, fake.relationships[0].Operation)
+
+	_, err = client.WriteRelationshipUpdates(context.Background(), []RelationshipUpdate{{Operation: "UPSERT"}})
+	assert.ErrorContains(t, err, "unsupported relationship operation")
+
 	ids, err := client.LookupResources(context.Background(), "store", "view", SubjectRef{Object: ObjectRef{Type: "user", ID: "u1"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"s1", "s2"}, ids)
@@ -97,6 +113,8 @@ func TestAuthzedClientErrors(t *testing.T) {
 	_, err = client.Check(context.Background(), ObjectRef{}, "view", SubjectRef{}, "")
 	assert.ErrorIs(t, err, want)
 	_, err = client.WriteRelationships(context.Background(), nil)
+	assert.ErrorIs(t, err, want)
+	_, err = client.WriteRelationshipUpdates(context.Background(), nil)
 	assert.ErrorIs(t, err, want)
 	_, err = client.LookupResources(context.Background(), "store", "view", SubjectRef{})
 	assert.ErrorIs(t, err, want)

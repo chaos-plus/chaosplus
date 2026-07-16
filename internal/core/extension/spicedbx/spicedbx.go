@@ -54,6 +54,21 @@ func (r Relationship) String() string {
 	return fmt.Sprintf("%s#%s@%s", r.Resource, r.Relation, r.Subject)
 }
 
+// RelationshipOperation is an idempotent relationship mutation supported by
+// the application outbox.
+type RelationshipOperation string
+
+const (
+	RelationshipTouch  RelationshipOperation = "TOUCH"
+	RelationshipDelete RelationshipOperation = "DELETE"
+)
+
+// RelationshipUpdate applies one operation to one exact relationship.
+type RelationshipUpdate struct {
+	Operation    RelationshipOperation
+	Relationship Relationship
+}
+
 // ZedToken is stored after authorization writes and reused for at-least-as-fresh
 // checks once the concrete client lands.
 type ZedToken string
@@ -70,6 +85,7 @@ type Config struct {
 type Client interface {
 	Check(ctx context.Context, resource ObjectRef, permission string, subject SubjectRef, token ZedToken) (bool, error)
 	WriteRelationships(ctx context.Context, rels []Relationship) (ZedToken, error)
+	WriteRelationshipUpdates(ctx context.Context, updates []RelationshipUpdate) (ZedToken, error)
 	LookupResources(ctx context.Context, resourceType, permission string, subject SubjectRef) ([]string, error)
 	LookupSubjects(ctx context.Context, resource ObjectRef, permission, subjectType string) ([]SubjectRef, error)
 }
@@ -140,11 +156,23 @@ func (c *AuthzedClient) Check(ctx context.Context, resource ObjectRef, permissio
 }
 
 func (c *AuthzedClient) WriteRelationships(ctx context.Context, rels []Relationship) (ZedToken, error) {
-	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	updates := make([]RelationshipUpdate, 0, len(rels))
 	for _, rel := range rels {
+		updates = append(updates, RelationshipUpdate{Operation: RelationshipTouch, Relationship: rel})
+	}
+	return c.WriteRelationshipUpdates(ctx, updates)
+}
+
+func (c *AuthzedClient) WriteRelationshipUpdates(ctx context.Context, relationshipUpdates []RelationshipUpdate) (ZedToken, error) {
+	updates := make([]*v1.RelationshipUpdate, 0, len(relationshipUpdates))
+	for _, update := range relationshipUpdates {
+		operation, err := relationshipOperation(update.Operation)
+		if err != nil {
+			return "", err
+		}
 		updates = append(updates, &v1.RelationshipUpdate{
-			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-			Relationship: relationship(rel),
+			Operation:    operation,
+			Relationship: relationship(update.Relationship),
 		})
 	}
 	resp, err := c.client.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: updates})
@@ -152,6 +180,17 @@ func (c *AuthzedClient) WriteRelationships(ctx context.Context, rels []Relations
 		return "", err
 	}
 	return tokenFromProto(resp.WrittenAt), nil
+}
+
+func relationshipOperation(operation RelationshipOperation) (v1.RelationshipUpdate_Operation, error) {
+	switch operation {
+	case RelationshipTouch:
+		return v1.RelationshipUpdate_OPERATION_TOUCH, nil
+	case RelationshipDelete:
+		return v1.RelationshipUpdate_OPERATION_DELETE, nil
+	default:
+		return v1.RelationshipUpdate_OPERATION_UNSPECIFIED, fmt.Errorf("unsupported relationship operation %q", operation)
+	}
 }
 
 func (c *AuthzedClient) LookupResources(ctx context.Context, resourceType, permission string, subject SubjectRef) ([]string, error) {

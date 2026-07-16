@@ -2,20 +2,24 @@ package iam
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
 func TestModuleRegistersREST(t *testing.T) {
-	m := NewModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	m := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
 	require.NotNil(t, m.service)
 	assert.Implements(t, (*api.Service)(nil), m.service)
 
@@ -25,11 +29,34 @@ func TestModuleRegistersREST(t *testing.T) {
 }
 
 func TestNewModuleRequiresRegistrar(t *testing.T) {
-	assert.Panics(t, func() { NewModule(nil) })
+	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
+	assert.Panics(t, func() { NewModule(nil, nil, nil, nil, OutboxConfig{}) })
+}
+
+func TestModuleLifecycle(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	var id atomic.Int64
+	m := NewModule(
+		db,
+		authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()),
+		&recordingRelationshipWriter{},
+		func() (string, error) { return fmt.Sprint(id.Add(1)), nil },
+		OutboxConfig{PollInterval: time.Hour},
+	)
+	require.NoError(t, m.Migrate(context.Background()))
+	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Stop(context.Background()))
+
+	declaration := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	require.NoError(t, declaration.Migrate(context.Background()))
+	require.NoError(t, declaration.Start(context.Background()))
+	require.NoError(t, declaration.Stop(context.Background()))
 }
 
 func TestServiceReadModels(t *testing.T) {
-	svc := NewService(authz.MustRegistry(
+	svc := newDeclarationService(authz.MustRegistry(
 		authz.Action{Resource: "store", Verb: "view", Menu: true},
 		authz.Action{Resource: "role", Verb: "view"},
 		authz.Action{Resource: "dept", Verb: "view"},

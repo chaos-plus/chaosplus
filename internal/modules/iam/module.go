@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/uptrace/bun"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
@@ -13,63 +14,55 @@ import (
 // for now: SpiceDB remains the future source of truth for grants, while these
 // endpoints let the admin UI discover the catalog and scope model.
 type Module struct {
-	service   *Service
-	registrar *authz.Registrar
+	service         *Service
+	registrar       *authz.Registrar
+	db              *bun.DB
+	worker          *OutboxWorker
+	declarationOnly bool
 }
 
-func NewModule(registrar *authz.Registrar) *Module {
-	if registrar == nil {
-		panic("iam module requires an authz registrar")
+func NewModule(db *bun.DB, registrar *authz.Registrar, writer RelationshipWriter, nextID IDGenerator, cfg OutboxConfig) *Module {
+	if db == nil || registrar == nil || writer == nil || nextID == nil {
+		panic("iam module requires database, authz registrar, relationship writer, and id generator")
 	}
+	repo := NewRepository(db, nextID)
+	worker := NewOutboxWorker(repo, writer, cfg, nextID)
 	return &Module{
-		service:   NewService(registrar.Registry()),
+		service:   NewService(registrar.Registry(), repo, worker),
 		registrar: registrar,
+		db:        db,
+		worker:    worker,
 	}
+}
+
+func NewDeclarationOnlyModule(registrar *authz.Registrar) *Module {
+	if registrar == nil || !registrar.IsDeclarationOnly() {
+		panic("iam declaration module requires a declaration-only authz registrar")
+	}
+	return &Module{service: newDeclarationService(registrar.Registry()), registrar: registrar, declarationOnly: true}
+}
+
+func (m *Module) Migrate(ctx context.Context) error {
+	if m.declarationOnly {
+		return nil
+	}
+	return Migrate(ctx, m.db)
+}
+
+func (m *Module) Start(ctx context.Context) error {
+	if m.declarationOnly {
+		return nil
+	}
+	return m.worker.Start(ctx)
+}
+
+func (m *Module) Stop(context.Context) error {
+	if !m.declarationOnly {
+		m.worker.Stop()
+	}
+	return nil
 }
 
 func (m *Module) RegisterREST(api huma.API) {
 	iamapi.RegisterREST(api, m.service, m.registrar)
-}
-
-// Service owns IAM read models that are not authorization decisions.
-type Service struct {
-	registry *authz.Registry
-}
-
-func NewService(registry *authz.Registry) *Service {
-	return &Service{registry: registry}
-}
-
-func (s *Service) PermissionCatalog(context.Context) []authz.Action {
-	return s.registry.All()
-}
-
-func (s *Service) SpiceDBSchema(context.Context) string {
-	return authz.GenerateSchema(s.registry.All())
-}
-
-func (s *Service) ScopeModel(context.Context) []iamapi.ScopeNode {
-	return []iamapi.ScopeNode{
-		{Type: "platform", ParentType: "", Relation: "administer", Label: "Platform"},
-		{Type: "tenant", ParentType: "platform", Relation: "platform", Label: "Brand tenant"},
-		{Type: "merchant", ParentType: "tenant", Relation: "tenant", Label: "Merchant"},
-		{Type: "store", ParentType: "merchant", Relation: "merchant", Label: "Store"},
-		{Type: "dept", ParentType: "tenant", Relation: "parent", Label: "Department tree"},
-	}
-}
-
-func (s *Service) MenuCatalog(context.Context) []iamapi.MenuItem {
-	return []iamapi.MenuItem{
-		{ID: "iam", Label: "IAM", PermissionCode: "menu_view", Children: []iamapi.MenuItem{
-			{ID: "iam-users", Label: "Users", Path: "/iam/users", PermissionCode: "user_view"},
-			{ID: "iam-roles", Label: "Roles", Path: "/iam/roles", PermissionCode: "role_view"},
-			{ID: "iam-depts", Label: "Departments", Path: "/iam/depts", PermissionCode: "dept_view"},
-			{ID: "iam-menus", Label: "Menus", Path: "/iam/menus", PermissionCode: "menu_view"},
-		}},
-		{ID: "org", Label: "Organization", PermissionCode: "tenant_view", Children: []iamapi.MenuItem{
-			{ID: "org-tenants", Label: "Tenants", Path: "/tenants", PermissionCode: "tenant_view"},
-			{ID: "org-merchants", Label: "Merchants", Path: "/merchants", PermissionCode: "merchant_view"},
-			{ID: "org-stores", Label: "Stores", Path: "/stores", PermissionCode: "store_view"},
-		}},
-	}
 }

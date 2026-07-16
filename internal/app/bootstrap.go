@@ -81,6 +81,9 @@ func (app *App) Bootstrap() error {
 	if app.cfg.Authn.Enabled && app.spicedb != nil {
 		app.authzRegistrar = authz.NewRegistrar(registry, verifier, app.spicedb)
 	}
+	if app.authzRegistrar != nil && len(app.dbr.Writer) == 0 {
+		return fmt.Errorf("iam authorization writes require a writable database")
+	}
 
 	// build modules, then run the migrate and start phases in order.
 	app.mods = app.buildModules()

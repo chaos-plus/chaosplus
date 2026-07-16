@@ -7,6 +7,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
+	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 )
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
@@ -29,7 +30,8 @@ type Config struct {
 }
 
 type Authz struct {
-	SpiceDB spicedbx.Config `mapstructure:"spicedb" group:"spicedb"`
+	SpiceDB spicedbx.Config  `mapstructure:"spicedb" group:"spicedb"`
+	Outbox  iam.OutboxConfig `mapstructure:"outbox" group:"outbox"`
 }
 
 // Cors configures cross-origin resource sharing on the REST server. Disabled by
