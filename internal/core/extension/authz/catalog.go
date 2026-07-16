@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 var codePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -85,6 +86,9 @@ func (r *Registry) Register(a Action) error {
 	}
 	if !codePattern.MatchString(a.Verb) {
 		return fmt.Errorf("invalid authz verb %q", a.Verb)
+	}
+	if strings.HasSuffix(a.Verb, "_role") {
+		return fmt.Errorf("invalid authz verb %q: suffix _role is reserved for generated relations", a.Verb)
 	}
 	if !codePattern.MatchString(a.Code) {
 		return fmt.Errorf("invalid authz code %q", a.Code)

@@ -50,6 +50,12 @@ func TestRegistryValidation(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsGeneratedRelationCollision(t *testing.T) {
+	_, err := NewRegistry(Action{Resource: "store", Verb: "view_role"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "suffix _role is reserved")
+}
+
 func TestRegistryFindSortAndGuardCode(t *testing.T) {
 	r, err := NewRegistry(
 		Action{Resource: "store", Verb: "update"},
