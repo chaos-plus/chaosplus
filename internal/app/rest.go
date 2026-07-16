@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/docs"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/ratex"
@@ -51,6 +52,13 @@ func (app *App) StartRestServer() error {
 
 	api := humachi.New(router, config)
 	app.registerREST(api)
+	registry := authz.DefaultRegistry()
+	if app.authzRegistrar != nil {
+		registry = app.authzRegistrar.Registry()
+	}
+	if err := authz.ValidateOperations(api, registry); err != nil {
+		return err
+	}
 
 	addr := fmt.Sprintf("%s:%d", app.cfg.RestServer.Host, app.cfg.RestServer.Port)
 	server := &http.Server{

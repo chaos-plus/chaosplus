@@ -28,7 +28,8 @@ func (fakeService) MenuCatalog(context.Context) []MenuItem {
 
 func TestRegisterREST(t *testing.T) {
 	_, a := humatest.New(t)
-	RegisterREST(a, fakeService{})
+	registrar := authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())
+	RegisterREST(a, fakeService{}, registrar)
 
 	for _, path := range []string{
 		"/iam/permission-catalog",

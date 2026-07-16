@@ -15,13 +15,17 @@ import (
 )
 
 func TestModuleRegistersREST(t *testing.T) {
-	m := NewModule()
+	m := NewModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
 	require.NotNil(t, m.service)
 	assert.Implements(t, (*api.Service)(nil), m.service)
 
 	_, a := humatest.New(t)
 	m.RegisterREST(a)
 	assert.Equal(t, http.StatusOK, a.Get("/iam/permission-catalog").Code)
+}
+
+func TestNewModuleRequiresRegistrar(t *testing.T) {
+	assert.Panics(t, func() { NewModule(nil) })
 }
 
 func TestServiceReadModels(t *testing.T) {

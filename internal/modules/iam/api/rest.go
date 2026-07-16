@@ -37,44 +37,44 @@ type schemaOutput struct {
 }
 
 // RegisterREST mounts IAM discovery endpoints for the management UI.
-func RegisterREST(a huma.API, svc Service) {
-	huma.Register(a, huma.Operation{
+func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
+	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-permission-catalog",
 		Method:      http.MethodGet,
 		Path:        "/iam/permission-catalog",
 		Summary:     "List declared permissions",
 		Tags:        []string{"iam"},
-	}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]authz.Action], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]authz.Action], error) {
 		return respx.OK(ctx, svc.PermissionCatalog(ctx)), nil
 	})
 
-	huma.Register(a, huma.Operation{
+	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-spicedb-schema",
 		Method:      http.MethodGet,
 		Path:        "/iam/spicedb/schema",
 		Summary:     "Return the generated SpiceDB schema",
 		Tags:        []string{"iam"},
-	}, func(ctx context.Context, _ *struct{}) (*respx.Body[schemaOutput], error) {
+	}, authz.Guard{Resource: "tenant", Verb: "administer"}, func(ctx context.Context, _ *struct{}) (*respx.Body[schemaOutput], error) {
 		return respx.OK(ctx, schemaOutput{Schema: svc.SpiceDBSchema(ctx)}), nil
 	})
 
-	huma.Register(a, huma.Operation{
+	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-scope-model",
 		Method:      http.MethodGet,
 		Path:        "/iam/scope-model",
 		Summary:     "List platform tenant merchant store scope model",
 		Tags:        []string{"iam"},
-	}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]ScopeNode], error) {
+	}, authz.Guard{Resource: "tenant", Verb: "view"}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]ScopeNode], error) {
 		return respx.OK(ctx, svc.ScopeModel(ctx)), nil
 	})
 
-	huma.Register(a, huma.Operation{
+	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-menu-catalog",
 		Method:      http.MethodGet,
 		Path:        "/iam/menu-catalog",
 		Summary:     "List menu metadata bound to permission codes",
 		Tags:        []string{"iam"},
-	}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]MenuItem], error) {
+	}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, _ *struct{}) (*respx.Body[[]MenuItem], error) {
 		return respx.OK(ctx, svc.MenuCatalog(ctx)), nil
 	})
 }

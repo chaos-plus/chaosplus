@@ -7,6 +7,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 )
 
@@ -24,7 +25,7 @@ type meInput struct {
 }
 
 func RegisterREST(a huma.API, verifier *authnext.Verifier) {
-	huma.Register(a, huma.Operation{
+	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-me",
 		Method:      http.MethodGet,
 		Path:        "/authn/me",

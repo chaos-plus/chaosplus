@@ -42,6 +42,7 @@ func TestRegistryValidation(t *testing.T) {
 		{Resource: "Store", Verb: "view"},
 		{Resource: "store", Verb: "View"},
 		{Resource: "store", Verb: "view", Code: "store:view"},
+		{Resource: "store", Verb: "view", Code: "administer"},
 	}
 	for _, tc := range cases {
 		_, err := NewRegistry(tc)

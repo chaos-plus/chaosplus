@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
@@ -44,8 +45,9 @@ type App struct {
 	// phases (migrate/start/register/stop) are driven by the phase runners.
 	mods []any
 
-	authnVerifier *authn.Verifier
-	spicedb       *spicedbx.AuthzedClient
+	authnVerifier  *authn.Verifier
+	authzRegistrar *authz.Registrar
+	spicedb        *spicedbx.AuthzedClient
 
 	rest *http.Server
 	grpc *grpc.Server

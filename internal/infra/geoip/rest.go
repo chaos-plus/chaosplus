@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	geoiplib "github.com/chaos-plus/chaosplus/pkg/geoip"
 )
@@ -14,7 +15,7 @@ import (
 // RegisterREST mounts the geoip lookup endpoints on the huma API. This makes the
 // module a full feature unit (like the guid module), not just background work.
 func (m *Module) RegisterREST(api huma.API) {
-	huma.Register(api, huma.Operation{
+	authz.RegisterPublic(api, huma.Operation{
 		OperationID: "lookup-geoip-self",
 		Method:      http.MethodGet,
 		Path:        "/geoip",
@@ -26,7 +27,7 @@ func (m *Module) RegisterREST(api huma.API) {
 		Tags:          []string{"geoip"},
 	}, lookupSelf)
 
-	huma.Register(api, huma.Operation{
+	authz.RegisterPublic(api, huma.Operation{
 		OperationID: "lookup-geoip",
 		Method:      http.MethodGet,
 		Path:        "/geoip/{ip}",

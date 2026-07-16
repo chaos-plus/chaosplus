@@ -74,8 +74,11 @@ func (r *Registry) Register(a Action) error {
 	if a.Resource == "" || a.Verb == "" {
 		return fmt.Errorf("authz action requires resource and verb")
 	}
+	expectedCode := PermissionCode(a.Resource, a.Verb)
 	if a.Code == "" {
-		a.Code = PermissionCode(a.Resource, a.Verb)
+		a.Code = expectedCode
+	} else if a.Code != expectedCode {
+		return fmt.Errorf("authz code %q must equal canonical code %q", a.Code, expectedCode)
 	}
 	if !codePattern.MatchString(a.Resource) {
 		return fmt.Errorf("invalid authz resource %q", a.Resource)

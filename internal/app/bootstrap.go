@@ -56,6 +56,7 @@ func (app *App) Bootstrap() error {
 		})
 	}
 
+	registry := authz.DefaultRegistry()
 	verifier, err := authn.NewVerifier(app.cfg.Authn)
 	if err != nil {
 		return fmt.Errorf("init authn: %w", err)
@@ -63,16 +64,22 @@ func (app *App) Bootstrap() error {
 	app.authnVerifier = verifier
 
 	if app.cfg.Authz.SpiceDB.Enabled {
+		if !app.cfg.Authn.Enabled {
+			return fmt.Errorf("spicedb authz requires authn to be enabled")
+		}
 		client, err := spicedbx.Open(app.cfg.Authz.SpiceDB)
 		if err != nil {
 			return fmt.Errorf("connect spicedb: %w", err)
 		}
 		app.spicedb = client
 		if app.cfg.Authz.SpiceDB.ApplySchema {
-			if _, err := client.WriteSchema(app.ctx, authz.DefaultSchema()); err != nil {
+			if _, err := client.WriteSchema(app.ctx, authz.GenerateSchema(registry.All())); err != nil {
 				return fmt.Errorf("apply spicedb schema: %w", err)
 			}
 		}
+	}
+	if app.cfg.Authn.Enabled && app.spicedb != nil {
+		app.authzRegistrar = authz.NewRegistrar(registry, verifier, app.spicedb)
 	}
 
 	// build modules, then run the migrate and start phases in order.

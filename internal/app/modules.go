@@ -27,7 +27,11 @@ func (app *App) buildModules() []any {
 	if app.cfg.Authn.Enabled {
 		mods = append(mods, authnmod.NewModule(app.authnVerifier))
 	}
-	mods = append(mods, iam.NewModule())
+	if app.authzRegistrar != nil {
+		mods = append(mods, iam.NewModule(app.authzRegistrar))
+	} else {
+		slog.Warn("authorization stack disabled; skipping iam management API")
+	}
 	mods = append(mods, geoip.NewModule(app.cfg.GeoIP))
 
 	return mods

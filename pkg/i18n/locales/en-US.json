@@ -5,6 +5,7 @@
   "bad_request": "Bad request",
   "unauthorized": "Unauthorized",
   "forbidden": "Forbidden",
+  "authorization_unavailable": "Authorization service is temporarily unavailable",
   "internal_server_error": "Internal server error",
   "user_not_found": "User not found",
   "role_not_found": "Role not found",

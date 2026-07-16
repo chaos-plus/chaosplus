@@ -11,6 +11,7 @@ import (
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
@@ -98,13 +99,17 @@ func TestBuildModules(t *testing.T) {
 	// No writable database → only the geoip module.
 	a := &App{}
 	mods := a.buildModules()
-	require.Len(t, mods, 2)
-	_, isIAM := mods[0].(*iam.Module)
-	assert.True(t, isIAM)
-	_, isGeoip := mods[1].(*geoip.Module)
+	require.Len(t, mods, 1)
+	_, isGeoip := mods[0].(*geoip.Module)
 	assert.True(t, isGeoip)
 
 	// With a writer → id generator is prepended.
 	a = &App{dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
-	require.Len(t, a.buildModules(), 3)
+	require.Len(t, a.buildModules(), 2)
+
+	a = &App{authzRegistrar: authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())}
+	mods = a.buildModules()
+	require.Len(t, mods, 2)
+	_, isIAM := mods[0].(*iam.Module)
+	assert.True(t, isIAM)
 }

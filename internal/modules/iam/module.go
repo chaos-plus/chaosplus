@@ -13,15 +13,22 @@ import (
 // for now: SpiceDB remains the future source of truth for grants, while these
 // endpoints let the admin UI discover the catalog and scope model.
 type Module struct {
-	service *Service
+	service   *Service
+	registrar *authz.Registrar
 }
 
-func NewModule() *Module {
-	return &Module{service: NewService(authz.DefaultRegistry())}
+func NewModule(registrar *authz.Registrar) *Module {
+	if registrar == nil {
+		panic("iam module requires an authz registrar")
+	}
+	return &Module{
+		service:   NewService(registrar.Registry()),
+		registrar: registrar,
+	}
 }
 
 func (m *Module) RegisterREST(api huma.API) {
-	iamapi.RegisterREST(api, m.service)
+	iamapi.RegisterREST(api, m.service, m.registrar)
 }
 
 // Service owns IAM read models that are not authorization decisions.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 )
 
@@ -24,7 +25,7 @@ type batchInput struct {
 // RegisterREST mounts the guid HTTP endpoints, minting ids via next. Ids are
 // string-encoded so they survive JavaScript's 2^53 safe-integer limit.
 func RegisterREST(a huma.API, next NextFunc) {
-	huma.Register(a, huma.Operation{
+	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "next-guid",
 		Method:      http.MethodGet,
 		Path:        "/guid",
@@ -40,7 +41,7 @@ func RegisterREST(a huma.API, next NextFunc) {
 		return respx.OK(ctx, strconv.FormatInt(id, 10)), nil
 	})
 
-	huma.Register(a, huma.Operation{
+	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "next-guid-batch",
 		Method:      http.MethodGet,
 		Path:        "/guid/{count}",
