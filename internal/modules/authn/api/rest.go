@@ -35,7 +35,7 @@ type WebService interface {
 	Callback(context.Context, string, string, string) (string, string, error)
 	Authenticate(context.Context, string, string) (*authnext.Claims, error)
 	ValidateCSRF(string, string, string, string) error
-	Logout(context.Context, string)
+	Logout(context.Context, string) string
 	SessionCookie(string) string
 	FlowCookie(string) string
 	ClearCookie() string
@@ -67,10 +67,13 @@ type redirectOutput struct {
 	SetCookie string `header:"Set-Cookie"`
 }
 
+type logoutData struct {
+	LogoutURL string `json:"logout_url" doc:"IdP end-session URL the browser must visit to finish logout"`
+}
+
 type logoutOutput struct {
-	Status    int    `status:""`
-	Location  string `header:"Location,omitempty"`
 	SetCookie string `header:"Set-Cookie"`
+	Body      respx.Envelope[logoutData]
 }
 
 func RegisterREST(a huma.API, authenticator Authenticator, web WebService) {
@@ -130,7 +133,7 @@ func RegisterREST(a huma.API, authenticator Authenticator, web WebService) {
 		if err := web.ValidateCSRF(http.MethodPost, in.Origin, in.Cookie, in.Authorization); err != nil {
 			return nil, huma.Error403Forbidden("csrf_rejected")
 		}
-		web.Logout(ctx, in.Cookie)
-		return &logoutOutput{Status: http.StatusNoContent, Location: web.PostLogoutURL(), SetCookie: web.ClearCookie()}, nil
+		logoutURL := web.Logout(ctx, in.Cookie)
+		return &logoutOutput{SetCookie: web.ClearCookie(), Body: respx.OK(ctx, logoutData{LogoutURL: logoutURL}).Body}, nil
 	})
 }

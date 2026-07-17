@@ -42,7 +42,10 @@ func (f *fakeWeb) Authenticate(context.Context, string, string) (*authnext.Claim
 	return &authnext.Claims{Issuer: "issuer", Subject: "u1", PreferredUsername: "alice", Email: "alice@example.com"}, nil
 }
 func (f *fakeWeb) ValidateCSRF(string, string, string, string) error { return f.csrfErr }
-func (f *fakeWeb) Logout(context.Context, string)                    { f.loggedOut = true }
+func (f *fakeWeb) Logout(context.Context, string) string {
+	f.loggedOut = true
+	return "https://issuer/end_session?id_token_hint=idt"
+}
 func (f *fakeWeb) SessionCookie(value string) string                 { return "cp_session=" + value }
 func (f *fakeWeb) FlowCookie(value string) string                    { return "cp_session_oidc=" + value }
 func (f *fakeWeb) ClearCookie() string                               { return "cp_session=; Max-Age=0" }
@@ -87,7 +90,9 @@ func TestRegisterRESTWebFlow(t *testing.T) {
 	assert.Equal(t, "http://app/", callback.Header().Get("Location"))
 	assert.Equal(t, http.StatusOK, api.Get("/authn/session", "Cookie: cp_session=session").Code)
 	logout := api.Post("/authn/logout", "Cookie: cp_session=session", "Origin: http://app")
-	assert.Equal(t, http.StatusNoContent, logout.Code, logout.Body.String())
+	assert.Equal(t, http.StatusOK, logout.Code, logout.Body.String())
+	assert.Contains(t, logout.Body.String(), `"logout_url":"https://issuer/end_session?id_token_hint=idt"`)
+	assert.Contains(t, logout.Header().Get("Set-Cookie"), "Max-Age=0")
 	assert.True(t, web.loggedOut)
 }
 

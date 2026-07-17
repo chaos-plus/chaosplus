@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -32,6 +33,7 @@ var (
 type sessionRecord struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
+	IDToken      string    `json:"id_token,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	AbsoluteEnd  time.Time `json:"absolute_end"`
 }
@@ -54,6 +56,7 @@ type discoveryDocument struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	EndSessionEndpoint    string `json:"end_session_endpoint"`
+	RevocationEndpoint    string `json:"revocation_endpoint"`
 }
 
 type WebService struct {
@@ -238,16 +241,61 @@ func (s *WebService) Callback(ctx context.Context, code, state, flowCookie strin
 		return "", "", err
 	}
 	now := s.now().UTC()
-	record := sessionRecord{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, ExpiresAt: now.Add(time.Duration(tokens.ExpiresIn) * time.Second), AbsoluteEnd: now.Add(s.web.SessionTTL)}
+	record := sessionRecord{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken, ExpiresAt: now.Add(time.Duration(tokens.ExpiresIn) * time.Second), AbsoluteEnd: now.Add(s.web.SessionTTL)}
 	if err := s.storeEncrypted(ctx, sessionKey(id), record, s.web.SessionTTL); err != nil {
 		return "", "", err
 	}
 	return id, flow.ReturnURL, nil
 }
 
-func (s *WebService) Logout(ctx context.Context, cookieHeader string) {
-	if id, err := cookieValue(cookieHeader, s.web.CookieName); err == nil {
-		_ = s.redis.Del(ctx, sessionKey(id)).Err()
+// Logout destroys the local session, best-effort revokes the refresh token at
+// the IdP, and returns the RP-initiated logout URL the browser must visit so
+// Zitadel's own SSO session ends too. Falls back to PostLogoutURL when the IdP
+// exposes no end_session_endpoint or the session is already gone.
+func (s *WebService) Logout(ctx context.Context, cookieHeader string) string {
+	id, err := cookieValue(cookieHeader, s.web.CookieName)
+	if err != nil {
+		return s.web.PostLogoutURL
+	}
+	record, loadErr := s.loadSession(ctx, id)
+	_ = s.redis.Del(ctx, sessionKey(id)).Err()
+	if loadErr != nil {
+		return s.web.PostLogoutURL
+	}
+	if record.RefreshToken != "" {
+		s.revokeToken(ctx, record.RefreshToken)
+	}
+	if s.discovery.EndSessionEndpoint == "" || record.IDToken == "" {
+		return s.web.PostLogoutURL
+	}
+	q := url.Values{"id_token_hint": {record.IDToken}, "client_id": {s.web.ClientID}}
+	if s.web.PostLogoutURL != "" {
+		q.Set("post_logout_redirect_uri", s.web.PostLogoutURL)
+	}
+	return s.discovery.EndSessionEndpoint + "?" + q.Encode()
+}
+
+// revokeToken is best-effort: a failed revocation must not block logout, but it
+// is logged so operators can see refresh tokens outliving their sessions.
+func (s *WebService) revokeToken(ctx context.Context, token string) {
+	if s.discovery.RevocationEndpoint == "" {
+		return
+	}
+	values := url.Values{"token": {token}, "token_type_hint": {"refresh_token"}, "client_id": {s.web.ClientID}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.discovery.RevocationEndpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		slog.Warn("oidc refresh token revocation failed", "err", err)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode/100 != 2 {
+		slog.Warn("oidc refresh token revocation failed", "status", resp.StatusCode)
 	}
 }
 

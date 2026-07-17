@@ -29,7 +29,7 @@ async function request<T>(path: string, init: RequestInit = {}, tenant = true): 
 
 export const api = {
   session: () => request<Session>('/authn/session', {}, false),
-  logout: () => request<void>('/authn/logout', { method: 'POST' }, false),
+  logout: () => request<{ logout_url: string }>('/authn/logout', { method: 'POST' }, false),
   members: (search = '') => request<Member[]>(`/iam/members?limit=200&search=${encodeURIComponent(search)}`),
   member: (subject: string) => request<Member>(`/iam/members/${encodeURIComponent(subject)}`),
   createMember: (body: Pick<Member, 'subject' | 'display_name' | 'email' | 'status'>) => request<Member>('/iam/members', { method: 'POST', body: JSON.stringify(body) }),

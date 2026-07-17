@@ -35,6 +35,9 @@ type oidcHarness struct {
 	nonce           string
 	challenge       string
 	refreshCalls    atomic.Int32
+	revokeCalls     atomic.Int32
+	revokedToken    string
+	revokeStatus    int
 	badNonce        bool
 	refreshDelay    time.Duration
 	tokenStatus     int
@@ -56,7 +59,16 @@ func newOIDCHarness(t *testing.T) *oidcHarness {
 func (h *oidcHarness) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
-		_ = json.NewEncoder(w).Encode(map[string]string{"authorization_endpoint": h.server.URL + "/authorize", "token_endpoint": h.server.URL + "/token", "jwks_uri": h.server.URL + "/jwks"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"authorization_endpoint": h.server.URL + "/authorize", "token_endpoint": h.server.URL + "/token", "jwks_uri": h.server.URL + "/jwks", "end_session_endpoint": h.server.URL + "/end_session", "revocation_endpoint": h.server.URL + "/revoke"})
+	case "/revoke":
+		_ = r.ParseForm()
+		h.mu.Lock()
+		h.revokedToken = r.Form.Get("token")
+		h.mu.Unlock()
+		h.revokeCalls.Add(1)
+		if h.revokeStatus != 0 {
+			http.Error(w, "revoke failed", h.revokeStatus)
+		}
 	case "/jwks":
 		e := big.NewInt(int64(h.key.PublicKey.E)).Bytes()
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "test-key", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(h.key.PublicKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(e)}}})
@@ -168,11 +180,38 @@ func TestWebOIDCFlowSessionAndLogout(t *testing.T) {
 	assert.Contains(t, web.ClearCookie(), "Max-Age=0")
 	assert.Equal(t, "http://127.0.0.1/login", web.PostLogoutURL())
 
-	web.Logout(context.Background(), "cp_session="+id)
+	logoutURL := web.Logout(context.Background(), "cp_session="+id)
+	parsed, err := url.Parse(logoutURL)
+	require.NoError(t, err)
+	assert.Equal(t, "/end_session", parsed.Path)
+	assert.NotEmpty(t, parsed.Query().Get("id_token_hint"))
+	assert.Equal(t, h.clientID, parsed.Query().Get("client_id"))
+	assert.Equal(t, "http://127.0.0.1/login", parsed.Query().Get("post_logout_redirect_uri"))
+	assert.Equal(t, int32(1), h.revokeCalls.Load())
+	h.mu.Lock()
+	assert.Equal(t, "refresh-rotated", h.revokedToken)
+	h.mu.Unlock()
 	_, err = web.Authenticate(context.Background(), "", "cp_session="+id)
 	assert.ErrorIs(t, err, ErrInvalidSession)
 	_, _, err = web.Callback(context.Background(), "code-1", state, state)
 	assert.ErrorIs(t, err, ErrInvalidFlow)
+
+	assert.Equal(t, "http://127.0.0.1/login", web.Logout(context.Background(), "cp_session="+id), "missing session falls back to post-logout url")
+	assert.Equal(t, "http://127.0.0.1/login", web.Logout(context.Background(), ""), "missing cookie falls back to post-logout url")
+	assert.Equal(t, int32(1), h.revokeCalls.Load(), "no further revocation without a session")
+}
+
+func TestWebLogoutRevocationFailureStillLogsOut(t *testing.T) {
+	web, h, _ := newWebFixture(t)
+	state, _ := beginFlow(t, web, h, "login")
+	id, _, err := web.Callback(context.Background(), "code", state, state)
+	require.NoError(t, err)
+	h.revokeStatus = http.StatusBadGateway
+	logoutURL := web.Logout(context.Background(), "cp_session="+id)
+	assert.Contains(t, logoutURL, "/end_session", "revocation failure must not block RP-initiated logout")
+	assert.Equal(t, int32(1), h.revokeCalls.Load())
+	_, err = web.Authenticate(context.Background(), "", "cp_session="+id)
+	assert.ErrorIs(t, err, ErrInvalidSession, "local session is destroyed even when revocation fails")
 }
 
 func TestWebRegistrationValidationAndTampering(t *testing.T) {

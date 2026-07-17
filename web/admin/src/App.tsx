@@ -13,18 +13,29 @@ import MenusPage from './pages/MenusPage'
 function ProtectedLayout() {
   const [session, setSession] = useState<Session | null>()
   const [menus, setMenus] = useState<Menu[]>([])
+  const [menuState, setMenuState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [drawer, setDrawer] = useState(false)
-  const [tenant, setTenantState] = useState(getTenant())
+  const [tenant, setTenantCommitted] = useState(getTenant())
+  const [tenantDraft, setTenantDraft] = useState(getTenant())
   const location = useLocation()
   const navigate = useNavigate()
 
   useEffect(() => { api.session().then(setSession).catch(() => setSession(null)) }, [])
   useEffect(() => {
     if (!session) return
-    api.effectiveMenus().then(setMenus).catch((error) => {
-      if (error instanceof ApiError && error.status === 401) setSession(null)
-      else setMenus([])
+    let stale = false
+    setMenuState('loading')
+    api.effectiveMenus().then((data) => {
+      if (stale) return
+      setMenus(data ?? [])
+      setMenuState('ready')
+    }).catch((error) => {
+      if (stale) return
+      if (error instanceof ApiError && error.status === 401) { setSession(null); return }
+      setMenus([])
+      setMenuState('error')
     })
+    return () => { stale = true }
   }, [session, tenant])
   useEffect(() => setDrawer(false), [location.pathname])
 
@@ -32,13 +43,17 @@ function ProtectedLayout() {
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />
 
   const changeTenant = () => {
-    const value = tenant.trim()
-    if (!value) return
+    const value = tenantDraft.trim()
+    if (!value || value === tenant) return
     setTenant(value)
-    setTenantState(value)
+    setTenantCommitted(value)
     navigate('/')
   }
-  const logout = async () => { await api.logout().catch(() => undefined); setSession(null) }
+  const logout = async () => {
+    const result = await api.logout().catch(() => null)
+    setSession(null)
+    if (result?.logout_url) window.location.assign(result.logout_url)
+  }
 
   return <SessionContext.Provider value={session}>
     <div className="app-shell">
@@ -47,13 +62,15 @@ function ProtectedLayout() {
         <nav className="nav-list" aria-label="主导航">
           <NavLink to="/" end><LayoutDashboard size={18} /><span>概览</span></NavLink>
           <MenuTree items={menus} />
-          {menus.length === 0 && <div className="nav-fallback"><NavLink to="/iam/users"><Users size={18} /><span>用户成员</span></NavLink><NavLink to="/iam/roles"><KeyRound size={18} /><span>角色权限</span></NavLink><NavLink to="/iam/menus"><Boxes size={18} /><span>菜单管理</span></NavLink></div>}
+          {menuState === 'loading' && menus.length === 0 && <div className="nav-fallback">菜单加载中…</div>}
+          {menuState === 'error' && <div className="nav-fallback">菜单加载失败，请刷新重试</div>}
+          {menuState === 'ready' && menus.length === 0 && <div className="nav-fallback">当前租户暂无可用菜单</div>}
         </nav>
         <div className="sidebar-user"><span className="avatar">{(session.preferred_username ?? session.email ?? session.subject).slice(0, 1).toUpperCase()}</span><div><strong>{session.preferred_username ?? '当前用户'}</strong><small>{session.email ?? session.subject}</small></div><button className="icon-button" onClick={logout} aria-label="退出登录"><LogOut size={18} /></button></div>
       </aside>
       {drawer && <button className="mobile-scrim" onClick={() => setDrawer(false)} aria-label="关闭导航" />}
       <main className="main-area">
-        <header className="topbar"><button className="icon-button mobile-menu" onClick={() => setDrawer(true)} aria-label="打开导航"><MenuIcon size={20} /></button><div className="tenant-control"><label htmlFor="tenant">当前租户</label><input id="tenant" value={tenant} onChange={(event) => setTenantState(event.target.value)} onBlur={changeTenant} onKeyDown={(event) => event.key === 'Enter' && changeTenant()} /><ChevronDown size={15} /></div><span className="subject-chip">{session.subject}</span></header>
+        <header className="topbar"><button className="icon-button mobile-menu" onClick={() => setDrawer(true)} aria-label="打开导航"><MenuIcon size={20} /></button><div className="tenant-control"><label htmlFor="tenant">当前租户</label><input id="tenant" value={tenantDraft} onChange={(event) => setTenantDraft(event.target.value)} onBlur={changeTenant} onKeyDown={(event) => event.key === 'Enter' && changeTenant()} /><ChevronDown size={15} /></div><span className="subject-chip">{session.subject}</span></header>
         <div className="page-content"><Outlet /></div>
       </main>
     </div>

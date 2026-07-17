@@ -14,6 +14,12 @@ random_hex() {
   od -An -N "${1:-24}" -tx1 /dev/urandom | tr -d ' \n'
 }
 
+# 32 raw random bytes, base64-encoded: chaosplus decodes this to a full-entropy
+# 256-bit AES key (a 32-char hex string would only carry 128 bits).
+random_key_base64() {
+  head -c 32 /dev/urandom | base64 | tr -d '\n'
+}
+
 set_env() {
   key=$1
   value=$2
@@ -38,7 +44,7 @@ REDIS=$(random_hex 24)
 SPICEDB_TOKEN=$(random_hex 32)
 ADMIN="Cp!$(random_hex 16)"
 MASTER_KEY=$(random_hex 16)
-SESSION_KEY=$(random_hex 16)
+SESSION_KEY=$(random_key_base64)
 EXPIRATION=$(date -u -d '+1 year' '+%Y-%m-%dT%H:%M:%SZ')
 
 set_env POSTGRES_ADMIN_PASSWORD "$POSTGRES"

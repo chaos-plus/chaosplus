@@ -19,6 +19,15 @@ function New-RandomValue([int]$Bytes = 24) {
     return ([BitConverter]::ToString($data) -replace '-', '').ToLowerInvariant()
 }
 
+# 32 raw random bytes, base64-encoded: chaosplus decodes this to a full-entropy
+# 256-bit AES key (a 32-char hex string would only carry 128 bits).
+function New-RandomKeyBase64([int]$Bytes = 32) {
+    $data = [byte[]]::new($Bytes)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($data) } finally { $rng.Dispose() }
+    return [Convert]::ToBase64String($data)
+}
+
 function Set-EnvValue([string]$Key, [string]$Value) {
     $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $envFile)
     $found = $false
@@ -46,7 +55,7 @@ $redis = New-RandomValue
 $spicedbToken = New-RandomValue 32
 $admin = "Cp!$(New-RandomValue 16)"
 $masterKey = New-RandomValue 16
-$sessionKey = New-RandomValue 16
+$sessionKey = New-RandomKeyBase64
 $expiration = (Get-Date).ToUniversalTime().AddYears(1).ToString('yyyy-MM-ddTHH:mm:ssZ')
 
 @{

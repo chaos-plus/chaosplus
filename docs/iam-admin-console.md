@@ -12,6 +12,10 @@ Status: implemented on `feat/iam-admin-console`.
   refresh tokens are AES-GCM encrypted in Redis; JavaScript only receives an
   opaque `HttpOnly`, `SameSite=Lax` session cookie.
 - Cookie-authenticated mutations require an exact allowed `Origin`.
+- `POST /authn/logout` destroys the Redis session, best-effort revokes the
+  refresh token at Zitadel, and returns a `logout_url` (RP-initiated logout via
+  `end_session_endpoint` with `id_token_hint`) the browser must visit so the
+  Zitadel SSO session ends too.
 - Every guarded tenant route first requires an active `iam_tenant_members`
   row, then checks SpiceDB. `X-Tenant-Id` is only a tenant selector.
 
