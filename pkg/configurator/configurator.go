@@ -159,7 +159,7 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 			continue
 		}
 		mapenv := strings.SplitN(env, "=", 2)[0]
-		mapenv = strings.TrimLeft(mapenv, prefix)
+		mapenv = strings.TrimPrefix(mapenv, prefix)
 		mapkey := findMapKey(mapenv, m, f.GetMapkey())
 		if mapkey == nil {
 			continue
@@ -169,15 +169,15 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 	}
 
 	flags.Parse(args)
+	explicitConfig := f.configFile != nil && *f.configFile != ""
 	if f.configFile != nil && *f.configFile != "" {
 		vip.SetConfigFile(*f.configFile)
 	}
 
 	vip.AddConfigPath("./")
 
-	cfg := vip.ConfigFileUsed()
 	err = vip.ReadInConfig()
-	if err != nil && cfg != "" {
+	if err != nil && explicitConfig {
 		return err
 	}
 
@@ -192,6 +192,7 @@ func (f *Flagger) unmarshal(o interface{}, flags map[string]sFlag) error {
 	mapkey := f.GetMapkey()
 	hook := mapstructure.ComposeDecodeHookFunc(
 		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
 		func(f reflect.Type, t reflect.Type, data interface{}) (interface{}, error) {
 			if f.Kind() != reflect.Map {
 				return data, nil

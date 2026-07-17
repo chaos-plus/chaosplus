@@ -1,0 +1,362 @@
+name: ${COMPOSE_PROJECT_NAME:-chaosplus}
+
+services:
+  proxy:
+    image: ${TRAEFIK_IMAGE}
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-chaosplus}
+      - --entrypoints.web.address=:${PUBLIC_PORT:-80}
+      - --entrypoints.traefik.address=:8080
+      - --api.dashboard=false
+      - --ping=true
+    environment:
+      DOCKER_API_VERSION: "1.44"
+    ports:
+      - "${PUBLIC_PORT:-80}:${PUBLIC_PORT:-80}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --ping]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      chaosplus:
+        aliases:
+          - ${ZITADEL_DOMAIN}
+          - ${APP_DOMAIN}
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?run init-secrets first}
+      POSTGRES_DB: postgres
+      ZITADEL_DB_PASSWORD: ${ZITADEL_DB_PASSWORD:?run init-secrets first}
+      SPICEDB_DB_PASSWORD: ${SPICEDB_DB_PASSWORD:?run init-secrets first}
+      CHAOSPLUS_MIGRATOR_PASSWORD: ${CHAOSPLUS_MIGRATOR_PASSWORD:?run init-secrets first}
+      CHAOSPLUS_RUNTIME_PASSWORD: ${CHAOSPLUS_RUNTIME_PASSWORD:?run init-secrets first}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/01-databases.sh:/docker-entrypoint-initdb.d/01-databases.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d postgres]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks: [chaosplus]
+
+  redis:
+    image: ${REDIS_IMAGE}
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes", --requirepass, "${REDIS_PASSWORD:?run init-secrets first}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [chaosplus]
+
+  spicedb-migrate:
+    image: ${SPICEDB_IMAGE}
+    restart: "no"
+    command: [datastore, migrate, head]
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://spicedb:${SPICEDB_DB_PASSWORD}@postgres:5432/spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [chaosplus]
+
+  spicedb:
+    image: ${SPICEDB_IMAGE}
+    restart: unless-stopped
+    command: [serve]
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://spicedb:${SPICEDB_DB_PASSWORD}@postgres:5432/spicedb?sslmode=disable
+      SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_TOKEN:?run init-secrets first}
+      SPICEDB_GRPC_ADDR: :50051
+      SPICEDB_METRICS_ADDR: :9090
+      SPICEDB_TELEMETRY_ENDPOINT: ""
+    healthcheck:
+      test: [CMD, /usr/local/bin/grpc_health_probe, -addr=:50051]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    networks: [chaosplus]
+
+  zitadel-init:
+    image: ${ZITADEL_IMAGE}
+    restart: "no"
+    command: [init]
+    environment:
+      ZITADEL_DATABASE_POSTGRES_DSN: postgresql://zitadel:${ZITADEL_DB_PASSWORD}@postgres:5432/zitadel?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [chaosplus]
+
+  zitadel-setup:
+    image: ${ZITADEL_IMAGE}
+    restart: "no"
+    user: "0"
+    command: [setup, --masterkeyFile, /run/secrets/zitadel_masterkey]
+    environment: &zitadel-environment
+      ZITADEL_DATABASE_POSTGRES_DSN: postgresql://zitadel:${ZITADEL_DB_PASSWORD}@postgres:5432/zitadel?sslmode=disable
+      ZITADEL_EXTERNALDOMAIN: ${ZITADEL_DOMAIN}
+      ZITADEL_EXTERNALPORT: ${PUBLIC_PORT:-80}
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_FIRSTINSTANCE_INSTANCENAME: Chaosplus
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: Chaosplus
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_FIRST_ADMIN_LOGIN}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_FIRSTNAME: ${ZITADEL_FIRST_ADMIN_FIRST_NAME}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_LASTNAME: ${ZITADEL_FIRST_ADMIN_LAST_NAME}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ADDRESS: ${ZITADEL_FIRST_ADMIN_LOGIN}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_VERIFIED: "true"
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_FIRST_ADMIN_PASSWORD:?run init-secrets first}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "true"
+      ZITADEL_FIRSTINSTANCE_MACHINEKEYPATH: /zitadel/bootstrap/chaosplus-machine-key.json
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: chaosplus-bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Chaosplus Bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_TYPE: "1"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_EXPIRATIONDATE: ${ZITADEL_MACHINE_KEY_EXPIRATION}
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /zitadel/bootstrap/login-client.pat
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: ZITADEL Login V2
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: ${ZITADEL_LOGIN_PAT_EXPIRATION}
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: ${ZITADEL_URL}/ui/v2/login/
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: ${ZITADEL_URL}/ui/v2/login/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: ${ZITADEL_URL}/ui/v2/login/logout?post_logout_redirect=
+      ZITADEL_SAML_DEFAULTLOGINURLV2: ${ZITADEL_URL}/ui/v2/login/login?samlRequest=
+    secrets: [zitadel_masterkey]
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap
+    depends_on:
+      zitadel-init:
+        condition: service_completed_successfully
+    networks: [chaosplus]
+
+  zitadel-key-permissions:
+    image: ${ALPINE_IMAGE}
+    restart: "no"
+    user: "0"
+    command: [sh, -c, "chown -R 10001:10001 /zitadel/bootstrap && chmod 0750 /zitadel/bootstrap && chmod 0640 /zitadel/bootstrap/chaosplus-machine-key.json /zitadel/bootstrap/login-client.pat"]
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap
+    depends_on:
+      zitadel-setup:
+        condition: service_completed_successfully
+    networks: [chaosplus]
+
+  zitadel-api:
+    image: ${ZITADEL_IMAGE}
+    restart: unless-stopped
+    command: [start, --masterkeyFile, /run/secrets/zitadel_masterkey]
+    environment: *zitadel-environment
+    secrets: [zitadel_masterkey]
+    healthcheck:
+      test: [CMD, /app/zitadel, ready]
+      interval: 10s
+      timeout: 30s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      zitadel-setup:
+        condition: service_completed_successfully
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-chaosplus}
+      traefik.http.services.zitadel-api.loadbalancer.server.port: "8080"
+      traefik.http.services.zitadel-api.loadbalancer.server.scheme: h2c
+      traefik.http.routers.zitadel-api.rule: Host(`${ZITADEL_DOMAIN}`) && !PathPrefix(`/ui/v2/login`) && !Path(`/`)
+      traefik.http.routers.zitadel-api.entrypoints: web
+      traefik.http.routers.zitadel-api.priority: "100"
+    networks: [chaosplus]
+
+  zitadel-login:
+    image: ${ZITADEL_LOGIN_IMAGE}
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      ZITADEL_API_URL: http://zitadel-api:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /zitadel/bootstrap/login-client.pat
+      CUSTOM_REQUEST_HEADERS: Host:${ZITADEL_DOMAIN},X-Forwarded-Proto:${PUBLIC_SCHEME}
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap:ro
+    healthcheck:
+      test: [CMD, node, /app/healthcheck.mjs, http://localhost:3000/ui/v2/login/healthy]
+      interval: 10s
+      timeout: 30s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      zitadel-api:
+        condition: service_healthy
+      zitadel-key-permissions:
+        condition: service_completed_successfully
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-chaosplus}
+      traefik.http.services.zitadel-login.loadbalancer.server.port: "3000"
+      traefik.http.middlewares.zitadel-root.replacepath.path: /ui/v2/login/
+      traefik.http.routers.zitadel-root.rule: Host(`${ZITADEL_DOMAIN}`) && Path(`/`)
+      traefik.http.routers.zitadel-root.entrypoints: web
+      traefik.http.routers.zitadel-root.middlewares: zitadel-root
+      traefik.http.routers.zitadel-root.priority: "400"
+      traefik.http.routers.zitadel-login.rule: Host(`${ZITADEL_DOMAIN}`) && PathPrefix(`/ui/v2/login`)
+      traefik.http.routers.zitadel-login.entrypoints: web
+      traefik.http.routers.zitadel-login.priority: "250"
+    networks: [chaosplus]
+
+  runtime-permissions:
+    image: ${ALPINE_IMAGE}
+    restart: "no"
+    user: "0"
+    command: [sh, -c, "chown 10001:10001 /var/lib/chaosplus/runtime && chmod 0750 /var/lib/chaosplus/runtime"]
+    volumes:
+      - chaosplus-runtime:/var/lib/chaosplus/runtime
+    networks: [chaosplus]
+
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: chaosplus-api:local
+    pull_policy: never
+    restart: "no"
+    entrypoint: [/usr/local/bin/chaosplus-bootstrap]
+    command: [-c, /etc/chaosplus/config.yaml]
+    environment: &chaosplus-environment
+      AUTHN_ISSUER: ${ZITADEL_URL}
+      AUTHN_WEB_REDIRECT_URL: ${APP_URL}/authn/oidc/callback
+      AUTHN_WEB_POST_LOGIN_URL: ${APP_URL}
+      AUTHN_WEB_POST_LOGOUT_URL: ${APP_URL}/login
+      AUTHN_WEB_ALLOWED_RETURN_URLS: ${APP_URL},${APP_URL}/
+      AUTHN_WEB_ALLOWED_ORIGINS: ${APP_URL}
+      BOOTSTRAP_ZITADEL_REDIRECT_URIS: ${APP_URL}/authn/oidc/callback
+      BOOTSTRAP_ZITADEL_POST_LOGOUT_URIS: ${APP_URL}/login,${APP_URL}
+      BOOTSTRAP_ZITADEL_DEV_MODE: "true"
+      BOOTSTRAP_INITIAL_ADMIN_TENANT_ID: ${INITIAL_TENANT_ID}
+      BOOTSTRAP_INITIAL_ADMIN_LOGIN_NAME: ${ZITADEL_FIRST_ADMIN_LOGIN}
+    volumes:
+      - ./chaosplus.yaml:/etc/chaosplus/config.yaml:ro
+      - zitadel-bootstrap:/var/lib/zitadel/bootstrap:ro
+      - chaosplus-runtime:/var/lib/chaosplus/runtime
+    secrets:
+      - chaosplus_migration_dsn
+      - chaosplus_runtime_dsn
+      - redis_password
+      - spicedb_token
+      - session_encryption_key
+    depends_on:
+      proxy:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      spicedb:
+        condition: service_healthy
+      zitadel-api:
+        condition: service_healthy
+      zitadel-key-permissions:
+        condition: service_completed_successfully
+      runtime-permissions:
+        condition: service_completed_successfully
+    networks: [chaosplus]
+
+  api:
+    image: chaosplus-api:local
+    pull_policy: never
+    restart: unless-stopped
+    command: [-c, /etc/chaosplus/config.yaml]
+    environment:
+      <<: *chaosplus-environment
+      BOOTSTRAP_ZITADEL_ENABLED: "false"
+    volumes:
+      - ./chaosplus.yaml:/etc/chaosplus/config.yaml:ro
+      - chaosplus-runtime:/var/lib/chaosplus/runtime:ro
+    secrets:
+      - chaosplus_runtime_dsn
+      - redis_password
+      - spicedb_token
+      - session_encryption_key
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/openapi.json]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [chaosplus]
+
+  web:
+    build:
+      context: ../../web/admin
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+        VITE_DEFAULT_TENANT: ${INITIAL_TENANT_ID}
+    image: chaosplus-admin:local
+    pull_policy: never
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      api:
+        condition: service_healthy
+      zitadel-login:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-chaosplus}
+      traefik.http.services.chaosplus-web.loadbalancer.server.port: "8080"
+      traefik.http.routers.chaosplus-web.rule: Host(`${APP_DOMAIN}`)
+      traefik.http.routers.chaosplus-web.entrypoints: web
+    networks: [chaosplus]
+
+networks:
+  chaosplus:
+    name: ${COMPOSE_PROJECT_NAME:-chaosplus}
+
+volumes:
+  postgres-data:
+  redis-data:
+  zitadel-bootstrap:
+  chaosplus-runtime:
+
+secrets:
+  zitadel_masterkey:
+    file: ./secrets/zitadel_masterkey
+  chaosplus_migration_dsn:
+    file: ./secrets/chaosplus_migration_dsn
+  chaosplus_runtime_dsn:
+    file: ./secrets/chaosplus_runtime_dsn
+  redis_password:
+    file: ./secrets/redis_password
+  spicedb_token:
+    file: ./secrets/spicedb_token
+  session_encryption_key:
+    file: ./secrets/session_encryption_key

@@ -1,0 +1,90 @@
+name: chaosplus
+debug: false
+timezone: UTC
+
+rest:
+  host: 0.0.0.0
+  port: 8080
+grpc:
+  host: 0.0.0.0
+  port: 9090
+
+migrations:
+  auto: false
+
+database:
+  primary:
+    type: postgres
+    dsn_file: /run/secrets/chaosplus_runtime_dsn
+    writable: true
+    readable: true
+    max_open_conns: 25
+    max_idle_conns: 5
+
+redis:
+  addrs: [redis:6379]
+  password_file: /run/secrets/redis_password
+  db: 0
+
+ratelimit:
+  enabled: true
+  prefix: chaosplus:rl
+  ip:
+    enabled: true
+    rate: 300
+    period: 1m
+    burst: 100
+  account:
+    enabled: true
+    rate: 600
+    period: 1m
+    burst: 200
+    header: X-Account-Id
+
+security:
+  enabled: true
+  hsts: false
+
+authn:
+  enabled: true
+  resources_file: /var/lib/chaosplus/runtime/authn-resources.json
+  http_timeout: 10s
+  clock_skew: 30s
+  web:
+    enabled: true
+    cookie_name: cp_session
+    cookie_secure: false
+    session_ttl: 8h
+    flow_ttl: 5m
+    encryption_key_file: /run/secrets/session_encryption_key
+
+authz:
+  spicedb:
+    enabled: true
+    endpoint: spicedb:50051
+    token_file: /run/secrets/spicedb_token
+    insecure: true
+    apply_schema: false
+  outbox:
+    poll_interval: 250ms
+    batch_size: 100
+    max_attempts: 12
+    lock_timeout: 30s
+    delivery_timeout: 10s
+
+bootstrap:
+  lock_timeout: 30s
+  database:
+    type: postgres
+    dsn_file: /run/secrets/chaosplus_migration_dsn
+    max_open_conns: 5
+    max_idle_conns: 1
+  zitadel:
+    enabled: true
+    machine_key_file: /var/lib/zitadel/bootstrap/chaosplus-machine-key.json
+    project_name: Chaosplus API
+    application_name: Chaosplus Admin
+    resources_output_file: /var/lib/chaosplus/runtime/authn-resources.json
+    timeout: 60s
+  initial_admin:
+    tenant_id: platform

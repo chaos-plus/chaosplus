@@ -3,9 +3,11 @@ package bunx
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/mysqldialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
@@ -15,8 +17,9 @@ import (
 )
 
 type Datasource struct {
-	Type string `mapstructure:"type" description:"type" default:"mysql"`
-	Dsn  string `mapstructure:"dsn" description:"dsn"`
+	Type    string `mapstructure:"type" description:"type" default:"mysql"`
+	Dsn     string `mapstructure:"dsn" description:"dsn"`
+	DsnFile string `mapstructure:"dsn_file" description:"file containing the DSN; mutually exclusive with dsn" default:""`
 
 	Writable bool `mapstructure:"writable" description:"writable" default:"true"`
 	Readable bool `mapstructure:"readable" description:"readable" default:"true"`
@@ -28,34 +31,50 @@ type Datasource struct {
 }
 
 func (d *Datasource) NewDB() *bun.DB {
+	db, err := d.Open()
+	if err != nil {
+		slog.Error("failed to open datasource", "error", err)
+		return nil
+	}
+	return db
+}
+
+func (d *Datasource) Open() (*bun.DB, error) {
+	dsn, err := secretx.Resolve("database.dsn", d.Dsn, d.DsnFile, secretx.DefaultMaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if dsn == "" {
+		return nil, fmt.Errorf("database DSN is required")
+	}
 	var sqldb *sql.DB
 	var dialect schema.Dialect
 
 	switch d.Type {
 	case "sqlite":
-		conn, err := sql.Open("sqliteshim", d.Dsn)
+		conn, err := sql.Open("sqliteshim", dsn)
 		if err != nil {
 			slog.Error("failed to open sqlite", "error", err)
-			return nil
+			return nil, err
 		}
 		sqldb, dialect = conn, sqlitedialect.New()
 	case "mysql":
-		conn, err := sql.Open("mysql", d.Dsn)
+		conn, err := sql.Open("mysql", dsn)
 		if err != nil {
 			slog.Error("failed to open mysql", "error", err)
-			return nil
+			return nil, err
 		}
 		sqldb, dialect = conn, mysqldialect.New()
 	case "postgres":
-		sqldb = sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(d.Dsn)))
+		sqldb = sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(dsn)))
 		dialect = pgdialect.New()
 	default:
 		slog.Error("unsupported datasource type", "type", d.Type)
-		return nil
+		return nil, fmt.Errorf("unsupported datasource type %q", d.Type)
 	}
 
 	d.applyPool(sqldb)
-	return bun.NewDB(sqldb, dialect)
+	return bun.NewDB(sqldb, dialect), nil
 }
 
 // applyPool applies the configured connection-pool limits. Each is applied only

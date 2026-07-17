@@ -1,0 +1,63 @@
+services:
+  proxy:
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-chaosplus}
+      - --entrypoints.web.address=:80
+      - --entrypoints.traefik.address=:8080
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --api.dashboard=false
+      - --ping=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/letsencrypt
+
+  zitadel-setup:
+    environment:
+      ZITADEL_EXTERNALPORT: 443
+      ZITADEL_EXTERNALSECURE: "true"
+
+  zitadel-api:
+    environment:
+      ZITADEL_EXTERNALPORT: 443
+      ZITADEL_EXTERNALSECURE: "true"
+    labels:
+      traefik.http.routers.zitadel-api.entrypoints: websecure
+      traefik.http.routers.zitadel-api.tls: "true"
+      traefik.http.routers.zitadel-api.tls.certresolver: letsencrypt
+
+  zitadel-login:
+    labels:
+      traefik.http.routers.zitadel-root.entrypoints: websecure
+      traefik.http.routers.zitadel-root.tls: "true"
+      traefik.http.routers.zitadel-root.tls.certresolver: letsencrypt
+      traefik.http.routers.zitadel-login.entrypoints: websecure
+      traefik.http.routers.zitadel-login.tls: "true"
+      traefik.http.routers.zitadel-login.tls.certresolver: letsencrypt
+
+  bootstrap:
+    environment:
+      BOOTSTRAP_ZITADEL_DEV_MODE: "false"
+
+  api:
+    environment:
+      AUTHN_WEB_COOKIE_SECURE: "true"
+      SECURITY_HSTS: "true"
+
+  web:
+    labels:
+      traefik.http.routers.chaosplus-web.entrypoints: websecure
+      traefik.http.routers.chaosplus-web.tls: "true"
+      traefik.http.routers.chaosplus-web.tls.certresolver: letsencrypt
+
+volumes:
+  letsencrypt:

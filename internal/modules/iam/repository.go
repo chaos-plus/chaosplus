@@ -86,7 +86,11 @@ func NewRepository(db *bun.DB, nextID IDGenerator) *Repository {
 	if db == nil || nextID == nil {
 		panic("iam repository requires database and id generator")
 	}
-	return &Repository{db: db, nextID: nextID, dialect: db.Dialect().Name().String(), now: time.Now}
+	dialect := db.Dialect().Name().String()
+	if dialect == "pg" {
+		dialect = "postgres"
+	}
+	return &Repository{db: db, nextID: nextID, dialect: dialect, now: time.Now}
 }
 
 func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description string) (Role, error) {

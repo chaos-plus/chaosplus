@@ -11,6 +11,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	authzedv1 "github.com/authzed/authzed-go/v1"
 	"github.com/authzed/grpcutil"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -77,7 +78,8 @@ type Config struct {
 	Enabled     bool   `mapstructure:"enabled" description:"enable SpiceDB authorization checks" default:"false"`
 	Endpoint    string `mapstructure:"endpoint" description:"SpiceDB gRPC endpoint" default:"10.0.0.100:38877"`
 	Token       string `mapstructure:"token" description:"SpiceDB preshared key or bearer token"`
-	Insecure    bool   `mapstructure:"insecure" description:"use insecure gRPC transport for local SpiceDB" default:"true"`
+	TokenFile   string `mapstructure:"token_file" description:"file containing the SpiceDB token; mutually exclusive with token" default:""`
+	Insecure    bool   `mapstructure:"insecure" description:"use insecure gRPC transport for local SpiceDB" default:"false"`
 	ApplySchema bool   `mapstructure:"apply_schema" description:"write generated authz schema on startup" default:"false"`
 }
 
@@ -143,9 +145,14 @@ func Open(cfg Config) (*AuthzedClient, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("spicedb endpoint is required")
 	}
-	if cfg.Token == "" {
+	token, err := secretx.Resolve("authz.spicedb.token", cfg.Token, cfg.TokenFile, 4096)
+	if err != nil {
+		return nil, err
+	}
+	if token == "" {
 		return nil, fmt.Errorf("spicedb token is required")
 	}
+	cfg.Token = token
 	opts := []grpc.DialOption{}
 	if cfg.Insecure {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()), grpcutil.WithInsecureBearerToken(cfg.Token))

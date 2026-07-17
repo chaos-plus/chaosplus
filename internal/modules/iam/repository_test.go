@@ -8,12 +8,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 )
+
+func TestNewRepositoryNormalizesPostgresDialect(t *testing.T) {
+	db, err := (&bunx.Datasource{Type: "postgres", Dsn: "postgres://unused"}).Open()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := NewRepository(db, func() (string, error) { return "1", nil })
+	assert.Equal(t, "postgres", repo.dialect)
+}
 
 func newIAMRepository(t *testing.T) *Repository {
 	t.Helper()

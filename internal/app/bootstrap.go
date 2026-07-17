@@ -8,6 +8,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
@@ -49,6 +50,11 @@ func (app *App) Bootstrap() error {
 	// open if Redis is briefly unavailable. The universal client selects
 	// standalone/sentinel/cluster from the options. Absent when no address is set.
 	if len(app.cfg.Redis.Addrs) > 0 {
+		password, err := secretx.Resolve("redis.password", app.cfg.Redis.Password, app.cfg.Redis.PasswordFile, 4096)
+		if err != nil {
+			return err
+		}
+		app.cfg.Redis.Password = password
 		app.redis = redis.NewUniversalClient(&redis.UniversalOptions{
 			Addrs:      app.cfg.Redis.Addrs,
 			MasterName: app.cfg.Redis.MasterName,
@@ -59,6 +65,11 @@ func (app *App) Bootstrap() error {
 	}
 
 	registry := authz.DefaultRegistry()
+	resolvedAuthn, err := authn.ResolveConfig(app.cfg.Authn)
+	if err != nil {
+		return fmt.Errorf("resolve authn config: %w", err)
+	}
+	app.cfg.Authn = resolvedAuthn
 	verifier, err := authn.NewVerifier(app.cfg.Authn)
 	if err != nil {
 		return fmt.Errorf("init authn: %w", err)
@@ -95,8 +106,14 @@ func (app *App) Bootstrap() error {
 
 	// build modules, then run the migrate and start phases in order.
 	app.mods = app.buildModules()
-	if err := app.migrateModules(app.ctx); err != nil {
-		return err
+	if app.cfg.Migrations.Auto {
+		if err := app.migrateModules(app.ctx); err != nil {
+			return err
+		}
+	} else if app.authzRegistrar != nil {
+		if err := iam.AssertMigrated(app.ctx, app.dbr.Write()); err != nil {
+			return err
+		}
 	}
 	if err := app.startModules(app.ctx); err != nil {
 		return err

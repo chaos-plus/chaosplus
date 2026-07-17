@@ -1,5 +1,8 @@
 # Chaosplus API
 
+Production bootstrap, Docker Compose quick start, TLS, and external-service
+configuration are documented in [docs/deployment.md](docs/deployment.md).
+
 Go backend for Chaosplus. It exposes an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0)
 HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over a
 [chi](https://github.com/go-chi/chi) router, plus a gRPC server on a separate port.

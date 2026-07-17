@@ -51,6 +51,9 @@ func TestVerifyAuthorization(t *testing.T) {
 	assert.Equal(t, "u123", claims.Subject)
 	assert.Equal(t, "user:u123", claims.SubjectRef().String())
 	assert.Equal(t, "alice", claims.PreferredUsername)
+	authenticated, err := verifier.Authenticate(context.Background(), "Bearer "+token, "")
+	require.NoError(t, err)
+	assert.Equal(t, claims.Subject, authenticated.Subject)
 }
 
 func TestVerifyAuthorizationRejectsInvalidInputs(t *testing.T) {

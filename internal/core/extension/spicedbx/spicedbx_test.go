@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
@@ -52,6 +54,14 @@ func TestOpenValidation(t *testing.T) {
 
 	assert.NoError(t, (*AuthzedClient)(nil).Close())
 	assert.NoError(t, (&AuthzedClient{}).Close())
+
+	path := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(path, []byte("token\n"), 0o600))
+	fileClient, err := Open(Config{Endpoint: "localhost:1", TokenFile: path, Insecure: true})
+	require.NoError(t, err)
+	assert.NoError(t, fileClient.Close())
+	_, err = Open(Config{Endpoint: "localhost:1", Token: "token", TokenFile: path})
+	assert.ErrorContains(t, err, "mutually exclusive")
 }
 
 func TestAuthzedClientMethods(t *testing.T) {

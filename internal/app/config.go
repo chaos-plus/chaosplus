@@ -25,8 +25,41 @@ type Config struct {
 	Security    Security                   `mapstructure:"security" group:"security"`
 	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
 	Authz       Authz                      `mapstructure:"authz" group:"authz"`
+	Migrations  Migrations                 `mapstructure:"migrations" group:"migrations"`
+	Bootstrap   BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
 	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
 	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+}
+
+type Migrations struct {
+	Auto bool `mapstructure:"auto" description:"run embedded SQL migrations during API startup; keep false in production" default:"false"`
+}
+
+type BootstrapConfig struct {
+	LockTimeout  time.Duration         `mapstructure:"lock_timeout" description:"maximum wait for the deployment advisory lock" default:"30s"`
+	Database     bunx.Datasource       `mapstructure:"database" group:"database"`
+	Zitadel      BootstrapZitadel      `mapstructure:"zitadel" group:"zitadel"`
+	InitialAdmin BootstrapInitialAdmin `mapstructure:"initial_admin" group:"initial_admin"`
+}
+
+type BootstrapZitadel struct {
+	Enabled             bool          `mapstructure:"enabled" description:"provision the Chaosplus project and Native OIDC app" default:"false"`
+	MachineKeyFile      string        `mapstructure:"machine_key_file" description:"Zitadel service-user JWT profile key file" default:""`
+	ProjectName         string        `mapstructure:"project_name" description:"Zitadel project name" default:"Chaosplus API"`
+	ApplicationName     string        `mapstructure:"application_name" description:"Zitadel Native OIDC application name" default:"Chaosplus Admin"`
+	RedirectURIs        []string      `mapstructure:"redirect_uris" description:"exact OIDC callback URI list"`
+	PostLogoutURIs      []string      `mapstructure:"post_logout_uris" description:"exact post-logout redirect URI list"`
+	DevMode             bool          `mapstructure:"dev_mode" description:"allow HTTP redirect URIs for local evaluation only" default:"false"`
+	ResourcesOutputFile string        `mapstructure:"resources_output_file" description:"path for generated project/client ID JSON" default:""`
+	Timeout             time.Duration `mapstructure:"timeout" description:"timeout for Zitadel provisioning" default:"30s"`
+}
+
+type BootstrapInitialAdmin struct {
+	TenantID    string `mapstructure:"tenant_id" description:"initial tenant receiving the first administrator" default:""`
+	LoginName   string `mapstructure:"login_name" description:"exact Zitadel login name to resolve when subject is empty" default:""`
+	Subject     string `mapstructure:"subject" description:"existing identity subject for external Zitadel" default:""`
+	DisplayName string `mapstructure:"display_name" description:"display name used when subject is configured directly" default:""`
+	Email       string `mapstructure:"email" description:"email used when subject is configured directly" default:""`
 }
 
 type Authz struct {
@@ -61,11 +94,12 @@ type Security struct {
 //
 // Empty Addrs disables Redis (and therefore rate limiting).
 type Redis struct {
-	Addrs      []string `mapstructure:"addrs" description:"redis addresses host:port (1=standalone, N=cluster, or sentinel addrs); empty disables redis"`
-	MasterName string   `mapstructure:"master_name" description:"sentinel master name; set to use sentinel/failover" default:""`
-	Username   string   `mapstructure:"username" description:"redis username" default:""`
-	Password   string   `mapstructure:"password" description:"redis password" default:""`
-	DB         int      `mapstructure:"db" description:"redis database index" default:"0"`
+	Addrs        []string `mapstructure:"addrs" description:"redis addresses host:port (1=standalone, N=cluster, or sentinel addrs); empty disables redis"`
+	MasterName   string   `mapstructure:"master_name" description:"sentinel master name; set to use sentinel/failover" default:""`
+	Username     string   `mapstructure:"username" description:"redis username" default:""`
+	Password     string   `mapstructure:"password" description:"redis password" default:""`
+	PasswordFile string   `mapstructure:"password_file" description:"file containing the Redis password; mutually exclusive with password" default:""`
+	DB           int      `mapstructure:"db" description:"redis database index" default:"0"`
 }
 
 // RateLimit configures the Redis-backed rate limiter. It enforces per-IP and

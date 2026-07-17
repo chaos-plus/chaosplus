@@ -8,7 +8,7 @@ export class ApiError extends Error {
 }
 
 export function getTenant(): string {
-  return localStorage.getItem(tenantKey) ?? import.meta.env.VITE_DEFAULT_TENANT ?? 'acceptance'
+	return localStorage.getItem(tenantKey) ?? import.meta.env.VITE_DEFAULT_TENANT ?? 'platform'
 }
 
 export function setTenant(value: string): void {

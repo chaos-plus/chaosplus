@@ -38,6 +38,7 @@ configs/.env
 
 # Local-only dev notes & scratch (credentials, server info — never commit)
 /.local/
+/deploy/compose/secrets/
 
 # Editor / OS
 .idea/

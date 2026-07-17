@@ -36,13 +36,14 @@ var (
 // Config describes a Zitadel/OIDC issuer. JWKSURL is optional; when empty, the
 // verifier discovers it from <issuer>/.well-known/openid-configuration.
 type Config struct {
-	Enabled     bool          `mapstructure:"enabled" description:"enable Zitadel/OIDC JWT authentication" default:"false"`
-	Issuer      string        `mapstructure:"issuer" description:"OIDC issuer, e.g. http://10.0.0.100:38080"`
-	Audience    []string      `mapstructure:"audience" description:"accepted JWT audience values; empty skips audience check"`
-	JWKSURL     string        `mapstructure:"jwks_url" description:"OIDC JWKS URL; empty discovers from issuer"`
-	HTTPTimeout time.Duration `mapstructure:"http_timeout" description:"OIDC discovery/JWKS HTTP timeout" default:"5s"`
-	ClockSkew   time.Duration `mapstructure:"clock_skew" description:"allowed token clock skew" default:"30s"`
-	Web         WebConfig     `mapstructure:"web" group:"web"`
+	Enabled       bool          `mapstructure:"enabled" description:"enable Zitadel/OIDC JWT authentication" default:"false"`
+	Issuer        string        `mapstructure:"issuer" description:"OIDC issuer, e.g. http://10.0.0.100:38080"`
+	Audience      []string      `mapstructure:"audience" description:"accepted JWT audience values; empty skips audience check"`
+	ResourcesFile string        `mapstructure:"resources_file" description:"bootstrap-generated JSON containing Zitadel project and client IDs" default:""`
+	JWKSURL       string        `mapstructure:"jwks_url" description:"OIDC JWKS URL; empty discovers from issuer"`
+	HTTPTimeout   time.Duration `mapstructure:"http_timeout" description:"OIDC discovery/JWKS HTTP timeout" default:"5s"`
+	ClockSkew     time.Duration `mapstructure:"clock_skew" description:"allowed token clock skew" default:"30s"`
+	Web           WebConfig     `mapstructure:"web" group:"web"`
 }
 
 // WebConfig enables the browser-facing OIDC BFF. Access and refresh tokens are
@@ -60,6 +61,7 @@ type WebConfig struct {
 	SessionTTL        time.Duration `mapstructure:"session_ttl" description:"maximum browser session lifetime" default:"8h"`
 	FlowTTL           time.Duration `mapstructure:"flow_ttl" description:"OIDC state lifetime" default:"5m"`
 	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 or raw 32-byte AES key"`
+	EncryptionKeyFile string        `mapstructure:"encryption_key_file" description:"file containing the BFF encryption key; mutually exclusive with encryption_key" default:""`
 	Scopes            []string      `mapstructure:"scopes" description:"OIDC scopes; defaults to openid profile email offline_access plus API audience"`
 }
 
