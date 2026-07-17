@@ -84,6 +84,7 @@ type Config struct {
 // Client is the narrow app-facing SpiceDB port.
 type Client interface {
 	Check(ctx context.Context, resource ObjectRef, permission string, subject SubjectRef, token ZedToken) (bool, error)
+	CheckBulk(ctx context.Context, resource ObjectRef, permissions []string, subject SubjectRef, token ZedToken) (map[string]bool, error)
 	WriteRelationships(ctx context.Context, rels []Relationship) (ZedToken, error)
 	WriteRelationshipUpdates(ctx context.Context, updates []RelationshipUpdate) (ZedToken, error)
 	LookupResources(ctx context.Context, resourceType, permission string, subject SubjectRef) ([]string, error)
@@ -97,10 +98,45 @@ type AuthzedClient struct {
 type spiceAPI interface {
 	WriteSchema(context.Context, *v1.WriteSchemaRequest, ...grpc.CallOption) (*v1.WriteSchemaResponse, error)
 	CheckPermission(context.Context, *v1.CheckPermissionRequest, ...grpc.CallOption) (*v1.CheckPermissionResponse, error)
+	CheckBulkPermissions(context.Context, *v1.CheckBulkPermissionsRequest, ...grpc.CallOption) (*v1.CheckBulkPermissionsResponse, error)
 	WriteRelationships(context.Context, *v1.WriteRelationshipsRequest, ...grpc.CallOption) (*v1.WriteRelationshipsResponse, error)
 	LookupResources(context.Context, *v1.LookupResourcesRequest, ...grpc.CallOption) (v1.PermissionsService_LookupResourcesClient, error)
 	LookupSubjects(context.Context, *v1.LookupSubjectsRequest, ...grpc.CallOption) (v1.PermissionsService_LookupSubjectsClient, error)
 	Close() error
+}
+
+func (c *AuthzedClient) CheckBulk(ctx context.Context, resource ObjectRef, permissions []string, subject SubjectRef, token ZedToken) (map[string]bool, error) {
+	if len(permissions) == 0 {
+		return map[string]bool{}, nil
+	}
+	if len(permissions) > 100 {
+		return nil, fmt.Errorf("spicedb bulk check supports at most 100 permissions")
+	}
+	items := make([]*v1.CheckBulkPermissionsRequestItem, 0, len(permissions))
+	for _, permission := range permissions {
+		if permission == "" {
+			return nil, fmt.Errorf("spicedb bulk check permission is empty")
+		}
+		items = append(items, &v1.CheckBulkPermissionsRequestItem{Resource: objectRef(resource), Permission: permission, Subject: subjectRef(subject)})
+	}
+	resp, err := c.client.CheckBulkPermissions(ctx, &v1.CheckBulkPermissionsRequest{Consistency: consistency(token), Items: items})
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]bool, len(permissions))
+	for _, pair := range resp.Pairs {
+		if pair.GetError() != nil {
+			return nil, fmt.Errorf("spicedb bulk check item failed: %s", pair.GetError().Message)
+		}
+		if pair.GetRequest() == nil || pair.GetItem() == nil {
+			return nil, fmt.Errorf("spicedb bulk check returned incomplete pair")
+		}
+		allowed[pair.GetRequest().Permission] = pair.GetItem().Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION
+	}
+	if len(allowed) != len(permissions) {
+		return nil, fmt.Errorf("spicedb bulk check returned %d of %d results", len(allowed), len(permissions))
+	}
+	return allowed, nil
 }
 
 func Open(cfg Config) (*AuthzedClient, error) {

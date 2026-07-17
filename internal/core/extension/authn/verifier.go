@@ -42,6 +42,25 @@ type Config struct {
 	JWKSURL     string        `mapstructure:"jwks_url" description:"OIDC JWKS URL; empty discovers from issuer"`
 	HTTPTimeout time.Duration `mapstructure:"http_timeout" description:"OIDC discovery/JWKS HTTP timeout" default:"5s"`
 	ClockSkew   time.Duration `mapstructure:"clock_skew" description:"allowed token clock skew" default:"30s"`
+	Web         WebConfig     `mapstructure:"web" group:"web"`
+}
+
+// WebConfig enables the browser-facing OIDC BFF. Access and refresh tokens are
+// kept encrypted in Redis; the browser only receives an opaque session cookie.
+type WebConfig struct {
+	Enabled           bool          `mapstructure:"enabled" description:"enable browser OIDC BFF" default:"false"`
+	ClientID          string        `mapstructure:"client_id" description:"OIDC public client id"`
+	RedirectURL       string        `mapstructure:"redirect_url" description:"exact OIDC callback URL"`
+	PostLoginURL      string        `mapstructure:"post_login_url" description:"default frontend URL after login"`
+	PostLogoutURL     string        `mapstructure:"post_logout_url" description:"frontend URL after logout"`
+	AllowedReturnURLs []string      `mapstructure:"allowed_return_urls" description:"exact frontend return URL allowlist"`
+	AllowedOrigins    []string      `mapstructure:"allowed_origins" description:"origins allowed for cookie-authenticated writes"`
+	CookieName        string        `mapstructure:"cookie_name" description:"opaque session cookie name" default:"cp_session"`
+	CookieSecure      bool          `mapstructure:"cookie_secure" description:"require HTTPS for session cookies" default:"true"`
+	SessionTTL        time.Duration `mapstructure:"session_ttl" description:"maximum browser session lifetime" default:"8h"`
+	FlowTTL           time.Duration `mapstructure:"flow_ttl" description:"OIDC state lifetime" default:"5m"`
+	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 or raw 32-byte AES key"`
+	Scopes            []string      `mapstructure:"scopes" description:"OIDC scopes; defaults to openid profile email offline_access plus API audience"`
 }
 
 // Claims contains the token fields this API needs. Raw keeps provider-specific
@@ -104,6 +123,12 @@ func (v *Verifier) VerifyAuthorization(ctx context.Context, header string) (*Cla
 		return nil, err
 	}
 	return v.Verify(ctx, token)
+}
+
+// Authenticate lets the JWT verifier act as a bearer-only request
+// authenticator when browser sessions are disabled.
+func (v *Verifier) Authenticate(ctx context.Context, authorization, _ string) (*Claims, error) {
+	return v.VerifyAuthorization(ctx, authorization)
 }
 
 func (v *Verifier) Verify(ctx context.Context, token string) (*Claims, error) {

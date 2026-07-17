@@ -9,17 +9,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 )
 
 type wakeRecorder struct{ count int }
 
 func (w *wakeRecorder) Wake() { w.count++ }
 
+type allowAllBulkChecker struct{ err error }
+
+func (c allowAllBulkChecker) CheckBulk(_ context.Context, _ spicedbx.ObjectRef, permissions []string, _ spicedbx.SubjectRef, _ spicedbx.ZedToken) (map[string]bool, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	result := make(map[string]bool, len(permissions))
+	for _, permission := range permissions {
+		result[permission] = true
+	}
+	return result, nil
+}
+
 func newTestService(t *testing.T) (*Service, *wakeRecorder) {
 	t.Helper()
 	repo := newIAMRepository(t)
 	wake := &wakeRecorder{}
-	return NewService(authz.DefaultRegistry(), repo, wake), wake
+	return NewService(authz.DefaultRegistry(), repo, wake, allowAllBulkChecker{}), wake
 }
 
 func TestServiceRoleAndBindingFlow(t *testing.T) {
@@ -52,6 +66,8 @@ func TestServiceRoleAndBindingFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"store_view"}, codes)
 
+	_, err = svc.PutTenantMember(ctx, "t1", "user-sub", "User", "", MemberActive)
+	require.NoError(t, err)
 	changed, err = svc.AddMember(ctx, "t1", role.ID, " user-sub ")
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -123,7 +139,8 @@ func TestServiceValidation(t *testing.T) {
 func TestServiceConstructorsRequireDependencies(t *testing.T) {
 	repo := newIAMRepository(t)
 	wake := &wakeRecorder{}
-	assert.Panics(t, func() { NewService(nil, repo, wake) })
-	assert.Panics(t, func() { NewService(authz.DefaultRegistry(), nil, wake) })
-	assert.Panics(t, func() { NewService(authz.DefaultRegistry(), repo, nil) })
+	assert.Panics(t, func() { NewService(nil, repo, wake, allowAllBulkChecker{}) })
+	assert.Panics(t, func() { NewService(authz.DefaultRegistry(), nil, wake, allowAllBulkChecker{}) })
+	assert.Panics(t, func() { NewService(authz.DefaultRegistry(), repo, nil, allowAllBulkChecker{}) })
+	assert.Panics(t, func() { NewService(authz.DefaultRegistry(), repo, wake, nil) })
 }

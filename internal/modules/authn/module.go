@@ -3,21 +3,21 @@ package authn
 import (
 	"github.com/danielgtaylor/huma/v2"
 
-	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	authnapi "github.com/chaos-plus/chaosplus/internal/modules/authn/api"
 )
 
 type Module struct {
-	verifier *authnext.Verifier
+	authenticator authnapi.Authenticator
+	web           authnapi.WebService
 }
 
-func NewModule(verifier *authnext.Verifier) *Module {
-	return &Module{verifier: verifier}
+func NewModule(authenticator authnapi.Authenticator, web authnapi.WebService) *Module {
+	return &Module{authenticator: authenticator, web: web}
 }
 
 func (m *Module) RegisterREST(api huma.API) {
-	if m.verifier == nil {
+	if m.authenticator == nil {
 		return
 	}
-	authnapi.RegisterREST(api, m.verifier)
+	authnapi.RegisterREST(api, m.authenticator, m.web)
 }

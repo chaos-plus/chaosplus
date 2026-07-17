@@ -6,23 +6,28 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
 
 type outboxNotifier interface{ Wake() }
+type BulkPermissionChecker interface {
+	CheckBulk(context.Context, spicedbx.ObjectRef, []string, spicedbx.SubjectRef, spicedbx.ZedToken) (map[string]bool, error)
+}
 
 type Service struct {
 	registry *authz.Registry
 	repo     *Repository
 	notifier outboxNotifier
+	checker  BulkPermissionChecker
 }
 
-func NewService(registry *authz.Registry, repo *Repository, notifier outboxNotifier) *Service {
-	if registry == nil || repo == nil || notifier == nil {
-		panic("iam service requires registry, repository, and outbox notifier")
+func NewService(registry *authz.Registry, repo *Repository, notifier outboxNotifier, checker BulkPermissionChecker) *Service {
+	if registry == nil || repo == nil || notifier == nil || checker == nil {
+		panic("iam service requires registry, repository, outbox notifier, and permission checker")
 	}
-	return &Service{registry: registry, repo: repo, notifier: notifier}
+	return &Service{registry: registry, repo: repo, notifier: notifier, checker: checker}
 }
 
 func newDeclarationService(registry *authz.Registry) *Service {
@@ -183,6 +188,13 @@ func (s *Service) changeMember(ctx context.Context, tenantID, roleID, subject st
 	var changed bool
 	var err error
 	if add {
+		active, activeErr := s.repo.IsMemberActive(ctx, tenantID, subject)
+		if activeErr != nil {
+			return false, activeErr
+		}
+		if !active {
+			return false, ErrMemberInactive
+		}
 		changed, err = s.repo.AddMember(ctx, tenantID, roleID, subject)
 	} else {
 		changed, err = s.repo.RemoveMember(ctx, tenantID, roleID, subject)

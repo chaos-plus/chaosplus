@@ -21,14 +21,14 @@ type Module struct {
 	declarationOnly bool
 }
 
-func NewModule(db *bun.DB, registrar *authz.Registrar, writer RelationshipWriter, nextID IDGenerator, cfg OutboxConfig) *Module {
-	if db == nil || registrar == nil || writer == nil || nextID == nil {
+func NewModule(db *bun.DB, registrar *authz.Registrar, writer RelationshipWriter, checker BulkPermissionChecker, nextID IDGenerator, cfg OutboxConfig) *Module {
+	if db == nil || registrar == nil || writer == nil || checker == nil || nextID == nil {
 		panic("iam module requires database, authz registrar, relationship writer, and id generator")
 	}
 	repo := NewRepository(db, nextID)
 	worker := NewOutboxWorker(repo, writer, cfg, nextID)
 	return &Module{
-		service:   NewService(registrar.Registry(), repo, worker),
+		service:   NewService(registrar.Registry(), repo, worker, checker),
 		registrar: registrar,
 		db:        db,
 		worker:    worker,

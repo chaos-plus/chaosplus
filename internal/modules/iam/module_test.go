@@ -30,7 +30,7 @@ func TestModuleRegistersREST(t *testing.T) {
 
 func TestNewModuleRequiresRegistrar(t *testing.T) {
 	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
-	assert.Panics(t, func() { NewModule(nil, nil, nil, nil, OutboxConfig{}) })
+	assert.Panics(t, func() { NewModule(nil, nil, nil, nil, nil, OutboxConfig{}) })
 }
 
 func TestModuleLifecycle(t *testing.T) {
@@ -42,6 +42,7 @@ func TestModuleLifecycle(t *testing.T) {
 		db,
 		authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()),
 		&recordingRelationshipWriter{},
+		allowAllBulkChecker{},
 		func() (string, error) { return fmt.Sprint(id.Add(1)), nil },
 		OutboxConfig{PollInterval: time.Hour},
 	)

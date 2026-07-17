@@ -26,13 +26,17 @@ func (app *App) buildModules() []any {
 	}
 
 	if app.cfg.Authn.Enabled {
-		mods = append(mods, authnmod.NewModule(app.authnVerifier))
+		authenticator := app.authnRequest
+		if authenticator == nil {
+			authenticator = app.authnVerifier
+		}
+		mods = append(mods, authnmod.NewModule(authenticator, app.authnWeb))
 	}
 	if app.authzRegistrar != nil {
 		if app.authzRegistrar.IsDeclarationOnly() {
 			mods = append(mods, iam.NewDeclarationOnlyModule(app.authzRegistrar))
 		} else {
-			mods = append(mods, iam.NewModule(app.dbr.Write(), app.authzRegistrar, app.spicedb, func() (string, error) {
+			mods = append(mods, iam.NewModule(app.dbr.Write(), app.authzRegistrar, app.spicedb, app.spicedb, func() (string, error) {
 				id, err := guid.Next()
 				return strconv.FormatInt(id, 10), err
 			}, app.cfg.Authz.Outbox))

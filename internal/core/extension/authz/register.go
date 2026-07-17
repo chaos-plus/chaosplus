@@ -25,7 +25,15 @@ type PermissionChecker interface {
 }
 
 type TokenVerifier interface {
-	VerifyAuthorization(context.Context, string) (*authn.Claims, error)
+	Authenticate(context.Context, string, string) (*authn.Claims, error)
+}
+
+type csrfValidator interface {
+	ValidateCSRF(method, origin, cookieHeader, authorization string) error
+}
+
+type MembershipChecker interface {
+	IsMemberActive(context.Context, string, string) (bool, error)
 }
 
 // Registrar binds route declarations, OpenAPI metadata, authentication, and
@@ -34,16 +42,17 @@ type Registrar struct {
 	registry *Registry
 	verifier TokenVerifier
 	checker  PermissionChecker
+	members  MembershipChecker
 }
 
-func NewRegistrar(registry *Registry, verifier TokenVerifier, checker PermissionChecker) *Registrar {
+func NewRegistrar(registry *Registry, verifier TokenVerifier, checker PermissionChecker, members MembershipChecker) *Registrar {
 	if registry == nil {
 		panic("authz registrar requires a registry")
 	}
-	if verifier == nil || checker == nil {
-		panic("authz registrar requires both verifier and checker")
+	if verifier == nil || checker == nil || members == nil {
+		panic("authz registrar requires verifier, permission checker, and membership checker")
 	}
-	return &Registrar{registry: registry, verifier: verifier, checker: checker}
+	return &Registrar{registry: registry, verifier: verifier, checker: checker, members: members}
 }
 
 // NewDeclarationOnlyRegistrar creates a registrar that records Guard metadata
@@ -104,7 +113,13 @@ func (r *Registrar) prepare(api huma.API, op *huma.Operation, guard Guard) {
 
 func (r *Registrar) middleware(api huma.API, guard Guard) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
-		claims, err := r.verifier.VerifyAuthorization(ctx.Context(), ctx.Header("Authorization"))
+		if validator, ok := r.verifier.(csrfValidator); ok {
+			if err := validator.ValidateCSRF(ctx.Method(), ctx.Header("Origin"), ctx.Header("Cookie"), ctx.Header("Authorization")); err != nil {
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden, "csrf_rejected")
+				return
+			}
+		}
+		claims, err := r.verifier.Authenticate(ctx.Context(), ctx.Header("Authorization"), ctx.Header("Cookie"))
 		if err != nil {
 			slog.Debug("authn token rejected", "operation", ctx.Operation().OperationID, "err", err)
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "unauthorized")
@@ -113,6 +128,16 @@ func (r *Registrar) middleware(api huma.API, guard Guard) func(huma.Context, fun
 		tenantID := ctx.Header(TenantHeader)
 		if tenantID == "" {
 			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
+			return
+		}
+		active, err := r.members.IsMemberActive(ctx.Context(), tenantID, claims.Subject)
+		if err != nil {
+			slog.Error("tenant membership check failed", "operation", ctx.Operation().OperationID, "err", err)
+			_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")
+			return
+		}
+		if !active {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "inactive_tenant_membership")
 			return
 		}
 		allowed, err := r.checker.Check(

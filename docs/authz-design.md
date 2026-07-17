@@ -231,8 +231,8 @@ SpiceDB 关系。只有 Zitadel authn 与 SpiceDB authz 同时启用时才挂载
 | P0 基础 | 部分完成 | Zitadel 部署、正式 PKCE/JWT 应用与固定 audience、OIDC verifier、SpiceDB client/schema apply、事务 outbox、真实 smoke | 生产 TLS |
 | P1 接口权限 | 进行中 | catalog、Guard 注册、OpenAPI 扩展、单条 Check、启动/CI 门禁、角色授权与成员写 API | CheckBulk、完整业务路由 |
 | P2 层级和数据权限 | 未开始 | 基础 merchant/store/dept schema | LookupResources 下推、分享、层级用例 |
-| P3 菜单权限 | 部分完成 | menu metadata catalog | 按用户批量检查与树裁剪 |
-| P4 管理面 | 进行中 | catalog/schema/scope、role CRUD、permission grant/revoke、member add/remove | menu CRUD、有效权限查询、bootstrap CLI |
+| P3 菜单权限 | 已完成 | menu metadata CRUD、CheckBulk、按用户树裁剪、祖先容器保留 | Redis 权限缓存按压测决定 |
+| P4 管理面 | 进行中 | BFF 登录/注册、tenant member、role CRUD、permission grant/revoke、member add/remove、menu CRUD、React 管理台 | Zitadel 管理 API 服务账号、正式 bootstrap CLI |
 
 新增 authn/authz/spicedbx/iam 包要求保持 90% 以上测试覆盖率；远程依赖通过显式 smoke
 环境变量运行，不让普通单元测试依赖 10.0.0.100。

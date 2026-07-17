@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
@@ -30,6 +31,17 @@ type Service interface {
 	ListMembers(context.Context, string, string) ([]string, error)
 	AddMember(context.Context, string, string, string) (bool, error)
 	RemoveMember(context.Context, string, string, string) (bool, error)
+	PutTenantMember(context.Context, string, string, string, string, iamdomain.MemberStatus) (iamdomain.TenantMember, error)
+	GetTenantMember(context.Context, string, string) (iamdomain.TenantMember, error)
+	ListTenantMembers(context.Context, string, iamdomain.MemberFilter) ([]iamdomain.TenantMember, int64, error)
+	SetTenantMemberStatus(context.Context, string, string, iamdomain.MemberStatus) (iamdomain.TenantMember, error)
+	ListTenantMemberRoles(context.Context, string, string) ([]string, error)
+	CreateMenu(context.Context, iamdomain.Menu) (iamdomain.Menu, error)
+	ListMenus(context.Context, string) ([]iamdomain.Menu, error)
+	GetMenu(context.Context, string, string) (iamdomain.Menu, error)
+	UpdateMenu(context.Context, iamdomain.Menu) (iamdomain.Menu, error)
+	DeleteMenu(context.Context, string, string) error
+	EffectiveMenus(context.Context, string, string) ([]MenuItem, error)
 }
 
 type ScopeNode struct {
@@ -44,7 +56,35 @@ type MenuItem struct {
 	Label          string     `json:"label"`
 	Path           string     `json:"path,omitempty"`
 	PermissionCode string     `json:"permission_code"`
+	Icon           string     `json:"icon,omitempty"`
+	SortOrder      int        `json:"sort_order"`
 	Children       []MenuItem `json:"children,omitempty"`
+}
+
+type TenantMember struct {
+	TenantID    string                 `json:"tenant_id"`
+	Subject     string                 `json:"subject"`
+	DisplayName string                 `json:"display_name"`
+	Email       string                 `json:"email,omitempty"`
+	Status      iamdomain.MemberStatus `json:"status"`
+	RoleIDs     []string               `json:"role_ids,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+	UpdatedAt   time.Time              `json:"updated_at"`
+	DisabledAt  *time.Time             `json:"disabled_at,omitempty"`
+}
+
+type Menu struct {
+	ID             string               `json:"id"`
+	TenantID       string               `json:"tenant_id"`
+	ParentID       string               `json:"parent_id,omitempty"`
+	Label          string               `json:"label"`
+	Route          string               `json:"route,omitempty"`
+	Icon           string               `json:"icon,omitempty"`
+	SortOrder      int                  `json:"sort_order"`
+	PermissionCode string               `json:"permission_code,omitempty"`
+	Status         iamdomain.MenuStatus `json:"status"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 type schemaOutput struct {
@@ -101,6 +141,71 @@ type memberInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
 	RoleID   string `path:"role_id" maxLength:"32"`
 	Subject  string `path:"subject" maxLength:"255" doc:"immutable Zitadel user subject"`
+}
+
+type listTenantMembersInput struct {
+	TenantID string                 `header:"X-Tenant-Id" maxLength:"128"`
+	Search   string                 `query:"search" maxLength:"128"`
+	Status   iamdomain.MemberStatus `query:"status" enum:"active,disabled"`
+	Offset   int                    `query:"offset" minimum:"0" default:"0"`
+	Limit    int                    `query:"limit" minimum:"1" maximum:"200" default:"50"`
+}
+
+type tenantMemberInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	Subject  string `path:"subject" maxLength:"255"`
+}
+
+type createTenantMemberInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	Body     struct {
+		Subject     string                 `json:"subject" minLength:"1" maxLength:"255"`
+		DisplayName string                 `json:"display_name" minLength:"1" maxLength:"128"`
+		Email       string                 `json:"email,omitempty" maxLength:"320"`
+		Status      iamdomain.MemberStatus `json:"status" enum:"active,disabled" default:"active"`
+	}
+}
+
+type updateTenantMemberInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	Subject  string `path:"subject" maxLength:"255"`
+	Body     struct {
+		DisplayName *string                 `json:"display_name,omitempty" minLength:"1" maxLength:"128"`
+		Email       *string                 `json:"email,omitempty" maxLength:"320"`
+		Status      *iamdomain.MemberStatus `json:"status,omitempty" enum:"active,disabled"`
+	}
+}
+
+type menuInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	MenuID   string `path:"menu_id" maxLength:"32"`
+}
+
+type createMenuInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	Body     struct {
+		ParentID       string               `json:"parent_id,omitempty" maxLength:"32"`
+		Label          string               `json:"label" minLength:"1" maxLength:"128"`
+		Route          string               `json:"route,omitempty" maxLength:"512"`
+		Icon           string               `json:"icon,omitempty" maxLength:"64"`
+		SortOrder      int                  `json:"sort_order" minimum:"-100000" maximum:"100000" default:"0"`
+		PermissionCode string               `json:"permission_code,omitempty" maxLength:"128"`
+		Status         iamdomain.MenuStatus `json:"status" enum:"active,disabled" default:"active"`
+	}
+}
+
+type updateMenuInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	MenuID   string `path:"menu_id" maxLength:"32"`
+	Body     struct {
+		ParentID       *string               `json:"parent_id,omitempty" maxLength:"32"`
+		Label          *string               `json:"label,omitempty" minLength:"1" maxLength:"128"`
+		Route          *string               `json:"route,omitempty" maxLength:"512"`
+		Icon           *string               `json:"icon,omitempty" maxLength:"64"`
+		SortOrder      *int                  `json:"sort_order,omitempty" minimum:"-100000" maximum:"100000"`
+		PermissionCode *string               `json:"permission_code,omitempty" maxLength:"128"`
+		Status         *iamdomain.MenuStatus `json:"status,omitempty" enum:"active,disabled"`
+	}
 }
 
 // RegisterREST mounts IAM discovery endpoints for the management UI.
@@ -253,6 +358,132 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 		}
 		return respx.OK(ctx, MutationResult{Changed: changed, SyncStatus: "pending"}), nil
 	})
+
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-tenant-members", Method: http.MethodGet, Path: "/iam/members", Summary: "List tenant memberships", Tags: []string{"iam"}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *listTenantMembersInput) (*respx.Body[[]TenantMember], error) {
+		members, total, err := svc.ListTenantMembers(ctx, in.TenantID, iamdomain.MemberFilter{Search: in.Search, Status: in.Status, Offset: in.Offset, Limit: in.Limit})
+		if err != nil {
+			return nil, apiError("list tenant members", err)
+		}
+		return respx.List(ctx, membersFromDomain(members), respx.Page{Offset: in.Offset, Limit: in.Limit, Count: len(members), Total: total}), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-tenant-member", Method: http.MethodPost, Path: "/iam/members", Summary: "Bind an existing Zitadel subject to a tenant", Tags: []string{"iam"}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createTenantMemberInput) (*respx.Body[TenantMember], error) {
+		member, err := svc.PutTenantMember(ctx, in.TenantID, in.Body.Subject, in.Body.DisplayName, in.Body.Email, in.Body.Status)
+		if err != nil {
+			return nil, apiError("create tenant member", err)
+		}
+		return respx.OK(ctx, memberFromDomain(member)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-tenant-member", Method: http.MethodGet, Path: "/iam/members/{subject}", Summary: "Get a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *tenantMemberInput) (*respx.Body[TenantMember], error) {
+		member, err := svc.GetTenantMember(ctx, in.TenantID, in.Subject)
+		if err != nil {
+			return nil, apiError("get tenant member", err)
+		}
+		roles, err := svc.ListTenantMemberRoles(ctx, in.TenantID, in.Subject)
+		if err != nil {
+			return nil, apiError("list tenant member roles", err)
+		}
+		out := memberFromDomain(member)
+		out.RoleIDs = roles
+		return respx.OK(ctx, out), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-tenant-member", Method: http.MethodPatch, Path: "/iam/members/{subject}", Summary: "Update or disable a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "user", Verb: "update"}, func(ctx context.Context, in *updateTenantMemberInput) (*respx.Body[TenantMember], error) {
+		member, err := svc.GetTenantMember(ctx, in.TenantID, in.Subject)
+		if err != nil {
+			return nil, apiError("get tenant member", err)
+		}
+		if in.Body.DisplayName != nil {
+			member.DisplayName = *in.Body.DisplayName
+		}
+		if in.Body.Email != nil {
+			member.Email = *in.Body.Email
+		}
+		if in.Body.Status != nil {
+			member.Status = *in.Body.Status
+		}
+		member, err = svc.PutTenantMember(ctx, in.TenantID, in.Subject, member.DisplayName, member.Email, member.Status)
+		if err != nil {
+			return nil, apiError("update tenant member", err)
+		}
+		return respx.OK(ctx, memberFromDomain(member)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-tenant-member-roles", Method: http.MethodGet, Path: "/iam/members/{subject}/roles", Summary: "List role assignments for a tenant member", Tags: []string{"iam"}}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *tenantMemberInput) (*respx.Body[[]string], error) {
+		roles, err := svc.ListTenantMemberRoles(ctx, in.TenantID, in.Subject)
+		if err != nil {
+			return nil, apiError("list tenant member roles", err)
+		}
+		return respx.OK(ctx, roles), nil
+	})
+
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-menus", Method: http.MethodGet, Path: "/iam/menus", Summary: "List tenant menu metadata", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]Menu], error) {
+		menus, err := svc.ListMenus(ctx, in.TenantID)
+		if err != nil {
+			return nil, apiError("list menus", err)
+		}
+		return respx.OK(ctx, menusFromDomain(menus)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-menu", Method: http.MethodPost, Path: "/iam/menus", Summary: "Create a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "create"}, func(ctx context.Context, in *createMenuInput) (*respx.Body[Menu], error) {
+		menu, err := svc.CreateMenu(ctx, iamdomain.Menu{TenantID: in.TenantID, ParentID: in.Body.ParentID, Label: in.Body.Label, Route: in.Body.Route, Icon: in.Body.Icon, SortOrder: in.Body.SortOrder, PermissionCode: in.Body.PermissionCode, Status: in.Body.Status})
+		if err != nil {
+			return nil, apiError("create menu", err)
+		}
+		return respx.OK(ctx, menuFromDomain(menu)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-menu", Method: http.MethodGet, Path: "/iam/menus/{menu_id}", Summary: "Get a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *menuInput) (*respx.Body[Menu], error) {
+		menu, err := svc.GetMenu(ctx, in.TenantID, in.MenuID)
+		if err != nil {
+			return nil, apiError("get menu", err)
+		}
+		return respx.OK(ctx, menuFromDomain(menu)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-menu", Method: http.MethodPatch, Path: "/iam/menus/{menu_id}", Summary: "Update a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "update"}, func(ctx context.Context, in *updateMenuInput) (*respx.Body[Menu], error) {
+		menu, err := svc.GetMenu(ctx, in.TenantID, in.MenuID)
+		if err != nil {
+			return nil, apiError("get menu", err)
+		}
+		if in.Body.ParentID != nil {
+			menu.ParentID = *in.Body.ParentID
+		}
+		if in.Body.Label != nil {
+			menu.Label = *in.Body.Label
+		}
+		if in.Body.Route != nil {
+			menu.Route = *in.Body.Route
+		}
+		if in.Body.Icon != nil {
+			menu.Icon = *in.Body.Icon
+		}
+		if in.Body.SortOrder != nil {
+			menu.SortOrder = *in.Body.SortOrder
+		}
+		if in.Body.PermissionCode != nil {
+			menu.PermissionCode = *in.Body.PermissionCode
+		}
+		if in.Body.Status != nil {
+			menu.Status = *in.Body.Status
+		}
+		menu, err = svc.UpdateMenu(ctx, menu)
+		if err != nil {
+			return nil, apiError("update menu", err)
+		}
+		return respx.OK(ctx, menuFromDomain(menu)), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-delete-menu", Method: http.MethodDelete, Path: "/iam/menus/{menu_id}", Summary: "Delete a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "delete"}, func(ctx context.Context, in *menuInput) (*respx.Body[MutationResult], error) {
+		if err := svc.DeleteMenu(ctx, in.TenantID, in.MenuID); err != nil {
+			return nil, apiError("delete menu", err)
+		}
+		return respx.OK(ctx, MutationResult{Changed: true, SyncStatus: "not_applicable"}), nil
+	})
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-effective-menus", Method: http.MethodGet, Path: "/iam/me/menus", Summary: "Return the current member's authorized menu tree", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]MenuItem], error) {
+		claims, ok := authnext.FromContext(ctx)
+		if !ok {
+			return nil, huma.Error401Unauthorized("unauthorized")
+		}
+		menus, err := svc.EffectiveMenus(ctx, in.TenantID, claims.Subject)
+		if err != nil {
+			return nil, apiError("effective menus", err)
+		}
+		return respx.OK(ctx, menus), nil
+	})
 }
 
 func roleFromDomain(role iamdomain.Role) Role {
@@ -267,12 +498,45 @@ func rolesFromDomain(roles []iamdomain.Role) []Role {
 	return out
 }
 
+func memberFromDomain(member iamdomain.TenantMember) TenantMember {
+	out := TenantMember{TenantID: member.TenantID, Subject: member.Subject, DisplayName: member.DisplayName, Email: member.Email, Status: member.Status, CreatedAt: member.CreatedAt, UpdatedAt: member.UpdatedAt}
+	if !member.DisabledAt.IsZero() {
+		value := member.DisabledAt
+		out.DisabledAt = &value
+	}
+	return out
+}
+
+func membersFromDomain(members []iamdomain.TenantMember) []TenantMember {
+	out := make([]TenantMember, 0, len(members))
+	for _, member := range members {
+		out = append(out, memberFromDomain(member))
+	}
+	return out
+}
+func menuFromDomain(menu iamdomain.Menu) Menu {
+	return Menu{ID: menu.ID, TenantID: menu.TenantID, ParentID: menu.ParentID, Label: menu.Label, Route: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Status: menu.Status, CreatedAt: menu.CreatedAt, UpdatedAt: menu.UpdatedAt}
+}
+func menusFromDomain(menus []iamdomain.Menu) []Menu {
+	out := make([]Menu, 0, len(menus))
+	for _, menu := range menus {
+		out = append(out, menuFromDomain(menu))
+	}
+	return out
+}
+
 func apiError(operation string, err error) error {
 	switch {
 	case errors.Is(err, iamdomain.ErrRoleNotFound):
 		return huma.Error404NotFound("role_not_found")
 	case errors.Is(err, iamdomain.ErrRoleNameConflict):
 		return huma.Error409Conflict("iam_role_name_conflict")
+	case errors.Is(err, iamdomain.ErrMemberNotFound), errors.Is(err, iamdomain.ErrMenuNotFound):
+		return huma.Error404NotFound("iam_resource_not_found")
+	case errors.Is(err, iamdomain.ErrMenuConflict), errors.Is(err, iamdomain.ErrMenuHasChildren):
+		return huma.Error409Conflict("iam_resource_conflict")
+	case errors.Is(err, iamdomain.ErrMemberInactive):
+		return huma.Error409Conflict("tenant_member_inactive")
 	case errors.Is(err, iamdomain.ErrInvalidArgument), errors.Is(err, iamdomain.ErrPermissionNotFound):
 		return huma.Error422UnprocessableEntity("validation_failed", err)
 	default:

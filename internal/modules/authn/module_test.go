@@ -13,14 +13,14 @@ import (
 func TestRegisterREST(t *testing.T) {
 	verifier, err := authnext.NewVerifier(authnext.Config{})
 	require.NoError(t, err)
-	m := NewModule(verifier)
+	m := NewModule(verifier, nil)
 	_, api := humatest.New(t)
 	m.RegisterREST(api)
 	assert.NotNil(t, m)
 }
 
 func TestRegisterRESTNilVerifier(t *testing.T) {
-	m := NewModule(nil)
+	m := NewModule(nil, nil)
 	_, api := humatest.New(t)
 	m.RegisterREST(api)
 	assert.NotNil(t, m)

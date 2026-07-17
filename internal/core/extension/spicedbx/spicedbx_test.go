@@ -9,6 +9,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 )
 
@@ -66,6 +67,12 @@ func TestAuthzedClientMethods(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, allowed)
 	assert.Equal(t, "fresh", fake.check.Consistency.GetAtLeastAsFresh().Token)
+	bulk, err := client.CheckBulk(context.Background(), ObjectRef{Type: "tenant", ID: "t1"}, []string{"store_view", "menu_view"}, SubjectRef{Object: ObjectRef{Type: "user", ID: "u1"}}, "fresh")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"store_view": true, "menu_view": true}, bulk)
+	empty, err := client.CheckBulk(context.Background(), ObjectRef{}, nil, SubjectRef{}, "")
+	require.NoError(t, err)
+	assert.Empty(t, empty)
 
 	token, err = client.WriteRelationships(context.Background(), []Relationship{{
 		Resource: ObjectRef{Type: "tenant", ID: "t1"},
@@ -112,6 +119,8 @@ func TestAuthzedClientErrors(t *testing.T) {
 	assert.ErrorIs(t, err, want)
 	_, err = client.Check(context.Background(), ObjectRef{}, "view", SubjectRef{}, "")
 	assert.ErrorIs(t, err, want)
+	_, err = client.CheckBulk(context.Background(), ObjectRef{}, []string{"view"}, SubjectRef{}, "")
+	assert.ErrorIs(t, err, want)
 	_, err = client.WriteRelationships(context.Background(), nil)
 	assert.ErrorIs(t, err, want)
 	_, err = client.WriteRelationshipUpdates(context.Background(), nil)
@@ -122,11 +131,34 @@ func TestAuthzedClientErrors(t *testing.T) {
 	assert.ErrorIs(t, err, want)
 }
 
+func TestCheckBulkRejectsInvalidAndPartialResponses(t *testing.T) {
+	client := &AuthzedClient{client: &fakeSpice{}}
+	permissions := make([]string, 101)
+	for i := range permissions {
+		permissions[i] = "view"
+	}
+	_, err := client.CheckBulk(context.Background(), ObjectRef{}, permissions, SubjectRef{}, "")
+	assert.ErrorContains(t, err, "at most 100")
+	_, err = client.CheckBulk(context.Background(), ObjectRef{}, []string{""}, SubjectRef{}, "")
+	assert.ErrorContains(t, err, "empty")
+
+	client.client = &fakeSpice{bulkResponse: &v1.CheckBulkPermissionsResponse{}}
+	_, err = client.CheckBulk(context.Background(), ObjectRef{}, []string{"view"}, SubjectRef{}, "")
+	assert.ErrorContains(t, err, "returned 0 of 1")
+	client.client = &fakeSpice{bulkResponse: &v1.CheckBulkPermissionsResponse{Pairs: []*v1.CheckBulkPermissionsPair{{Response: &v1.CheckBulkPermissionsPair_Error{Error: &statuspb.Status{Code: 13, Message: "down"}}}}}}
+	_, err = client.CheckBulk(context.Background(), ObjectRef{}, []string{"view"}, SubjectRef{}, "")
+	assert.ErrorContains(t, err, "down")
+	client.client = &fakeSpice{bulkResponse: &v1.CheckBulkPermissionsResponse{Pairs: []*v1.CheckBulkPermissionsPair{{}}}}
+	_, err = client.CheckBulk(context.Background(), ObjectRef{}, []string{"view"}, SubjectRef{}, "")
+	assert.ErrorContains(t, err, "incomplete")
+}
+
 type fakeSpice struct {
 	schema        string
 	check         *v1.CheckPermissionRequest
 	relationships []*v1.RelationshipUpdate
 	err           error
+	bulkResponse  *v1.CheckBulkPermissionsResponse
 }
 
 func (f *fakeSpice) WriteSchema(_ context.Context, req *v1.WriteSchemaRequest, _ ...grpc.CallOption) (*v1.WriteSchemaResponse, error) {
@@ -143,6 +175,20 @@ func (f *fakeSpice) CheckPermission(_ context.Context, req *v1.CheckPermissionRe
 	}
 	f.check = req
 	return &v1.CheckPermissionResponse{Permissionship: v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION}, nil
+}
+
+func (f *fakeSpice) CheckBulkPermissions(_ context.Context, req *v1.CheckBulkPermissionsRequest, _ ...grpc.CallOption) (*v1.CheckBulkPermissionsResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.bulkResponse != nil {
+		return f.bulkResponse, nil
+	}
+	pairs := make([]*v1.CheckBulkPermissionsPair, 0, len(req.Items))
+	for _, item := range req.Items {
+		pairs = append(pairs, &v1.CheckBulkPermissionsPair{Request: item, Response: &v1.CheckBulkPermissionsPair_Item{Item: &v1.CheckBulkPermissionsResponseItem{Permissionship: v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION}}})
+	}
+	return &v1.CheckBulkPermissionsResponse{Pairs: pairs}, nil
 }
 
 func (f *fakeSpice) WriteRelationships(_ context.Context, req *v1.WriteRelationshipsRequest, _ ...grpc.CallOption) (*v1.WriteRelationshipsResponse, error) {

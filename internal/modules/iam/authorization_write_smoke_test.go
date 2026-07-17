@@ -87,9 +87,13 @@ func TestAuthorizationWriteSmoke(t *testing.T) {
 		return fmt.Sprintf("%s-%d", runHash, n), nil
 	}
 	repo := iam.NewRepository(db, nextID)
+	_, err = repo.PutMember(ctx, iam.TenantMember{TenantID: tenantID, Subject: adminClaims.Subject, DisplayName: "Smoke admin", Status: iam.MemberActive})
+	require.NoError(t, err)
+	_, err = repo.PutMember(ctx, iam.TenantMember{TenantID: tenantID, Subject: targetClaims.Subject, DisplayName: "Smoke target", Status: iam.MemberActive})
+	require.NoError(t, err)
 	worker := iam.NewOutboxWorker(repo, client, iam.OutboxConfig{}, nextID)
-	service := iam.NewService(registry, repo, worker)
-	registrar := authz.NewRegistrar(registry, verifier, client)
+	service := iam.NewService(registry, repo, worker, client)
+	registrar := authz.NewRegistrar(registry, verifier, client, iam.NewMembershipChecker(db))
 	router := chi.NewMux()
 	respx.Install()
 	api := humachi.New(router, huma.DefaultConfig("iam-smoke", "1.0.0"))

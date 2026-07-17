@@ -9,6 +9,8 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
+	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/chaos-plus/chaosplus/pkg/timezone"
 	"github.com/redis/go-redis/v9"
@@ -62,6 +64,12 @@ func (app *App) Bootstrap() error {
 		return fmt.Errorf("init authn: %w", err)
 	}
 	app.authnVerifier = verifier
+	web, err := authnmod.NewWebService(app.ctx, app.cfg.Authn, verifier, app.redis)
+	if err != nil {
+		return fmt.Errorf("init browser authn: %w", err)
+	}
+	app.authnWeb = web
+	app.authnRequest = web
 
 	if app.cfg.Authz.SpiceDB.Enabled {
 		if !app.cfg.Authn.Enabled {
@@ -79,7 +87,7 @@ func (app *App) Bootstrap() error {
 		}
 	}
 	if app.cfg.Authn.Enabled && app.spicedb != nil {
-		app.authzRegistrar = authz.NewRegistrar(registry, verifier, app.spicedb)
+		app.authzRegistrar = authz.NewRegistrar(registry, app.authnRequest, app.spicedb, iam.NewMembershipChecker(app.dbr.Write()))
 	}
 	if app.authzRegistrar != nil && len(app.dbr.Writer) == 0 {
 		return fmt.Errorf("iam authorization writes require a writable database")

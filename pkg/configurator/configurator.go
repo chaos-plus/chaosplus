@@ -27,9 +27,10 @@ type sFlag struct {
 }
 
 type Flagger struct {
-	viper  *viper.Viper
-	flags  *pflag.FlagSet
-	mapkey string
+	viper      *viper.Viper
+	flags      *pflag.FlagSet
+	mapkey     string
+	configFile *string
 }
 
 func New() *Flagger {
@@ -81,11 +82,8 @@ func (f *Flagger) UseConfigFileArgDefault() {
 }
 
 func (f *Flagger) UseConfigFileArg(argNameLong, argNameShort, defaultFileName string) {
-	var file string
-	f.GetFlags().StringVarP(&file, argNameLong, argNameShort, defaultFileName, "config file path")
-	if file != "" {
-		f.GetViper().SetConfigFile(file)
-	}
+	f.configFile = new(string)
+	f.GetFlags().StringVarP(f.configFile, argNameLong, argNameShort, defaultFileName, "config file path")
 }
 
 func (f *Flagger) UseConfigFileName(name string) {
@@ -171,6 +169,9 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 	}
 
 	flags.Parse(args)
+	if f.configFile != nil && *f.configFile != "" {
+		vip.SetConfigFile(*f.configFile)
+	}
 
 	vip.AddConfigPath("./")
 
@@ -190,6 +191,7 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 func (f *Flagger) unmarshal(o interface{}, flags map[string]sFlag) error {
 	mapkey := f.GetMapkey()
 	hook := mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
 		func(f reflect.Type, t reflect.Type, data interface{}) (interface{}, error) {
 			if f.Kind() != reflect.Map {
 				return data, nil

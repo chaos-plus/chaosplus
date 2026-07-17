@@ -19,6 +19,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -46,6 +47,8 @@ type App struct {
 	mods []any
 
 	authnVerifier  *authn.Verifier
+	authnRequest   authz.TokenVerifier
+	authnWeb       *authnmod.WebService
 	authzRegistrar *authz.Registrar
 	spicedb        *spicedbx.AuthzedClient
 

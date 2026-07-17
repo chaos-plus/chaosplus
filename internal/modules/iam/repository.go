@@ -223,7 +223,7 @@ func (r *Repository) ListPermissions(ctx context.Context, tenantID, roleID strin
 	if err := ensureRole(ctx, r.db, tenantID, roleID); err != nil {
 		return nil, err
 	}
-	var codes []string
+	codes := make([]string, 0)
 	if err := r.db.NewSelect().Model((*permissionRow)(nil)).Column("permission_code").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("permission_code ASC").Scan(ctx, &codes); err != nil {
 		return nil, fmt.Errorf("list role permissions: %w", err)
 	}
@@ -272,7 +272,7 @@ func (r *Repository) ListMembers(ctx context.Context, tenantID, roleID string) (
 	if err := ensureRole(ctx, r.db, tenantID, roleID); err != nil {
 		return nil, err
 	}
-	var subjects []string
+	subjects := make([]string, 0)
 	if err := r.db.NewSelect().Model((*memberRow)(nil)).Column("user_subject").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("user_subject ASC").Scan(ctx, &subjects); err != nil {
 		return nil, fmt.Errorf("list role members: %w", err)
 	}

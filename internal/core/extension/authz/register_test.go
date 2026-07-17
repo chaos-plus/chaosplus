@@ -24,7 +24,14 @@ type fakeTokenVerifier struct {
 	err    error
 }
 
-func (f fakeTokenVerifier) VerifyAuthorization(context.Context, string) (*authn.Claims, error) {
+type csrfTokenVerifier struct {
+	fakeTokenVerifier
+	csrfErr error
+}
+
+func (f csrfTokenVerifier) ValidateCSRF(string, string, string, string) error { return f.csrfErr }
+
+func (f fakeTokenVerifier) Authenticate(context.Context, string, string) (*authn.Claims, error) {
 	return f.claims, f.err
 }
 
@@ -34,6 +41,15 @@ type recordingChecker struct {
 	resource   spicedbx.ObjectRef
 	permission string
 	subject    spicedbx.SubjectRef
+}
+
+type fakeMembershipChecker struct {
+	active bool
+	err    error
+}
+
+func (f fakeMembershipChecker) IsMemberActive(context.Context, string, string) (bool, error) {
+	return f.active, f.err
 }
 
 func (f *recordingChecker) Check(_ context.Context, resource spicedbx.ObjectRef, permission string, subject spicedbx.SubjectRef, _ spicedbx.ZedToken) (bool, error) {
@@ -70,28 +86,51 @@ func TestRegisterEnforcesAuthnAndAuthz(t *testing.T) {
 
 	t.Run("unauthenticated", func(t *testing.T) {
 		_, api := humatest.New(t)
-		registrar := NewRegistrar(registry, fakeTokenVerifier{err: errors.New("bad token")}, &recordingChecker{})
+		registrar := NewRegistrar(registry, fakeTokenVerifier{err: errors.New("bad token")}, &recordingChecker{}, fakeMembershipChecker{active: true})
 		registerTestRoute(api, registrar, guard)
 		assert.Equal(t, http.StatusUnauthorized, api.Get("/guarded").Code)
 	})
 
 	t.Run("missing tenant", func(t *testing.T) {
 		_, api := humatest.New(t)
-		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{allowed: true})
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{allowed: true}, fakeMembershipChecker{active: true})
 		registerTestRoute(api, registrar, guard)
 		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Authorization: Bearer token").Code)
 	})
 
 	t.Run("denied", func(t *testing.T) {
 		_, api := humatest.New(t)
-		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{})
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{}, fakeMembershipChecker{active: true})
 		registerTestRoute(api, registrar, guard)
 		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Authorization: Bearer token", TenantHeader+": t1").Code)
 	})
 
+	t.Run("inactive membership overrides spicedb allow", func(t *testing.T) {
+		_, api := humatest.New(t)
+		checker := &recordingChecker{allowed: true}
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, checker, fakeMembershipChecker{})
+		registerTestRoute(api, registrar, guard)
+		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Authorization: Bearer token", TenantHeader+": t1").Code)
+		assert.Empty(t, checker.permission)
+	})
+
+	t.Run("membership backend unavailable", func(t *testing.T) {
+		_, api := humatest.New(t)
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{allowed: true}, fakeMembershipChecker{err: errors.New("db down")})
+		registerTestRoute(api, registrar, guard)
+		assert.Equal(t, http.StatusServiceUnavailable, api.Get("/guarded", "Authorization: Bearer token", TenantHeader+": t1").Code)
+	})
+
+	t.Run("csrf rejection precedes authentication", func(t *testing.T) {
+		_, api := humatest.New(t)
+		registrar := NewRegistrar(registry, csrfTokenVerifier{fakeTokenVerifier: fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, csrfErr: errors.New("bad origin")}, &recordingChecker{allowed: true}, fakeMembershipChecker{active: true})
+		registerTestRoute(api, registrar, guard)
+		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", TenantHeader+": t1").Code)
+	})
+
 	t.Run("backend unavailable", func(t *testing.T) {
 		_, api := humatest.New(t)
-		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{err: errors.New("down")})
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, &recordingChecker{err: errors.New("down")}, fakeMembershipChecker{active: true})
 		registerTestRoute(api, registrar, guard)
 		assert.Equal(t, http.StatusServiceUnavailable, api.Get("/guarded", "Authorization: Bearer token", TenantHeader+": t1").Code)
 	})
@@ -99,7 +138,7 @@ func TestRegisterEnforcesAuthnAndAuthz(t *testing.T) {
 	t.Run("allowed", func(t *testing.T) {
 		_, api := humatest.New(t)
 		checker := &recordingChecker{allowed: true}
-		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, checker)
+		registrar := NewRegistrar(registry, fakeTokenVerifier{claims: &authn.Claims{Subject: "u1"}}, checker, fakeMembershipChecker{active: true})
 		registerTestRoute(api, registrar, guard)
 		assert.Equal(t, http.StatusOK, api.Get("/guarded", "Authorization: Bearer token", TenantHeader+": t1").Code)
 		assert.Equal(t, "tenant:t1", checker.resource.String())
@@ -130,10 +169,10 @@ func TestOperationGate(t *testing.T) {
 
 func TestRegistrarValidation(t *testing.T) {
 	registry := MustRegistry(Action{Resource: "store", Verb: "view"})
-	assert.Panics(t, func() { NewRegistrar(nil, fakeTokenVerifier{}, &recordingChecker{}) })
+	assert.Panics(t, func() { NewRegistrar(nil, fakeTokenVerifier{}, &recordingChecker{}, fakeMembershipChecker{}) })
 	assert.Panics(t, func() { NewDeclarationOnlyRegistrar(nil) })
-	assert.Panics(t, func() { NewRegistrar(registry, nil, nil) })
-	assert.Panics(t, func() { NewRegistrar(registry, fakeTokenVerifier{}, nil) })
+	assert.Panics(t, func() { NewRegistrar(registry, nil, nil, nil) })
+	assert.Panics(t, func() { NewRegistrar(registry, fakeTokenVerifier{}, nil, fakeMembershipChecker{}) })
 	assert.Panics(t, func() {
 		_, api := humatest.New(t)
 		Register(NewDeclarationOnlyRegistrar(registry), api, huma.Operation{OperationID: "bad", Method: http.MethodGet, Path: "/bad"}, Guard{Resource: "missing", Verb: "view"}, func(context.Context, *struct{}) (*routeOutput, error) {
