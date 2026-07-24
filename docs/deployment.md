@@ -10,24 +10,26 @@
 1. PostgreSQL 空卷初始化 `zitadel`、`spicedb`、`chaosplus` 三个隔离数据库及账号。
 2. Zitadel 官方 `init`、`setup` 创建实例、首个人类管理员、bootstrap machine user 和 Login V2 client。
 3. SpiceDB 官方 migration 执行到 `head`，随后启动服务。
-4. `chaosplus-bootstrap` 获取数据库 advisory lock，执行内嵌的 dlock/wuid/IAM migration。
-5. bootstrap 使用 machine JWT profile 的短期 token，幂等创建 Project 和 Native PKCE App。
-6. bootstrap 写入生成的 SpiceDB schema，并把首个管理员绑定为初始 tenant admin。
-7. API 只使用 DML 数据库账号启动；它不执行生产 migration，schema 不存在时直接退出。
+4. `chaosplus` 进程启动时自动获取数据库 advisory lock，对内嵌的 dlock/wuid/IAM Goose
+   migrations 执行 `up`。
+5. migration 完成后，进程幂等创建 Zitadel Project/Native PKCE App，更新 SpiceDB schema，
+   并绑定初始 tenant admin。
+6. 全部完成后 Chaosplus 才监听 HTTP/gRPC 端口；任一步失败都会退出并由 Compose 报错。
 
 生产初始化不会创建测试角色、测试菜单或测试用户。密码、MFA、登录会话和 token 全部属于
 Zitadel；Chaosplus 数据库只保存 tenant membership 和业务侧展示信息。
 
 ## 单机快速启动
 
-要求 Docker Engine 24+、Docker Compose v2.20+，本机 80 端口可用。
+要求 Docker Engine 24+、Docker Compose v2.20+，本机 80 端口可用。首次部署或从备份恢复时
+先生成部署密钥；以后启动、升级和重启都不再执行密钥脚本。
 
 Windows PowerShell：
 
 ```powershell
 cd deploy/compose
 ./init-secrets.ps1
-docker compose --env-file .env -f compose.yaml up -d --build --wait
+docker compose up -d --build --wait
 ```
 
 Linux：
@@ -35,8 +37,17 @@ Linux：
 ```bash
 cd deploy/compose
 ./init-secrets.sh
-docker compose --env-file .env -f compose.yaml up -d --build --wait
+docker compose up -d --build --wait
 ```
+
+正常部署只有一条启动命令：
+
+```bash
+docker compose up -d --build --wait
+```
+
+Compose 自动执行 `postgres → zitadel/spicedb → chaosplus（Goose up → provision → serve）`，
+不需要手工运行任何 init、setup 或 migration 容器。
 
 打开：
 
@@ -49,8 +60,8 @@ docker compose --env-file .env -f compose.yaml up -d --build --wait
 已被 Git 忽略，必须纳入主机密钥备份，权限限制为部署账号可读。
 
 ```bash
-docker compose --env-file .env -f compose.yaml ps -a
-docker compose --env-file .env -f compose.yaml logs bootstrap zitadel-setup spicedb-migrate
+docker compose ps -a
+docker compose logs chaosplus zitadel-setup spicedb-migrate
 ```
 
 ## 公网 TLS
@@ -61,16 +72,17 @@ docker compose --env-file .env -f compose.yaml logs bootstrap zitadel-setup spic
 3. 保持公网 80/443 可达，执行：
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.tls.yaml up -d --build --wait
+docker compose -f compose.yaml -f compose.tls.yaml up -d --build --wait
 ```
 
-TLS 模式下 bootstrap 和 API 也通过同一个公网 issuer 访问 Zitadel。Traefik 在内部网络为公网
+TLS 模式下 migration 和 Chaosplus 也通过同一个公网 issuer 访问 Zitadel。Traefik 在内部网络为公网
 域名提供 alias，因此 JWT audience、OIDC issuer、Host/SNI 和浏览器地址一致，没有跳过证书校验的旁路。
 
 ## 配置覆盖
 
-配置优先级为结构体默认值、YAML、环境变量、CLI 参数。基础文件为
-`deploy/compose/chaosplus.yaml`。环境变量使用大写下划线形式，例如：
+默认 Compose 配置已通过 `go:embed` 编译进 `chaosplus-server`。`deploy/compose/compose.yaml` 只需设置
+`CHAOSPLUS_CONFIG_PRESET=compose`，不再挂载额外的应用 YAML。配置优先级为结构体默认值、
+内置预设、显式 YAML、环境变量、CLI 参数。环境变量使用大写下划线形式，例如：
 
 ```text
 AUTHN_HTTP_TIMEOUT=15s
@@ -85,23 +97,25 @@ BOOTSTRAP_INITIAL_ADMIN_TENANT_ID=platform
 - `redis.password_file`
 - `authz.spicedb.token_file`
 - `authn.web.encryption_key_file`
+- `authn.web.login_client_token_file`（仅启用 Web 账号密码直登时需要）
 
 同一个值同时配置明文和 `_file` 会启动失败。文件必须是非空普通文件，不能超过限制。完整模板可
 通过 `chaosplus-server config generate` 生成，并用 `config validate` 检查。
 
 ## 外部基础设施
 
-可以单独运行两个命令：
+不使用仓库内 Compose 时，可以只维护一个显式 YAML，由同一个服务进程在监听端口前完成
+migration 和 provisioning：
 
 ```bash
-chaosplus-bootstrap -c /etc/chaosplus/config.yaml
 chaosplus-server -c /etc/chaosplus/config.yaml
 ```
 
 使用外部服务时遵守以下边界：
 
 - 应用数据库只选择一个 writable MySQL 或 PostgreSQL。
-- bootstrap 使用 DDL/migration 账号；API 使用另一个仅有 DML 权限的账号。
+- migration 使用 DDL 账号；业务数据库连接使用另一个仅有 DML 权限的账号。启用启动时自动
+  migration 的进程需要能读取前者，但业务查询不会复用该连接。
 - PostgreSQL migration owner 需设置 `ALTER DEFAULT PRIVILEGES`，为 runtime role 授予表的
   `SELECT/INSERT/UPDATE/DELETE` 和 sequence 的 `USAGE/SELECT`。
 - MySQL migration 账号需 DDL；runtime 账号只授予目标库的 `SELECT, INSERT, UPDATE, DELETE`。
@@ -110,14 +124,25 @@ chaosplus-server -c /etc/chaosplus/config.yaml
 - 外部 SpiceDB 仍由 bootstrap 声明式写入生成 schema；API 的 `apply_schema` 保持 `false`。
 - 应用改用 MySQL 时，Zitadel 和默认 SpiceDB 仍需要 PostgreSQL，除非它们也改为外部服务。
 
-## 幂等与重跑
+## Migration 与重跑
 
-`chaosplus-bootstrap` 可重复执行。数据库 advisory lock 会跨进程、跨主机串行化整个流程；SQL
-migration、SpiceDB schema/relationship、membership upsert 和 Zitadel lookup-or-create 均可收敛。
+Chaosplus 每次启动都会自动执行嵌入二进制的 Goose `up`。Goose version table 会跳过已应用版本，
+数据库 advisory lock 会跨进程、跨主机串行化 migration；之后的 SpiceDB schema/relationship、
+membership upsert 和 Zitadel lookup-or-create 也都是幂等操作。
 
 ```bash
-docker compose --env-file .env -f compose.yaml run --rm bootstrap
+docker compose restart chaosplus
 ```
+
+普通升级不需要单独执行 migration。需要主动回滚数据库时，使用同一个镜像和同一个 Go 二进制；
+由于 dlock、wuid、IAM 使用独立 Goose version table，必须明确目标模块：
+
+```bash
+docker compose run --rm chaosplus migration down iam
+docker compose run --rm chaosplus migration down-to iam 1
+```
+
+回滚完成后再部署对应旧版本镜像。不要让旧镜像猜测并自动执行 `down`。
 
 如果同名 Zitadel Project/App 出现多个，bootstrap 会拒绝猜测并退出。不要删除
 `zitadel-bootstrap` volume：其中的 machine key 与 Zitadel 数据库是一组恢复资产。
@@ -132,8 +157,9 @@ docker compose --env-file .env -f compose.yaml run --rm bootstrap
 `chaosplus-runtime`、部署 `.env` 和 `secrets/`。
 
 升级前固定并修改 `.env` 中的镜像版本，先备份，再执行 `docker compose pull` 和 `up -d`。
-Zitadel/SpiceDB 官方 migration 与 Chaosplus bootstrap 都必须成功后 API 才会启动。数据库 migration
+Zitadel/SpiceDB 官方 migration 与 Chaosplus 内嵌 Goose migration 都必须成功后服务才会启动。数据库 migration
 通常不能仅通过回退镜像撤销；回滚应恢复升级前数据库和 volume 快照。
 
 Zitadel bootstrap machine key 为高权限凭据且有到期时间。到期前按 Zitadel 官方流程轮换，监控
-其使用，并同步更新 `zitadel-bootstrap` volume 备份。运行期 API 不挂载该 key。
+其使用，并同步更新 `zitadel-bootstrap` volume 备份。启用自动 provisioning 的 Chaosplus 进程需要
+以只读方式访问该 key。

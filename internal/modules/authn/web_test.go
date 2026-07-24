@@ -43,6 +43,9 @@ type oidcHarness struct {
 	tokenStatus     int
 	badTokenJSON    bool
 	incompleteToken bool
+	directState     string
+	directMFA       bool
+	directDeleted   atomic.Bool
 	mu              sync.Mutex
 }
 
@@ -72,6 +75,57 @@ func (h *oidcHarness) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/jwks":
 		e := big.NewInt(int64(h.key.PublicKey.E)).Bytes()
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "test-key", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(h.key.PublicKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(e)}}})
+	case "/authorize":
+		h.nonce = r.URL.Query().Get("nonce")
+		h.challenge = r.URL.Query().Get("code_challenge")
+		h.directState = r.URL.Query().Get("state")
+		http.Redirect(w, r, h.server.URL+"/ui/login/login?authRequestID=oidc-direct", http.StatusFound)
+	case "/v2/sessions":
+		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer login-client-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var payload struct {
+			Checks struct {
+				User struct {
+					LoginName string `json:"loginName"`
+				} `json:"user"`
+				Password struct {
+					Password string `json:"password"`
+				} `json:"password"`
+			} `json:"checks"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Checks.User.LoginName != "alice" || payload.Checks.Password.Password != "correct-password" {
+			http.Error(w, "invalid credentials", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"sessionId": "direct-session", "sessionToken": "direct-token"})
+	case "/v2/sessions/direct-session":
+		if r.Method == http.MethodDelete {
+			h.directDeleted.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{"details": map[string]string{"sequence": "1"}})
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer direct-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"session": map[string]any{"factors": map[string]any{"user": map[string]string{"id": "user-1", "loginName": "alice", "organizationId": "org-1"}, "password": map[string]string{"verifiedAt": time.Now().UTC().Format(time.RFC3339)}}}})
+	case "/v2/settings/login":
+		if r.Header.Get("Authorization") != "Bearer login-client-token" || r.URL.Query().Get("ctx.orgId") != "org-1" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"settings": map[string]bool{"forceMfa": h.directMFA}})
+	case "/v2/oidc/auth_requests/oidc-direct":
+		if r.Header.Get("Authorization") != "Bearer login-client-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		callback := "http://127.0.0.1/callback?code=direct-code&state=" + url.QueryEscape(h.directState)
+		_ = json.NewEncoder(w).Encode(map[string]string{"callbackUrl": callback})
 	case "/token":
 		if h.tokenStatus != 0 {
 			http.Error(w, "token failed", h.tokenStatus)
@@ -201,6 +255,38 @@ func TestWebOIDCFlowSessionAndLogout(t *testing.T) {
 	assert.Equal(t, int32(1), h.revokeCalls.Load(), "no further revocation without a session")
 }
 
+func TestWebDirectLoginCompletesOIDCWithoutBrowserCallback(t *testing.T) {
+	web, h, _ := newWebFixture(t)
+	web.web.DirectLoginEnabled = true
+	web.web.LoginClientToken = "login-client-token"
+
+	id, returnURL, err := web.Login(context.Background(), "alice", "correct-password", "http://127.0.0.1/iam/users")
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1/iam/users", returnURL)
+	claims, err := web.Authenticate(context.Background(), "", "cp_session="+id)
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", claims.Subject)
+	assert.False(t, h.directDeleted.Load())
+
+	web.Logout(context.Background(), "cp_session="+id)
+	assert.True(t, h.directDeleted.Load())
+}
+
+func TestWebDirectLoginRejectsInvalidPasswordAndForcedMFA(t *testing.T) {
+	web, h, _ := newWebFixture(t)
+	web.web.DirectLoginEnabled = true
+	web.web.LoginClientToken = "login-client-token"
+	assert.ErrorIs(t, web.ValidateLoginOrigin("http://evil.test"), ErrCSRF)
+	assert.NoError(t, web.ValidateLoginOrigin("http://127.0.0.1"))
+
+	_, _, err := web.Login(context.Background(), "alice", "wrong", "http://127.0.0.1/")
+	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+	h.directMFA = true
+	_, _, err = web.Login(context.Background(), "alice", "correct-password", "http://127.0.0.1/")
+	assert.ErrorIs(t, err, authnext.ErrAdditionalVerification)
+	assert.True(t, h.directDeleted.Load())
+}
+
 func TestWebLogoutRevocationFailureStillLogsOut(t *testing.T) {
 	web, h, _ := newWebFixture(t)
 	state, _ := beginFlow(t, web, h, "login")
@@ -311,6 +397,10 @@ func TestWebServiceConfigurationFailuresAndDefaults(t *testing.T) {
 	badKey.Web.EncryptionKey = "short"
 	_, err = NewWebService(context.Background(), badKey, verifier, store)
 	assert.ErrorContains(t, err, "32 bytes")
+	directWithoutToken := base
+	directWithoutToken.Web.DirectLoginEnabled = true
+	_, err = NewWebService(context.Background(), directWithoutToken, verifier, store)
+	assert.ErrorContains(t, err, "login_client_token")
 	web, err := NewWebService(context.Background(), base, verifier, store)
 	require.NoError(t, err)
 	assert.Equal(t, "cp_session", web.web.CookieName)

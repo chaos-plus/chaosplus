@@ -9,11 +9,11 @@
 cd deploy/compose
 ./init-secrets.sh        # Windows: .\init-secrets.ps1
 docker compose up -d
-# 等 bootstrap 容器退出 0（Zitadel 项目/应用/机器凭据就绪）
+# chaosplus 启动时自动完成 Goose migration 和 Zitadel/SpiceDB provisioning
 cd ../../web/admin && npm install && npm run dev
 ```
 
-- [ ] `docker compose ps` 全部 healthy，bootstrap 退出码 0
+- [ ] `docker compose ps` 中长期服务全部 healthy，Chaosplus migration 日志成功
 - [ ] API `GET /healthz`（或 `/authn/me` 返回 401）可访问
 
 ## 1. 注册与登录（Zitadel 托管）

@@ -44,12 +44,9 @@ services:
       traefik.http.routers.zitadel-login.tls: "true"
       traefik.http.routers.zitadel-login.tls.certresolver: letsencrypt
 
-  bootstrap:
+  chaosplus:
     environment:
       BOOTSTRAP_ZITADEL_DEV_MODE: "false"
-
-  api:
-    environment:
       AUTHN_WEB_COOKIE_SECURE: "true"
       SECURITY_HSTS: "true"
 

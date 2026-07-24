@@ -4,13 +4,17 @@ Status: implemented on `feat/iam-admin-console`.
 
 ## Security boundary
 
-- Zitadel owns identities, passwords, MFA, registration, and OIDC tokens.
+- Zitadel owns identities, password verification, MFA, registration, and OIDC tokens.
 - Chaosplus stores tenant membership metadata, roles, menu metadata, and the
-  authorization outbox. It never stores a password.
+  authorization outbox. Direct login passes the password to Zitadel over the
+  server-side Session API and never stores or logs it.
 - SpiceDB is the final permission decision source.
 - The browser uses Authorization Code + PKCE through a Go BFF. Access and
   refresh tokens are AES-GCM encrypted in Redis; JavaScript only receives an
   opaque `HttpOnly`, `SameSite=Lax` session cookie.
+- `POST /authn/login` completes the PKCE and OIDC callback steps server-side,
+  so a password-only user stays on the Chaosplus origin. Accounts governed by
+  forced MFA are rejected with `409` and continue through the full Zitadel UI.
 - Cookie-authenticated mutations require an exact allowed `Origin`.
 - `POST /authn/logout` destroys the Redis session, best-effort revokes the
   refresh token at Zitadel, and returns a `logout_url` (RP-initiated logout via
@@ -38,6 +42,7 @@ to a role also requires that subject to be an active member of the same tenant.
 
 Browser authentication:
 
+- `POST /authn/login`
 - `GET /authn/oidc/start`
 - `GET /authn/oidc/callback`
 - `GET /authn/session`

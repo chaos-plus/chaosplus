@@ -25,12 +25,14 @@ const (
 )
 
 var (
-	ErrDisabled      = errors.New("authn disabled")
-	ErrInvalidToken  = errors.New("invalid token")
-	ErrExpiredToken  = errors.New("token expired")
-	ErrUnknownKey    = errors.New("unknown jwks key")
-	ErrInvalidIssuer = errors.New("invalid issuer")
-	ErrInvalidAud    = errors.New("invalid audience")
+	ErrDisabled               = errors.New("authn disabled")
+	ErrInvalidToken           = errors.New("invalid token")
+	ErrExpiredToken           = errors.New("token expired")
+	ErrUnknownKey             = errors.New("unknown jwks key")
+	ErrInvalidIssuer          = errors.New("invalid issuer")
+	ErrInvalidAud             = errors.New("invalid audience")
+	ErrInvalidCredentials     = errors.New("invalid login credentials")
+	ErrAdditionalVerification = errors.New("additional verification required")
 )
 
 // Config describes a Zitadel/OIDC issuer. JWKSURL is optional; when empty, the
@@ -49,20 +51,23 @@ type Config struct {
 // WebConfig enables the browser-facing OIDC BFF. Access and refresh tokens are
 // kept encrypted in Redis; the browser only receives an opaque session cookie.
 type WebConfig struct {
-	Enabled           bool          `mapstructure:"enabled" description:"enable browser OIDC BFF" default:"false"`
-	ClientID          string        `mapstructure:"client_id" description:"OIDC public client id"`
-	RedirectURL       string        `mapstructure:"redirect_url" description:"exact OIDC callback URL"`
-	PostLoginURL      string        `mapstructure:"post_login_url" description:"default frontend URL after login"`
-	PostLogoutURL     string        `mapstructure:"post_logout_url" description:"frontend URL after logout"`
-	AllowedReturnURLs []string      `mapstructure:"allowed_return_urls" description:"exact frontend return URL allowlist"`
-	AllowedOrigins    []string      `mapstructure:"allowed_origins" description:"origins allowed for cookie-authenticated writes"`
-	CookieName        string        `mapstructure:"cookie_name" description:"opaque session cookie name" default:"cp_session"`
-	CookieSecure      bool          `mapstructure:"cookie_secure" description:"require HTTPS for session cookies" default:"true"`
-	SessionTTL        time.Duration `mapstructure:"session_ttl" description:"maximum browser session lifetime" default:"8h"`
-	FlowTTL           time.Duration `mapstructure:"flow_ttl" description:"OIDC state lifetime" default:"5m"`
-	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 or raw 32-byte AES key"`
-	EncryptionKeyFile string        `mapstructure:"encryption_key_file" description:"file containing the BFF encryption key; mutually exclusive with encryption_key" default:""`
-	Scopes            []string      `mapstructure:"scopes" description:"OIDC scopes; defaults to openid profile email offline_access plus API audience"`
+	Enabled              bool          `mapstructure:"enabled" description:"enable browser OIDC BFF" default:"false"`
+	DirectLoginEnabled   bool          `mapstructure:"direct_login_enabled" description:"enable first-party username/password login through the Zitadel Session API" default:"false"`
+	ClientID             string        `mapstructure:"client_id" description:"OIDC public client id"`
+	RedirectURL          string        `mapstructure:"redirect_url" description:"exact OIDC callback URL"`
+	PostLoginURL         string        `mapstructure:"post_login_url" description:"default frontend URL after login"`
+	PostLogoutURL        string        `mapstructure:"post_logout_url" description:"frontend URL after logout"`
+	AllowedReturnURLs    []string      `mapstructure:"allowed_return_urls" description:"exact frontend return URL allowlist"`
+	AllowedOrigins       []string      `mapstructure:"allowed_origins" description:"origins allowed for cookie-authenticated writes"`
+	CookieName           string        `mapstructure:"cookie_name" description:"opaque session cookie name" default:"cp_session"`
+	CookieSecure         bool          `mapstructure:"cookie_secure" description:"require HTTPS for session cookies" default:"true"`
+	SessionTTL           time.Duration `mapstructure:"session_ttl" description:"maximum browser session lifetime" default:"8h"`
+	FlowTTL              time.Duration `mapstructure:"flow_ttl" description:"OIDC state lifetime" default:"5m"`
+	EncryptionKey        string        `mapstructure:"encryption_key" description:"base64 or raw 32-byte AES key"`
+	EncryptionKeyFile    string        `mapstructure:"encryption_key_file" description:"file containing the BFF encryption key; mutually exclusive with encryption_key" default:""`
+	LoginClientToken     string        `mapstructure:"login_client_token" description:"Zitadel login-client token used only by the server" default:""`
+	LoginClientTokenFile string        `mapstructure:"login_client_token_file" description:"file containing the Zitadel login-client token" default:""`
+	Scopes               []string      `mapstructure:"scopes" description:"OIDC scopes; defaults to openid profile email offline_access plus API audience"`
 }
 
 // Claims contains the token fields this API needs. Raw keeps provider-specific

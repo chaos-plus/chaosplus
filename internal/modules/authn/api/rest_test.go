@@ -28,11 +28,15 @@ type fakeWeb struct {
 	loggedOut bool
 }
 
-func (f *fakeWeb) Enabled() bool { return f.enabled }
+func (f *fakeWeb) Enabled() bool            { return f.enabled }
+func (f *fakeWeb) DirectLoginEnabled() bool { return f.enabled }
 func (f *fakeWeb) Begin(context.Context, string, string) (string, string, error) {
 	return "https://issuer/authorize", "state", f.err
 }
 func (f *fakeWeb) Callback(context.Context, string, string, string) (string, string, error) {
+	return "session", "http://app/", f.err
+}
+func (f *fakeWeb) Login(context.Context, string, string, string) (string, string, error) {
 	return "session", "http://app/", f.err
 }
 func (f *fakeWeb) Authenticate(context.Context, string, string) (*authnext.Claims, error) {
@@ -42,15 +46,16 @@ func (f *fakeWeb) Authenticate(context.Context, string, string) (*authnext.Claim
 	return &authnext.Claims{Issuer: "issuer", Subject: "u1", PreferredUsername: "alice", Email: "alice@example.com"}, nil
 }
 func (f *fakeWeb) ValidateCSRF(string, string, string, string) error { return f.csrfErr }
+func (f *fakeWeb) ValidateLoginOrigin(string) error                  { return f.csrfErr }
 func (f *fakeWeb) Logout(context.Context, string) string {
 	f.loggedOut = true
 	return "https://issuer/end_session?id_token_hint=idt"
 }
-func (f *fakeWeb) SessionCookie(value string) string                 { return "cp_session=" + value }
-func (f *fakeWeb) FlowCookie(value string) string                    { return "cp_session_oidc=" + value }
-func (f *fakeWeb) ClearCookie() string                               { return "cp_session=; Max-Age=0" }
-func (f *fakeWeb) FlowState(string) (string, error)                  { return "state", f.flowErr }
-func (f *fakeWeb) PostLogoutURL() string                             { return "http://app/login" }
+func (f *fakeWeb) SessionCookie(value string) string { return "cp_session=" + value }
+func (f *fakeWeb) FlowCookie(value string) string    { return "cp_session_oidc=" + value }
+func (f *fakeWeb) ClearCookie() string               { return "cp_session=; Max-Age=0" }
+func (f *fakeWeb) FlowState(string) (string, error)  { return "state", f.flowErr }
+func (f *fakeWeb) PostLogoutURL() string             { return "http://app/login" }
 
 func TestRegisterRESTMe(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -89,6 +94,9 @@ func TestRegisterRESTWebFlow(t *testing.T) {
 	assert.Equal(t, http.StatusFound, callback.Code, callback.Body.String())
 	assert.Equal(t, "http://app/", callback.Header().Get("Location"))
 	assert.Equal(t, http.StatusOK, api.Get("/authn/session", "Cookie: cp_session=session").Code)
+	login := api.Post("/authn/login", map[string]any{"login_name": "alice", "password": "secret"}, "Origin: http://app")
+	assert.Equal(t, http.StatusOK, login.Code, login.Body.String())
+	assert.Contains(t, login.Header().Get("Set-Cookie"), "cp_session=session")
 	logout := api.Post("/authn/logout", "Cookie: cp_session=session", "Origin: http://app")
 	assert.Equal(t, http.StatusOK, logout.Code, logout.Body.String())
 	assert.Contains(t, logout.Body.String(), `"logout_url":"https://issuer/end_session?id_token_hint=idt"`)
@@ -127,6 +135,13 @@ func TestRegisterRESTWebFlowErrors(t *testing.T) {
 		_, api := humatest.New(t)
 		RegisterREST(api, web, web)
 		assert.Equal(t, http.StatusForbidden, api.Post("/authn/logout").Code)
+		assert.Equal(t, http.StatusForbidden, api.Post("/authn/login", map[string]any{"login_name": "alice", "password": "secret"}).Code)
+	})
+	t.Run("additional verification", func(t *testing.T) {
+		web := &fakeWeb{enabled: true, err: authnext.ErrAdditionalVerification}
+		_, api := humatest.New(t)
+		RegisterREST(api, web, web)
+		assert.Equal(t, http.StatusConflict, api.Post("/authn/login", map[string]any{"login_name": "alice", "password": "secret"}, "Origin: http://app").Code)
 	})
 }
 

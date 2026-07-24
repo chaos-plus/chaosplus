@@ -17,3 +17,11 @@ var migrationsFS embed.FS
 func Migrate(ctx context.Context, db *bun.DB) error {
 	return goosex.Run(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_dlock")
 }
+
+func MigrateDown(ctx context.Context, db *bun.DB) error {
+	return goosex.Down(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_dlock")
+}
+
+func MigrateDownTo(ctx context.Context, db *bun.DB, version int64) error {
+	return goosex.DownTo(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_dlock", version)
+}

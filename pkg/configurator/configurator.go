@@ -1,6 +1,7 @@
 package configurator
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"reflect"
@@ -27,10 +28,19 @@ type sFlag struct {
 }
 
 type Flagger struct {
-	viper      *viper.Viper
-	flags      *pflag.FlagSet
-	mapkey     string
-	configFile *string
+	viper             *viper.Viper
+	flags             *pflag.FlagSet
+	mapkey            string
+	configFile        *string
+	defaultConfig     []byte
+	defaultConfigType string
+}
+
+// UseDefaultConfig installs a compiled-in base configuration. An explicit
+// config file, environment variables, and flags continue to override it.
+func (f *Flagger) UseDefaultConfig(data []byte, configType string) {
+	f.defaultConfig = append([]byte(nil), data...)
+	f.defaultConfigType = configType
 }
 
 func New() *Flagger {
@@ -176,7 +186,15 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 
 	vip.AddConfigPath("./")
 
-	err = vip.ReadInConfig()
+	if len(f.defaultConfig) > 0 {
+		vip.SetConfigType(f.defaultConfigType)
+		if err := vip.ReadConfig(bytes.NewReader(f.defaultConfig)); err != nil {
+			return err
+		}
+		err = vip.MergeInConfig()
+	} else {
+		err = vip.ReadInConfig()
+	}
 	if err != nil && explicitConfig {
 		return err
 	}

@@ -85,6 +85,11 @@ func ResolveConfig(cfg Config) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Web.EncryptionKey = key
+	loginToken, err := secretx.Resolve("authn.web.login_client_token", cfg.Web.LoginClientToken, cfg.Web.LoginClientTokenFile, 4096)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Web.LoginClientToken = loginToken
 	if cfg.ResourcesFile == "" {
 		return cfg, nil
 	}

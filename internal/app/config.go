@@ -36,6 +36,7 @@ type Migrations struct {
 }
 
 type BootstrapConfig struct {
+	Auto         bool                  `mapstructure:"auto" description:"provision external Zitadel/SpiceDB resources before server startup" default:"false"`
 	LockTimeout  time.Duration         `mapstructure:"lock_timeout" description:"maximum wait for the deployment advisory lock" default:"30s"`
 	Database     bunx.Datasource       `mapstructure:"database" group:"database"`
 	Zitadel      BootstrapZitadel      `mapstructure:"zitadel" group:"zitadel"`

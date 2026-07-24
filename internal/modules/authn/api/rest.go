@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -31,10 +32,13 @@ type Authenticator interface {
 
 type WebService interface {
 	Enabled() bool
+	DirectLoginEnabled() bool
 	Begin(context.Context, string, string) (string, string, error)
 	Callback(context.Context, string, string, string) (string, string, error)
+	Login(context.Context, string, string, string) (string, string, error)
 	Authenticate(context.Context, string, string) (*authnext.Claims, error)
 	ValidateCSRF(string, string, string, string) error
+	ValidateLoginOrigin(string) error
 	Logout(context.Context, string) string
 	SessionCookie(string) string
 	FlowCookie(string) string
@@ -61,6 +65,15 @@ type logoutInput struct {
 	Origin        string `header:"Origin" hidden:"true"`
 }
 
+type loginInput struct {
+	Origin string `header:"Origin" hidden:"true"`
+	Body   struct {
+		LoginName string `json:"login_name" minLength:"1" maxLength:"200"`
+		Password  string `json:"password" minLength:"1" maxLength:"200"`
+		ReturnURL string `json:"return_url,omitempty" maxLength:"2048"`
+	}
+}
+
 type redirectOutput struct {
 	Status    int    `status:""`
 	Location  string `header:"Location"`
@@ -74,6 +87,15 @@ type logoutData struct {
 type logoutOutput struct {
 	SetCookie string `header:"Set-Cookie"`
 	Body      respx.Envelope[logoutData]
+}
+
+type loginData struct {
+	ReturnURL string `json:"return_url"`
+}
+
+type loginOutput struct {
+	SetCookie string `header:"Set-Cookie"`
+	Body      respx.Envelope[loginData]
 }
 
 func RegisterREST(a huma.API, authenticator Authenticator, web WebService) {
@@ -122,6 +144,25 @@ func RegisterREST(a huma.API, authenticator Authenticator, web WebService) {
 		}
 		return &redirectOutput{Status: http.StatusFound, Location: returnURL, SetCookie: web.SessionCookie(sessionID)}, nil
 	})
+	if web.DirectLoginEnabled() {
+		authz.RegisterPublic(a, huma.Operation{OperationID: "authn-login", Method: http.MethodPost, Path: "/authn/login", Summary: "Log in with a Zitadel username and password", Tags: []string{"authn"}}, func(ctx context.Context, in *loginInput) (*loginOutput, error) {
+			if err := web.ValidateLoginOrigin(in.Origin); err != nil {
+				return nil, huma.Error403Forbidden("login_request_rejected")
+			}
+			sessionID, returnURL, err := web.Login(ctx, in.Body.LoginName, in.Body.Password, in.Body.ReturnURL)
+			if err != nil {
+				switch {
+				case errors.Is(err, authnext.ErrAdditionalVerification):
+					return nil, huma.Error409Conflict("additional_verification_required")
+				case errors.Is(err, authnext.ErrInvalidCredentials):
+					return nil, huma.Error401Unauthorized("invalid_login")
+				default:
+					return nil, huma.NewError(http.StatusBadGateway, "identity_provider_unavailable")
+				}
+			}
+			return &loginOutput{SetCookie: web.SessionCookie(sessionID), Body: respx.OK(ctx, loginData{ReturnURL: returnURL}).Body}, nil
+		})
+	}
 	authz.RegisterPublic(a, huma.Operation{OperationID: "authn-session", Method: http.MethodGet, Path: "/authn/session", Summary: "Return the browser session", Tags: []string{"authn"}}, func(ctx context.Context, in *meInput) (*respx.Body[meOutput], error) {
 		claims, err := web.Authenticate(ctx, in.Authorization, in.Cookie)
 		if err != nil {

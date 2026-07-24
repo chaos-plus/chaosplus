@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,4 +53,16 @@ func TestParseEnvironmentPrefixExactlyOnce(t *testing.T) {
 	var cfg config
 	require.NoError(t, flags.Parse(&cfg, "--"))
 	assert.Equal(t, "configured", cfg.AppleName)
+}
+
+func TestParseEmbeddedDefaultsAllowFileAndEnvironmentOverrides(t *testing.T) {
+	path := writeTemp(t, "name: from-file\ntimeout: 12s\n")
+	t.Setenv("TIMEOUT", "18s")
+	flagger := New()
+	flagger.UseConfigFileArgDefault()
+	flagger.UseDefaultConfig([]byte("name: embedded\ntimeout: 7s\n"), "yaml")
+	var cfg runtimeConfigSample
+	require.NoError(t, flagger.Parse(&cfg, "--config", path))
+	assert.Equal(t, "from-file", cfg.Name)
+	assert.Equal(t, 18*time.Second, cfg.Timeout)
 }

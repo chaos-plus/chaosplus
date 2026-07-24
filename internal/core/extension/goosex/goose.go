@@ -28,14 +28,50 @@ func ResolveDialect(dialect string) (goosev3.Dialect, string, error) {
 // module-private goose version table. Global registry is disabled so multiple
 // modules can run independently in one process.
 func Run(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string) error {
-	d, subdir, err := ResolveDialect(dialect)
+	provider, err := newProvider(db, fsys, dialect, tableName)
 	if err != nil {
 		return err
 	}
 
+	if _, err := provider.Up(ctx); err != nil {
+		return fmt.Errorf("goose: run migrations: %w", err)
+	}
+	return nil
+}
+
+// Down rolls back the most recently applied migration from one module.
+func Down(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string) error {
+	provider, err := newProvider(db, fsys, dialect, tableName)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		return fmt.Errorf("goose: rollback migration: %w", err)
+	}
+	return nil
+}
+
+// DownTo rolls a module back to version. The target migration remains applied.
+func DownTo(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string, version int64) error {
+	provider, err := newProvider(db, fsys, dialect, tableName)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.DownTo(ctx, version); err != nil {
+		return fmt.Errorf("goose: rollback migrations to %d: %w", version, err)
+	}
+	return nil
+}
+
+func newProvider(db *sql.DB, fsys fs.FS, dialect, tableName string) (*goosev3.Provider, error) {
+	d, subdir, err := ResolveDialect(dialect)
+	if err != nil {
+		return nil, err
+	}
+
 	subFS, err := fs.Sub(fsys, subdir)
 	if err != nil {
-		return fmt.Errorf("goose: resolve migrations fs: %w", err)
+		return nil, fmt.Errorf("goose: resolve migrations fs: %w", err)
 	}
 
 	provider, err := goosev3.NewProvider(d, db, subFS,
@@ -43,11 +79,7 @@ func Run(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string)
 		goosev3.WithDisableGlobalRegistry(true),
 	)
 	if err != nil {
-		return fmt.Errorf("goose: create provider: %w", err)
+		return nil, fmt.Errorf("goose: create provider: %w", err)
 	}
-
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("goose: run migrations: %w", err)
-	}
-	return nil
+	return provider, nil
 }

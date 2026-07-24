@@ -24,7 +24,78 @@ type identity struct {
 	Email       string
 }
 
-func Run(ctx context.Context, cfg app.Config) (runErr error) {
+// Migrate applies every pending embedded Goose migration. It is safe to call
+// before every server start; Goose records module versions and skips applied SQL.
+func Migrate(ctx context.Context, cfg app.Config) (runErr error) {
+	migrationDB, dialect, err := openMigrationDB(ctx, cfg.Bootstrap.Database)
+	if err != nil {
+		return err
+	}
+	defer migrationDB.Close()
+
+	lock, err := acquireAdvisoryLock(ctx, migrationDB, dialect, cfg.Bootstrap.LockTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, lock.Close(context.Background()))
+	}()
+
+	if err := migrate(ctx, migrationDB); err != nil {
+		return err
+	}
+	slog.Info("database migrations completed")
+	return nil
+}
+
+// Rollback rolls one module back by one migration, or to an explicit version.
+// Module selection is mandatory because each module owns a separate Goose table.
+func Rollback(ctx context.Context, cfg app.Config, module string, target *int64) (runErr error) {
+	migrationDB, dialect, err := openMigrationDB(ctx, cfg.Bootstrap.Database)
+	if err != nil {
+		return err
+	}
+	defer migrationDB.Close()
+
+	lock, err := acquireAdvisoryLock(ctx, migrationDB, dialect, cfg.Bootstrap.LockTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, lock.Close(context.Background()))
+	}()
+
+	down := func(one func(context.Context, *bun.DB) error, to func(context.Context, *bun.DB, int64) error) error {
+		if target == nil {
+			return one(ctx, migrationDB)
+		}
+		return to(ctx, migrationDB, *target)
+	}
+	switch module {
+	case "iam":
+		err = down(iam.MigrateDown, iam.MigrateDownTo)
+	case "wuid":
+		err = down(wuid.MigrateDown, wuid.MigrateDownTo)
+	case "dlock":
+		err = down(dlock.MigrateDown, dlock.MigrateDownTo)
+	default:
+		return fmt.Errorf("unknown migration module %q (want dlock, wuid, or iam)", module)
+	}
+	if err != nil {
+		return fmt.Errorf("rollback %s: %w", module, err)
+	}
+	targetValue := any("previous")
+	if target != nil {
+		targetValue = *target
+	}
+	slog.Info("database rollback completed", "module", module, "target", targetValue)
+	return nil
+}
+
+// Provision reconciles non-SQL deployment resources after migrations succeed.
+// It is separate from Migrate because Zitadel applications, SpiceDB schema and
+// the initial administrator do not share the SQL migration lifecycle.
+func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 	migrationDB, dialect, err := openMigrationDB(ctx, cfg.Bootstrap.Database)
 	if err != nil {
 		return err
@@ -45,9 +116,6 @@ func Run(ctx context.Context, cfg app.Config) (runErr error) {
 	}
 	defer runtimeDB.Close()
 
-	if err := migrate(ctx, migrationDB); err != nil {
-		return err
-	}
 	if err := assertRuntimeAccess(ctx, runtimeDB); err != nil {
 		return err
 	}
@@ -75,7 +143,7 @@ func Run(ctx context.Context, cfg app.Config) (runErr error) {
 			return fmt.Errorf("connect SpiceDB: %w", err)
 		}
 		defer spice.Close()
-		// Bootstrap owns schema rollout; apply_schema only controls API startup.
+		// Provisioning owns schema rollout; apply_schema only controls API startup.
 		if _, err := spice.WriteSchema(ctx, authz.GenerateSchema(authz.DefaultRegistry().All())); err != nil {
 			return fmt.Errorf("apply SpiceDB schema: %w", err)
 		}
@@ -104,7 +172,7 @@ func Run(ctx context.Context, cfg app.Config) (runErr error) {
 		}
 	}
 
-	slog.Info("production bootstrap completed")
+	slog.Info("deployment resources provisioned")
 	return nil
 }
 

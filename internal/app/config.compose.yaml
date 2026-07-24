@@ -10,7 +10,7 @@ grpc:
   port: 9090
 
 migrations:
-  auto: false
+  auto: true
 
 database:
   primary:
@@ -52,11 +52,13 @@ authn:
   clock_skew: 30s
   web:
     enabled: true
+    direct_login_enabled: true
     cookie_name: cp_session
     cookie_secure: false
     session_ttl: 8h
     flow_ttl: 5m
     encryption_key_file: /run/secrets/session_encryption_key
+    login_client_token_file: /var/lib/chaosplus/runtime/login-client.pat
 
 authz:
   spicedb:
@@ -73,6 +75,7 @@ authz:
     delivery_timeout: 10s
 
 bootstrap:
+  auto: true
   lock_timeout: 30s
   database:
     type: postgres

@@ -20,11 +20,11 @@ describe('api client', () => {
 			return new Response(JSON.stringify({ code: 0, data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
 		})
 		await Promise.all([
-			api.session(), api.logout(), api.members('alice'), api.member('u1'), api.createMember({ subject: 'u1', display_name: 'User', email: '', status: 'active' }), api.updateMember('u1', { status: 'disabled' }), api.memberRoles('u1'),
+			api.session(), api.login({ login_name: 'alice', password: 'secret', return_url: 'http://app/' }), api.logout(), api.members('alice'), api.member('u1'), api.createMember({ subject: 'u1', display_name: 'User', email: '', status: 'active' }), api.updateMember('u1', { status: 'disabled' }), api.memberRoles('u1'),
 			api.roles(), api.createRole({ name: 'Role', description: '' }), api.updateRole('r1', { name: 'Next' }), api.deleteRole('r1'), api.rolePermissions('r1'), api.grantPermission('r1', 'user_view'), api.revokePermission('r1', 'user_view'), api.roleMembers('r1'), api.addRoleMember('r1', 'u1'), api.removeRoleMember('r1', 'u1'),
 			api.permissions(), api.menus(), api.effectiveMenus(), api.createMenu({ label: 'Users', route: '/iam/users', sort_order: 0, status: 'active' }), api.updateMenu('m1', { label: 'People' }), api.deleteMenu('m1'),
 		])
-		expect(fetcher).toHaveBeenCalledTimes(23)
+		expect(fetcher).toHaveBeenCalledTimes(24)
 		const sessionHeaders = new Headers(fetcher.mock.calls[0][1]?.headers)
 		expect(sessionHeaders.has('X-Tenant-Id')).toBe(false)
 	})

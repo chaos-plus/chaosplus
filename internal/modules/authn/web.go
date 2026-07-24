@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -31,11 +32,13 @@ var (
 )
 
 type sessionRecord struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	IDToken      string    `json:"id_token,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	AbsoluteEnd  time.Time `json:"absolute_end"`
+	AccessToken         string    `json:"access_token"`
+	RefreshToken        string    `json:"refresh_token,omitempty"`
+	IDToken             string    `json:"id_token,omitempty"`
+	ZitadelSessionID    string    `json:"zitadel_session_id,omitempty"`
+	ZitadelSessionToken string    `json:"zitadel_session_token,omitempty"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	AbsoluteEnd         time.Time `json:"absolute_end"`
 }
 
 type flowRecord struct {
@@ -57,6 +60,37 @@ type discoveryDocument struct {
 	TokenEndpoint         string `json:"token_endpoint"`
 	EndSessionEndpoint    string `json:"end_session_endpoint"`
 	RevocationEndpoint    string `json:"revocation_endpoint"`
+}
+
+type zitadelSessionResponse struct {
+	SessionID    string `json:"sessionId"`
+	SessionToken string `json:"sessionToken"`
+}
+
+type zitadelSessionState struct {
+	Session struct {
+		Factors struct {
+			User struct {
+				ID             string `json:"id"`
+				LoginName      string `json:"loginName"`
+				OrganizationID string `json:"organizationId"`
+			} `json:"user"`
+			Password struct {
+				VerifiedAt string `json:"verifiedAt"`
+			} `json:"password"`
+		} `json:"factors"`
+	} `json:"session"`
+}
+
+type zitadelLoginSettings struct {
+	Settings struct {
+		ForceMFA          bool `json:"forceMfa"`
+		ForceMFALocalOnly bool `json:"forceMfaLocalOnly"`
+	} `json:"settings"`
+}
+
+type zitadelCallbackResponse struct {
+	CallbackURL string `json:"callbackUrl"`
 }
 
 type WebService struct {
@@ -87,6 +121,9 @@ func NewWebService(ctx context.Context, cfg authnext.Config, verifier *authnext.
 	}
 	if !slices.Contains(w.AllowedReturnURLs, w.PostLoginURL) {
 		return nil, fmt.Errorf("post_login_url must be in allowed_return_urls")
+	}
+	if w.DirectLoginEnabled && strings.TrimSpace(w.LoginClientToken) == "" {
+		return nil, fmt.Errorf("direct web login requires login_client_token")
 	}
 	if w.CookieName == "" {
 		w.CookieName = "cp_session"
@@ -125,6 +162,10 @@ func NewWebService(ctx context.Context, cfg authnext.Config, verifier *authnext.
 }
 
 func (s *WebService) Enabled() bool { return s != nil && s.web.Enabled }
+
+func (s *WebService) DirectLoginEnabled() bool {
+	return s.Enabled() && s.web.DirectLoginEnabled
+}
 
 func (s *WebService) Authenticate(ctx context.Context, authorization, cookieHeader string) (*authnext.Claims, error) {
 	if strings.TrimSpace(authorization) != "" {
@@ -165,6 +206,13 @@ func (s *WebService) ValidateCSRF(method, origin, cookieHeader, authorization st
 	if _, err := cookieValue(cookieHeader, s.web.CookieName); err != nil {
 		return nil
 	}
+	if origin == "" || !slices.Contains(s.web.AllowedOrigins, origin) {
+		return ErrCSRF
+	}
+	return nil
+}
+
+func (s *WebService) ValidateLoginOrigin(origin string) error {
 	if origin == "" || !slices.Contains(s.web.AllowedOrigins, origin) {
 		return ErrCSRF
 	}
@@ -248,6 +296,194 @@ func (s *WebService) Callback(ctx context.Context, code, state, flowCookie strin
 	return id, flow.ReturnURL, nil
 }
 
+// Login performs the browser-facing password step through Zitadel's Session
+// API, while completing the authorization-code flow entirely on the server.
+// The browser never handles the OIDC callback or any Zitadel token.
+func (s *WebService) Login(ctx context.Context, loginName, password, returnURL string) (string, string, error) {
+	if !s.DirectLoginEnabled() {
+		return "", "", authnext.ErrDisabled
+	}
+	loginName = strings.TrimSpace(loginName)
+	if loginName == "" || password == "" {
+		return "", "", authnext.ErrInvalidCredentials
+	}
+	authorizationURL, state, err := s.Begin(ctx, "login", returnURL)
+	if err != nil {
+		return "", "", err
+	}
+	defer s.redis.Del(context.Background(), flowKey(state))
+
+	authRequestID, err := s.initializeAuthRequest(ctx, authorizationURL)
+	if err != nil {
+		return "", "", err
+	}
+	zitadelSession, err := s.createPasswordSession(ctx, loginName, password)
+	if err != nil {
+		return "", "", err
+	}
+	keepZitadelSession := false
+	defer func() {
+		if !keepZitadelSession {
+			s.deleteZitadelSession(context.Background(), zitadelSession.SessionID, zitadelSession.SessionToken)
+		}
+	}()
+
+	callbackURL, err := s.finalizeAuthRequest(ctx, authRequestID, zitadelSession)
+	if err != nil {
+		return "", "", err
+	}
+	callback, err := url.Parse(callbackURL)
+	if err != nil || !sameEndpoint(callback, s.web.RedirectURL) || callback.Query().Get("state") != state {
+		return "", "", ErrInvalidFlow
+	}
+	sessionID, resolvedReturnURL, err := s.Callback(ctx, callback.Query().Get("code"), state, state)
+	if err != nil {
+		return "", "", err
+	}
+	record, err := s.loadSession(ctx, sessionID)
+	if err != nil {
+		return "", "", err
+	}
+	record.ZitadelSessionID = zitadelSession.SessionID
+	record.ZitadelSessionToken = zitadelSession.SessionToken
+	remaining := record.AbsoluteEnd.Sub(s.now())
+	if remaining <= 0 || s.storeEncrypted(ctx, sessionKey(sessionID), record, remaining) != nil {
+		_ = s.redis.Del(ctx, sessionKey(sessionID)).Err()
+		return "", "", ErrInvalidSession
+	}
+	keepZitadelSession = true
+	return sessionID, resolvedReturnURL, nil
+}
+
+func (s *WebService) initializeAuthRequest(ctx context.Context, authorizationURL string) (string, error) {
+	client := *s.client
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authorizationURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("initialize oidc auth request: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode/100 != 3 {
+		return "", fmt.Errorf("initialize oidc auth request: status %d", resp.StatusCode)
+	}
+	location, err := resp.Location()
+	if err != nil {
+		return "", fmt.Errorf("initialize oidc auth request: %w", err)
+	}
+	requestID := location.Query().Get("authRequestID")
+	if requestID == "" {
+		requestID = location.Query().Get("authRequest")
+	}
+	if requestID == "" {
+		return "", fmt.Errorf("initialize oidc auth request: missing request id")
+	}
+	return requestID, nil
+}
+
+func (s *WebService) createPasswordSession(ctx context.Context, loginName, password string) (zitadelSessionResponse, error) {
+	payload := map[string]any{
+		"checks": map[string]any{
+			"user":     map[string]string{"loginName": loginName},
+			"password": map[string]string{"password": password},
+		},
+		"lifetime": fmt.Sprintf("%ds", max(1, int64(s.web.SessionTTL.Seconds()))),
+	}
+	var created zitadelSessionResponse
+	status, err := s.doZitadelJSON(ctx, http.MethodPost, "/v2/sessions", s.web.LoginClientToken, payload, &created)
+	if err != nil {
+		if status >= 400 && status < 500 {
+			return zitadelSessionResponse{}, authnext.ErrInvalidCredentials
+		}
+		return zitadelSessionResponse{}, err
+	}
+	if created.SessionID == "" || created.SessionToken == "" {
+		return zitadelSessionResponse{}, authnext.ErrInvalidCredentials
+	}
+
+	var state zitadelSessionState
+	status, err = s.doZitadelJSON(ctx, http.MethodGet, "/v2/sessions/"+url.PathEscape(created.SessionID), created.SessionToken, nil, &state)
+	if err != nil || status/100 != 2 || state.Session.Factors.User.ID == "" || state.Session.Factors.Password.VerifiedAt == "" {
+		s.deleteZitadelSession(context.Background(), created.SessionID, created.SessionToken)
+		return zitadelSessionResponse{}, authnext.ErrInvalidCredentials
+	}
+
+	settingsPath := "/v2/settings/login?ctx.orgId=" + url.QueryEscape(state.Session.Factors.User.OrganizationID)
+	var settings zitadelLoginSettings
+	if _, err := s.doZitadelJSON(ctx, http.MethodGet, settingsPath, s.web.LoginClientToken, nil, &settings); err != nil {
+		s.deleteZitadelSession(context.Background(), created.SessionID, created.SessionToken)
+		return zitadelSessionResponse{}, fmt.Errorf("read Zitadel login policy: %w", err)
+	}
+	if settings.Settings.ForceMFA || settings.Settings.ForceMFALocalOnly {
+		s.deleteZitadelSession(context.Background(), created.SessionID, created.SessionToken)
+		return zitadelSessionResponse{}, authnext.ErrAdditionalVerification
+	}
+	return created, nil
+}
+
+func (s *WebService) finalizeAuthRequest(ctx context.Context, authRequestID string, session zitadelSessionResponse) (string, error) {
+	payload := map[string]any{"session": map[string]string{"sessionId": session.SessionID, "sessionToken": session.SessionToken}}
+	var callback zitadelCallbackResponse
+	_, err := s.doZitadelJSON(ctx, http.MethodPost, "/v2/oidc/auth_requests/"+url.PathEscape(authRequestID), s.web.LoginClientToken, payload, &callback)
+	if err != nil {
+		return "", fmt.Errorf("finalize oidc auth request: %w", err)
+	}
+	if callback.CallbackURL == "" {
+		return "", ErrInvalidFlow
+	}
+	return callback.CallbackURL, nil
+}
+
+func (s *WebService) doZitadelJSON(ctx context.Context, method, requestPath, token string, payload, dst any) (int, error) {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return 0, err
+		}
+		body = strings.NewReader(string(data))
+	}
+	endpoint := strings.TrimRight(s.cfg.Issuer, "/") + requestPath
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("Zitadel API request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return resp.StatusCode, fmt.Errorf("Zitadel API request status %d", resp.StatusCode)
+	}
+	if dst == nil || resp.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return resp.StatusCode, nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(dst); err != nil {
+		return resp.StatusCode, err
+	}
+	return resp.StatusCode, nil
+}
+
+func sameEndpoint(callback *url.URL, configured string) bool {
+	expected, err := url.Parse(configured)
+	if err != nil || callback == nil {
+		return false
+	}
+	return callback.Scheme == expected.Scheme && callback.Host == expected.Host && path.Clean(callback.Path) == path.Clean(expected.Path)
+}
+
 // Logout destroys the local session, best-effort revokes the refresh token at
 // the IdP, and returns the RP-initiated logout URL the browser must visit so
 // Zitadel's own SSO session ends too. Falls back to PostLogoutURL when the IdP
@@ -265,6 +501,9 @@ func (s *WebService) Logout(ctx context.Context, cookieHeader string) string {
 	if record.RefreshToken != "" {
 		s.revokeToken(ctx, record.RefreshToken)
 	}
+	if record.ZitadelSessionID != "" && record.ZitadelSessionToken != "" {
+		s.deleteZitadelSession(ctx, record.ZitadelSessionID, record.ZitadelSessionToken)
+	}
 	if s.discovery.EndSessionEndpoint == "" || record.IDToken == "" {
 		return s.web.PostLogoutURL
 	}
@@ -273,6 +512,16 @@ func (s *WebService) Logout(ctx context.Context, cookieHeader string) string {
 		q.Set("post_logout_redirect_uri", s.web.PostLogoutURL)
 	}
 	return s.discovery.EndSessionEndpoint + "?" + q.Encode()
+}
+
+func (s *WebService) deleteZitadelSession(ctx context.Context, sessionID, sessionToken string) {
+	if sessionID == "" || sessionToken == "" {
+		return
+	}
+	payload := map[string]string{"sessionToken": sessionToken}
+	if _, err := s.doZitadelJSON(ctx, http.MethodDelete, "/v2/sessions/"+url.PathEscape(sessionID), sessionToken, payload, nil); err != nil {
+		slog.Warn("Zitadel session deletion failed", "err", err)
+	}
 }
 
 // revokeToken is best-effort: a failed revocation must not block logout, but it

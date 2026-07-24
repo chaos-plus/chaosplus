@@ -52,6 +52,24 @@ func TestRun_AppliesMigrationsAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, 1, n, "second Run should be idempotent")
 }
 
+func TestDownAndDownTo(t *testing.T) {
+	ctx := context.Background()
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	root := migrationsRoot(t)
+
+	require.NoError(t, Run(ctx, db.DB, root, "sqlite", "goose_widgets_down_test"))
+	require.NoError(t, Down(ctx, db.DB, root, "sqlite", "goose_widgets_down_test"))
+	_, err = db.DB.ExecContext(ctx, `INSERT INTO widgets (id, name) VALUES (1, 'gone')`)
+	assert.Error(t, err)
+
+	require.NoError(t, Run(ctx, db.DB, root, "sqlite", "goose_widgets_down_test"))
+	require.NoError(t, DownTo(ctx, db.DB, root, "sqlite", "goose_widgets_down_test", 0))
+	_, err = db.DB.ExecContext(ctx, `INSERT INTO widgets (id, name) VALUES (2, 'gone')`)
+	assert.Error(t, err)
+}
+
 func TestRun_UnsupportedDialect(t *testing.T) {
 	ctx := context.Background()
 

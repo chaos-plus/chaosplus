@@ -29,6 +29,7 @@ async function request<T>(path: string, init: RequestInit = {}, tenant = true): 
 
 export const api = {
   session: () => request<Session>('/authn/session', {}, false),
+  login: (body: { login_name: string; password: string; return_url: string }) => request<{ return_url: string }>('/authn/login', { method: 'POST', body: JSON.stringify(body) }, false),
   logout: () => request<{ logout_url: string }>('/authn/logout', { method: 'POST' }, false),
   members: (search = '') => request<Member[]>(`/iam/members?limit=200&search=${encodeURIComponent(search)}`),
   member: (subject: string) => request<Member>(`/iam/members/${encodeURIComponent(subject)}`),

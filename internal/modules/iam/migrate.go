@@ -17,6 +17,14 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	return goosex.Run(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_iam")
 }
 
+func MigrateDown(ctx context.Context, db *bun.DB) error {
+	return goosex.Down(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_iam")
+}
+
+func MigrateDownTo(ctx context.Context, db *bun.DB, version int64) error {
+	return goosex.DownTo(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_iam", version)
+}
+
 // AssertMigrated fails startup before serving traffic when migrations are
 // delegated to the production bootstrap job but its IAM schema is unavailable.
 func AssertMigrated(ctx context.Context, db *bun.DB) error {

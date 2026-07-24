@@ -131,7 +131,7 @@ services:
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_FIRST_ADMIN_PASSWORD:?run init-secrets first}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "true"
       ZITADEL_FIRSTINSTANCE_MACHINEKEYPATH: /zitadel/bootstrap/chaosplus-machine-key.json
-      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: chaosplus-bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: chaosplus-deployer
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Chaosplus Bootstrap
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_TYPE: "1"
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_EXPIRATIONDATE: ${ZITADEL_MACHINE_KEY_EXPIRATION}
@@ -156,9 +156,10 @@ services:
     image: ${ALPINE_IMAGE}
     restart: "no"
     user: "0"
-    command: [sh, -c, "chown -R 10001:10001 /zitadel/bootstrap && chmod 0750 /zitadel/bootstrap && chmod 0640 /zitadel/bootstrap/chaosplus-machine-key.json /zitadel/bootstrap/login-client.pat"]
+    command: [sh, -c, "chown -R 10001:10001 /zitadel/bootstrap && chmod 0750 /zitadel/bootstrap && chmod 0640 /zitadel/bootstrap/chaosplus-machine-key.json /zitadel/bootstrap/login-client.pat && cp /zitadel/bootstrap/login-client.pat /var/lib/chaosplus/runtime/login-client.pat.tmp && chown 10001:10001 /var/lib/chaosplus/runtime/login-client.pat.tmp && chmod 0400 /var/lib/chaosplus/runtime/login-client.pat.tmp && mv /var/lib/chaosplus/runtime/login-client.pat.tmp /var/lib/chaosplus/runtime/login-client.pat"]
     volumes:
       - zitadel-bootstrap:/zitadel/bootstrap
+      - chaosplus-runtime:/var/lib/chaosplus/runtime
     depends_on:
       zitadel-setup:
         condition: service_completed_successfully
@@ -234,21 +235,20 @@ services:
       - chaosplus-runtime:/var/lib/chaosplus/runtime
     networks: [chaosplus]
 
-  bootstrap:
+  chaosplus:
     build:
       context: ../..
       dockerfile: Dockerfile
-    image: chaosplus-api:local
+    image: chaosplus:local
     pull_policy: never
-    restart: "no"
-    entrypoint: [/usr/local/bin/chaosplus-bootstrap]
-    command: [-c, /etc/chaosplus/config.yaml]
-    environment: &chaosplus-environment
+    restart: unless-stopped
+    environment:
+      CHAOSPLUS_CONFIG_PRESET: compose
       AUTHN_ISSUER: ${ZITADEL_URL}
       AUTHN_WEB_REDIRECT_URL: ${APP_URL}/authn/oidc/callback
       AUTHN_WEB_POST_LOGIN_URL: ${APP_URL}
       AUTHN_WEB_POST_LOGOUT_URL: ${APP_URL}/login
-      AUTHN_WEB_ALLOWED_RETURN_URLS: ${APP_URL},${APP_URL}/
+      AUTHN_WEB_ALLOWED_RETURN_URLS: ${APP_URL},${APP_URL}/,${APP_URL}/iam/users,${APP_URL}/iam/roles,${APP_URL}/iam/menus
       AUTHN_WEB_ALLOWED_ORIGINS: ${APP_URL}
       BOOTSTRAP_ZITADEL_REDIRECT_URIS: ${APP_URL}/authn/oidc/callback
       BOOTSTRAP_ZITADEL_POST_LOGOUT_URIS: ${APP_URL}/login,${APP_URL}
@@ -256,7 +256,6 @@ services:
       BOOTSTRAP_INITIAL_ADMIN_TENANT_ID: ${INITIAL_TENANT_ID}
       BOOTSTRAP_INITIAL_ADMIN_LOGIN_NAME: ${ZITADEL_FIRST_ADMIN_LOGIN}
     volumes:
-      - ./chaosplus.yaml:/etc/chaosplus/config.yaml:ro
       - zitadel-bootstrap:/var/lib/zitadel/bootstrap:ro
       - chaosplus-runtime:/var/lib/chaosplus/runtime
     secrets:
@@ -278,35 +277,14 @@ services:
         condition: service_completed_successfully
       runtime-permissions:
         condition: service_completed_successfully
-    networks: [chaosplus]
-
-  api:
-    image: chaosplus-api:local
-    pull_policy: never
-    restart: unless-stopped
-    command: [-c, /etc/chaosplus/config.yaml]
-    environment:
-      <<: *chaosplus-environment
-      BOOTSTRAP_ZITADEL_ENABLED: "false"
-    volumes:
-      - ./chaosplus.yaml:/etc/chaosplus/config.yaml:ro
-      - chaosplus-runtime:/var/lib/chaosplus/runtime:ro
-    secrets:
-      - chaosplus_runtime_dsn
-      - redis_password
-      - spicedb_token
-      - session_encryption_key
+      redis:
+        condition: service_healthy
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/openapi.json]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 10s
-    depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
     networks: [chaosplus]
 
   web:
@@ -325,7 +303,7 @@ services:
       timeout: 5s
       retries: 20
     depends_on:
-      api:
+      chaosplus:
         condition: service_healthy
       zitadel-login:
         condition: service_healthy
