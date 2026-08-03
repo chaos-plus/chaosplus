@@ -3,11 +3,15 @@ package interpreter
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"sync"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
+
+const defaultWASMMemoryPages = 256 // 16MiB
 
 func init() { registry.add(EngineWasm) }
 
@@ -26,18 +30,77 @@ type wasmRuntime struct {
 	mod api.Module
 }
 
-func newWasmRuntime(wasmBytes []byte) (Runtime, error) {
+func newWasmRuntime(wasmBytes []byte, memoryPages uint32) (Runtime, error) {
 	if len(wasmBytes) == 0 {
 		return nil, fmt.Errorf("interpreter/wasm: module bytes are required (use WithWASM)")
 	}
+	if memoryPages == 0 {
+		memoryPages = defaultWASMMemoryPages
+	}
 	ctx := context.Background()
-	rt := wazero.NewRuntime(ctx)
-	mod, err := rt.Instantiate(ctx, wasmBytes)
+	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithMemoryLimitPages(memoryPages).WithCloseOnContextDone(true))
+	compiled, err := rt.CompileModule(ctx, wasmBytes)
+	if err != nil {
+		_ = rt.Close(ctx)
+		return nil, fmt.Errorf("interpreter/wasm: compile module: %w", err)
+	}
+	defer compiled.Close(ctx)
+	mod, err := rt.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithStartFunctions())
 	if err != nil {
 		_ = rt.Close(ctx)
 		return nil, fmt.Errorf("interpreter/wasm: instantiate module: %w", err)
 	}
 	return &wasmRuntime{rt: rt, mod: mod}, nil
+}
+
+func (r *wasmRuntime) CallBytes(ctx context.Context, fn string, input []byte, maxOutput uint32) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if maxOutput == 0 {
+		return nil, fmt.Errorf("interpreter/wasm: max output must be positive")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	alloc := r.mod.ExportedFunction("alloc")
+	hook := r.mod.ExportedFunction(fn)
+	if alloc == nil || hook == nil || r.mod.Memory() == nil {
+		return nil, fmt.Errorf("interpreter/wasm: byte ABI requires memory, alloc and %q exports: %w", fn, ErrNotFound)
+	}
+	allocated, err := alloc.Call(ctx, uint64(len(input)))
+	if err != nil || len(allocated) != 1 {
+		return nil, fmt.Errorf("interpreter/wasm: allocate input: %w", err)
+	}
+	if uint64(len(input)) > math.MaxUint32 {
+		return nil, fmt.Errorf("interpreter/wasm: input exceeds 32-bit guest ABI")
+	}
+	inputPtr := api.DecodeU32(allocated[0])
+	if ok := r.mod.Memory().Write(inputPtr, input); !ok {
+		return nil, fmt.Errorf("interpreter/wasm: input exceeds guest memory")
+	}
+	inputLen := api.DecodeU32(uint64(len(input)))
+	result, err := hook.Call(ctx, uint64(inputPtr), uint64(inputLen))
+	r.deallocate(ctx, inputPtr, inputLen)
+	if err != nil || len(result) != 1 {
+		return nil, fmt.Errorf("interpreter/wasm: call %q: %w", fn, err)
+	}
+	outputPtr, outputLen := api.DecodeU32(result[0]>>32), api.DecodeU32(result[0])
+	if outputLen > maxOutput {
+		return nil, fmt.Errorf("interpreter/wasm: output is %d bytes, limit is %d", outputLen, maxOutput)
+	}
+	output, ok := r.mod.Memory().Read(outputPtr, outputLen)
+	if !ok {
+		return nil, fmt.Errorf("interpreter/wasm: output exceeds guest memory")
+	}
+	copyOfOutput := append([]byte(nil), output...)
+	r.deallocate(ctx, outputPtr, outputLen)
+	return copyOfOutput, nil
+}
+
+func (r *wasmRuntime) deallocate(ctx context.Context, ptr, size uint32) {
+	if dealloc := r.mod.ExportedFunction("dealloc"); dealloc != nil {
+		_, _ = dealloc.Call(ctx, uint64(ptr), uint64(size))
+	}
 }
 
 func (r *wasmRuntime) Name() string { return EngineWasm }
@@ -98,7 +161,7 @@ func encodeWasmValue(t api.ValueType, v any) (uint64, error) {
 	switch t {
 	case api.ValueTypeI32:
 		n, ok := toInt64(v)
-		if !ok {
+		if !ok || n < math.MinInt32 || n > math.MaxInt32 {
 			return 0, fmt.Errorf("expected integer for i32, got %T", v)
 		}
 		return api.EncodeI32(int32(n)), nil
@@ -165,6 +228,9 @@ func toInt64(v any) (int64, bool) {
 	case int64:
 		return x, true
 	case uint:
+		if uint64(x) > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(x), true
 	case uint8:
 		return int64(x), true
@@ -173,16 +239,25 @@ func toInt64(v any) (int64, bool) {
 	case uint32:
 		return int64(x), true
 	case uint64:
+		if x > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(x), true
 	case float32:
-		return int64(x), true
+		return finiteInteger(float64(x))
 	case float64:
-		return int64(x), true
+		return finiteInteger(x)
 	case string:
-		var n int64
-		if _, err := fmt.Sscanf(x, "%d", &n); err == nil {
+		if n, err := strconv.ParseInt(x, 10, 64); err == nil {
 			return n, true
 		}
 	}
 	return 0, false
+}
+
+func finiteInteger(value float64) (int64, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < math.MinInt64 || value >= -math.MinInt64 || math.Trunc(value) != value {
+		return 0, false
+	}
+	return int64(value), true
 }

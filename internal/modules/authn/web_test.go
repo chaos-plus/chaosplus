@@ -2,536 +2,796 @@ package authn
 
 import (
 	"context"
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"math/big"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/chaos-plus/chaosplus/internal/modules/iam"
+	"github.com/chaos-plus/chaosplus/internal/modules/identity"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/uptrace/bun"
 )
 
-type oidcHarness struct {
-	server          *httptest.Server
-	key             *rsa.PrivateKey
-	clientID        string
-	audience        string
-	nonce           string
-	challenge       string
-	refreshCalls    atomic.Int32
-	revokeCalls     atomic.Int32
-	revokedToken    string
-	revokeStatus    int
-	badNonce        bool
-	refreshDelay    time.Duration
-	tokenStatus     int
-	badTokenJSON    bool
-	incompleteToken bool
-	directState     string
-	directMFA       bool
-	directDeleted   atomic.Bool
-	mu              sync.Mutex
-}
-
-func newOIDCHarness(t *testing.T) *oidcHarness {
+func newLocalService(t *testing.T) (*WebService, string) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	db, err := bunxtest.Memory()
 	require.NoError(t, err)
-	h := &oidcHarness{key: key, clientID: "web-client", audience: "api-audience"}
-	h.server = httptest.NewServer(http.HandlerFunc(h.serveHTTP))
-	t.Cleanup(h.server.Close)
-	return h
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(context.Background(), db))
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	cfg := authnext.Config{
+		Enabled: true, Issuer: "https://iam.example", Audience: []string{"api"},
+		SigningKey: base64.RawStdEncoding.EncodeToString(seed), AccessTokenTTL: time.Minute,
+		MFA:     authnext.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
+		Passkey: authnext.PasskeyConfig{Enabled: true, RPID: "app.example", DisplayName: "Chaosplus", Origins: []string{"https://app.example"}},
+		Web:     authnext.WebConfig{Enabled: true, CookieName: "cp_session", SessionTTL: time.Hour, IdleTTL: 10 * time.Minute, PostLoginURL: "https://app.example/", PostLogoutURL: "https://app.example/login", AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"}, CookieSecure: true},
+	}
+	service, err := NewWebService(cfg, db)
+	require.NoError(t, err)
+	principalID, err := EnsureBootstrapPrincipal(context.Background(), db, BootstrapPrincipal{LoginName: "Admin", Password: "correct horse battery staple", DisplayName: "Administrator", Email: "admin@example.com"})
+	require.NoError(t, err)
+	return service, principalID
 }
 
-func (h *oidcHarness) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/.well-known/openid-configuration":
-		_ = json.NewEncoder(w).Encode(map[string]string{"authorization_endpoint": h.server.URL + "/authorize", "token_endpoint": h.server.URL + "/token", "jwks_uri": h.server.URL + "/jwks", "end_session_endpoint": h.server.URL + "/end_session", "revocation_endpoint": h.server.URL + "/revoke"})
-	case "/revoke":
-		_ = r.ParseForm()
-		h.mu.Lock()
-		h.revokedToken = r.Form.Get("token")
-		h.mu.Unlock()
-		h.revokeCalls.Add(1)
-		if h.revokeStatus != 0 {
-			http.Error(w, "revoke failed", h.revokeStatus)
-		}
-	case "/jwks":
-		e := big.NewInt(int64(h.key.PublicKey.E)).Bytes()
-		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "test-key", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(h.key.PublicKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(e)}}})
-	case "/authorize":
-		h.nonce = r.URL.Query().Get("nonce")
-		h.challenge = r.URL.Query().Get("code_challenge")
-		h.directState = r.URL.Query().Get("state")
-		http.Redirect(w, r, h.server.URL+"/ui/login/login?authRequestID=oidc-direct", http.StatusFound)
-	case "/v2/sessions":
-		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer login-client-token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		var payload struct {
-			Checks struct {
-				User struct {
-					LoginName string `json:"loginName"`
-				} `json:"user"`
-				Password struct {
-					Password string `json:"password"`
-				} `json:"password"`
-			} `json:"checks"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		if payload.Checks.User.LoginName != "alice" || payload.Checks.Password.Password != "correct-password" {
-			http.Error(w, "invalid credentials", http.StatusBadRequest)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"sessionId": "direct-session", "sessionToken": "direct-token"})
-	case "/v2/sessions/direct-session":
-		if r.Method == http.MethodDelete {
-			h.directDeleted.Store(true)
-			_ = json.NewEncoder(w).Encode(map[string]any{"details": map[string]string{"sequence": "1"}})
-			return
-		}
-		if r.Header.Get("Authorization") != "Bearer direct-token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"session": map[string]any{"factors": map[string]any{"user": map[string]string{"id": "user-1", "loginName": "alice", "organizationId": "org-1"}, "password": map[string]string{"verifiedAt": time.Now().UTC().Format(time.RFC3339)}}}})
-	case "/v2/settings/login":
-		if r.Header.Get("Authorization") != "Bearer login-client-token" || r.URL.Query().Get("ctx.orgId") != "org-1" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"settings": map[string]bool{"forceMfa": h.directMFA}})
-	case "/v2/oidc/auth_requests/oidc-direct":
-		if r.Header.Get("Authorization") != "Bearer login-client-token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		callback := "http://127.0.0.1/callback?code=direct-code&state=" + url.QueryEscape(h.directState)
-		_ = json.NewEncoder(w).Encode(map[string]string{"callbackUrl": callback})
-	case "/token":
-		if h.tokenStatus != 0 {
-			http.Error(w, "token failed", h.tokenStatus)
-			return
-		}
-		if h.badTokenJSON {
-			_, _ = w.Write([]byte("{"))
-			return
-		}
-		if h.incompleteToken {
-			_ = json.NewEncoder(w).Encode(tokenResponse{})
-			return
-		}
-		_ = r.ParseForm()
-		if r.Form.Get("client_id") != h.clientID {
-			http.Error(w, "bad client", http.StatusBadRequest)
-			return
-		}
-		if r.Form.Get("grant_type") == "authorization_code" {
-			challenge := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
-			if base64.RawURLEncoding.EncodeToString(challenge[:]) != h.challenge {
-				http.Error(w, "bad verifier", http.StatusBadRequest)
-				return
-			}
+func TestLocalLoginSessionLogout(t *testing.T) {
+	service, principalID := newLocalService(t)
+	ctx := context.Background()
+	token, returnURL, err := service.Login(ctx, " ADMIN ", "correct horse battery staple", "")
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example/", returnURL)
+	cookie := service.SessionCookie(token)
+	assert.Contains(t, cookie, "HttpOnly")
+	assert.Contains(t, cookie, "Secure")
+	claims, err := service.Authenticate(ctx, "", cookie)
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.Subject)
+	assert.Equal(t, "admin", claims.PreferredUsername)
+	assert.Equal(t, "admin@example.com", claims.Email)
+	assert.True(t, claims.EmailVerified)
+	assert.Equal(t, 1, claims.ACR)
+	assert.Equal(t, []string{"pwd"}, claims.AMR)
+	assert.False(t, claims.AuthTime.IsZero())
+	assert.Equal(t, "https://app.example/login", service.Logout(ctx, cookie))
+	_, err = service.Authenticate(ctx, "", cookie)
+	assert.ErrorIs(t, err, ErrInvalidSession)
+}
+
+func TestLocalAccessToken(t *testing.T) {
+	service, principalID := newLocalService(t)
+	token, expires, err := service.IssueAccessToken(context.Background(), principalID, "api", "openid profile")
+	require.NoError(t, err)
+	assert.Equal(t, int64(60), expires)
+	claims, err := service.Authenticate(context.Background(), "Bearer "+token, "")
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.Subject)
+	assert.True(t, claims.EmailVerified)
+	assert.Equal(t, 1, claims.ACR)
+	assert.Equal(t, []string{"pwd"}, claims.AMR)
+	assert.False(t, claims.AuthTime.IsZero())
+	assert.NotEmpty(t, service.JWKS()["keys"])
+	_, err = service.Authenticate(context.Background(), "Bearer "+token+"x", "")
+	assert.Error(t, err)
+}
+
+func TestSessionAndPasswordSecurityCenter(t *testing.T) {
+	service, principalID := newLocalService(t)
+	first, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	second, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	firstCookie := service.SessionCookie(first)
+	secondCookie := service.SessionCookie(second)
+
+	sessions, err := service.ListSessions(t.Context(), "", firstCookie)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	var other string
+	for _, session := range sessions {
+		if session.Current {
+			assert.Equal(t, tokenHash(first), session.ID)
 		} else {
-			h.refreshCalls.Add(1)
-			time.Sleep(h.refreshDelay)
-			if r.Form.Get("refresh_token") == "" {
-				http.Error(w, "missing refresh", http.StatusBadRequest)
-				return
-			}
+			other = session.ID
 		}
-		nonce := h.nonce
-		if h.badNonce {
-			nonce = "wrong"
-		}
-		now := time.Now()
-		_ = json.NewEncoder(w).Encode(tokenResponse{
-			AccessToken:  h.jwt(map[string]any{"iss": h.server.URL, "sub": "user-1", "aud": h.audience, "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "preferred_username": "acceptance"}),
-			IDToken:      h.jwt(map[string]any{"iss": h.server.URL, "sub": "user-1", "aud": h.clientID, "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nonce": nonce}),
-			RefreshToken: "refresh-rotated", ExpiresIn: 3600, TokenType: "Bearer",
-		})
-	default:
-		http.NotFound(w, r)
 	}
-}
-
-func (h *oidcHarness) jwt(claims map[string]any) string {
-	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "test-key", "typ": "JWT"})
-	payload, _ := json.Marshal(claims)
-	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
-	digest := sha256.Sum256([]byte(unsigned))
-	signature, _ := rsa.SignPKCS1v15(rand.Reader, h.key, crypto.SHA256, digest[:])
-	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature)
-}
-
-func newWebFixture(t *testing.T) (*WebService, *oidcHarness, *miniredis.Miniredis) {
-	t.Helper()
-	h := newOIDCHarness(t)
-	mr := miniredis.RunT(t)
-	store := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = store.Close() })
-	cfg := authnext.Config{Enabled: true, Issuer: h.server.URL, Audience: []string{h.audience}, JWKSURL: h.server.URL + "/jwks", ClockSkew: time.Millisecond, Web: authnext.WebConfig{
-		Enabled: true, ClientID: h.clientID, RedirectURL: "http://127.0.0.1/callback", PostLoginURL: "http://127.0.0.1/", PostLogoutURL: "http://127.0.0.1/login",
-		AllowedReturnURLs: []string{"http://127.0.0.1/", "http://127.0.0.1/iam/users"}, AllowedOrigins: []string{"http://127.0.0.1"}, CookieName: "cp_session", SessionTTL: time.Hour, FlowTTL: time.Minute,
-		EncryptionKey: "0123456789abcdef0123456789abcdef",
-	}}
-	verifier, err := authnext.NewVerifier(cfg)
-	require.NoError(t, err)
-	web, err := NewWebService(context.Background(), cfg, verifier, store)
-	require.NoError(t, err)
-	return web, h, mr
-}
-
-func beginFlow(t *testing.T, web *WebService, h *oidcHarness, mode string) (string, string) {
-	t.Helper()
-	location, state, err := web.Begin(context.Background(), mode, "http://127.0.0.1/iam/users")
-	require.NoError(t, err)
-	parsed, err := url.Parse(location)
-	require.NoError(t, err)
-	h.nonce = parsed.Query().Get("nonce")
-	h.challenge = parsed.Query().Get("code_challenge")
-	assert.Equal(t, "S256", parsed.Query().Get("code_challenge_method"))
-	return state, parsed.Query().Get("prompt")
-}
-
-func TestWebOIDCFlowSessionAndLogout(t *testing.T) {
-	web, h, mr := newWebFixture(t)
-	state, prompt := beginFlow(t, web, h, "login")
-	assert.Equal(t, "login", prompt)
-	id, returnURL, err := web.Callback(context.Background(), "code-1", state, state)
-	require.NoError(t, err)
-	assert.Equal(t, "http://127.0.0.1/iam/users", returnURL)
-	assert.NotContains(t, mustValue(mr.Get(sessionKey(id))), "refresh-rotated")
-
-	claims, err := web.Authenticate(context.Background(), "", "cp_session="+id)
-	require.NoError(t, err)
-	assert.Equal(t, "user-1", claims.Subject)
-	assert.NoError(t, web.ValidateCSRF(http.MethodPost, "http://127.0.0.1", "cp_session="+id, ""))
-	assert.ErrorIs(t, web.ValidateCSRF(http.MethodPost, "http://evil.test", "cp_session="+id, ""), ErrCSRF)
-	assert.NoError(t, web.ValidateCSRF(http.MethodGet, "", "cp_session="+id, ""))
-	assert.NoError(t, web.ValidateCSRF(http.MethodPost, "", "cp_session="+id, "Bearer x"))
-	assert.Contains(t, web.SessionCookie(id), "HttpOnly")
-	assert.Contains(t, web.FlowCookie(state), "Path=/authn/oidc/callback")
-	assert.Equal(t, state, mustValue(web.FlowState(web.FlowCookie(state))))
-	assert.Contains(t, web.ClearCookie(), "Max-Age=0")
-	assert.Equal(t, "http://127.0.0.1/login", web.PostLogoutURL())
-
-	logoutURL := web.Logout(context.Background(), "cp_session="+id)
-	parsed, err := url.Parse(logoutURL)
-	require.NoError(t, err)
-	assert.Equal(t, "/end_session", parsed.Path)
-	assert.NotEmpty(t, parsed.Query().Get("id_token_hint"))
-	assert.Equal(t, h.clientID, parsed.Query().Get("client_id"))
-	assert.Equal(t, "http://127.0.0.1/login", parsed.Query().Get("post_logout_redirect_uri"))
-	assert.Equal(t, int32(1), h.revokeCalls.Load())
-	h.mu.Lock()
-	assert.Equal(t, "refresh-rotated", h.revokedToken)
-	h.mu.Unlock()
-	_, err = web.Authenticate(context.Background(), "", "cp_session="+id)
+	require.NotEmpty(t, other)
+	require.NoError(t, service.RevokeSession(t.Context(), "", firstCookie, other))
+	_, err = service.Authenticate(t.Context(), "", secondCookie)
 	assert.ErrorIs(t, err, ErrInvalidSession)
-	_, _, err = web.Callback(context.Background(), "code-1", state, state)
-	assert.ErrorIs(t, err, ErrInvalidFlow)
+	assert.ErrorIs(t, service.RevokeSession(t.Context(), "", firstCookie, "invalid"), ErrSessionNotFound)
 
-	assert.Equal(t, "http://127.0.0.1/login", web.Logout(context.Background(), "cp_session="+id), "missing session falls back to post-logout url")
-	assert.Equal(t, "http://127.0.0.1/login", web.Logout(context.Background(), ""), "missing cookie falls back to post-logout url")
-	assert.Equal(t, int32(1), h.revokeCalls.Load(), "no further revocation without a session")
-}
-
-func TestWebDirectLoginCompletesOIDCWithoutBrowserCallback(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	web.web.DirectLoginEnabled = true
-	web.web.LoginClientToken = "login-client-token"
-
-	id, returnURL, err := web.Login(context.Background(), "alice", "correct-password", "http://127.0.0.1/iam/users")
+	assert.ErrorIs(t, service.ChangePassword(t.Context(), "", firstCookie, "wrong", "new correct horse battery staple"), authnext.ErrInvalidCredentials)
+	assert.ErrorIs(t, service.ChangePassword(t.Context(), "", firstCookie, "correct horse battery staple", "short"), ErrInvalidPassword)
+	require.NoError(t, service.ChangePassword(t.Context(), "", firstCookie, "correct horse battery staple", "new correct horse battery staple"))
+	_, err = service.Authenticate(t.Context(), "", firstCookie)
 	require.NoError(t, err)
-	assert.Equal(t, "http://127.0.0.1/iam/users", returnURL)
-	claims, err := web.Authenticate(context.Background(), "", "cp_session="+id)
-	require.NoError(t, err)
-	assert.Equal(t, "user-1", claims.Subject)
-	assert.False(t, h.directDeleted.Load())
-
-	web.Logout(context.Background(), "cp_session="+id)
-	assert.True(t, h.directDeleted.Load())
-}
-
-func TestWebDirectLoginRejectsInvalidPasswordAndForcedMFA(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	web.web.DirectLoginEnabled = true
-	web.web.LoginClientToken = "login-client-token"
-	assert.ErrorIs(t, web.ValidateLoginOrigin("http://evil.test"), ErrCSRF)
-	assert.NoError(t, web.ValidateLoginOrigin("http://127.0.0.1"))
-
-	_, _, err := web.Login(context.Background(), "alice", "wrong", "http://127.0.0.1/")
+	_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
-	h.directMFA = true
-	_, _, err = web.Login(context.Background(), "alice", "correct-password", "http://127.0.0.1/")
+	third, _, err := service.Login(t.Context(), "admin", "new correct horse battery staple", "")
+	require.NoError(t, err)
+	assert.ErrorIs(t, service.ChangePassword(t.Context(), "", firstCookie, "new correct horse battery staple", "correct horse battery staple"), ErrPasswordReused)
+
+	require.NoError(t, service.LogoutAll(t.Context(), "", firstCookie))
+	_, err = service.Authenticate(t.Context(), "", firstCookie)
+	assert.ErrorIs(t, err, ErrInvalidSession)
+	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(third))
+	assert.ErrorIs(t, err, ErrInvalidSession)
+
+	auditService := auditmod.NewService(service.db)
+	for _, eventType := range []string{"session_revoke", "password_change", "logout_all"} {
+		events, total, auditErr := auditService.List(t.Context(), auditmod.Filter{TenantID: authnAuditTenant, EventType: eventType, Offset: 0, Limit: 50})
+		require.NoError(t, auditErr)
+		require.Equal(t, int64(1), total)
+		require.Equal(t, principalID, events[0].PrincipalID)
+	}
+	integrity, err := auditService.Verify(t.Context(), authnAuditTenant)
+	require.NoError(t, err)
+	assert.True(t, integrity.Valid)
+}
+
+func TestPasswordHistoryRetainsPolicyWindow(t *testing.T) {
+	service, principalID := newLocalService(t)
+	token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	cookie := service.SessionCookie(token)
+	passwords := []string{
+		"security password version 01", "security password version 02", "security password version 03",
+		"security password version 04", "security password version 05", "security password version 06",
+		"security password version 07",
+	}
+	current := "correct horse battery staple"
+	for _, next := range passwords {
+		require.NoError(t, service.ChangePassword(t.Context(), "", cookie, current, next))
+		current = next
+	}
+	count, err := service.db.NewSelect().Model((*passwordHistoryRow)(nil)).Where("principal_id = ?", principalID).Count(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 5, count)
+	assert.ErrorIs(t, service.ChangePassword(t.Context(), "", cookie, current, passwords[1]), ErrPasswordReused)
+	require.NoError(t, service.ChangePassword(t.Context(), "", cookie, current, passwords[0]))
+}
+
+func TestDisabledPrincipalInvalidatesBearerToken(t *testing.T) {
+	service, principalID := newLocalService(t)
+	token, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	require.NoError(t, err)
+	_, err = service.db.NewUpdate().Table("iam_principals").Set("status = 'disabled'").Where("id = ?", principalID).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+
+	deletedService, deletedPrincipalID := newLocalService(t)
+	deletedToken, _, err := deletedService.IssueAccessToken(t.Context(), deletedPrincipalID, "api", "openid")
+	require.NoError(t, err)
+	_, err = deletedService.db.NewDelete().Table("iam_principals").Where("id = ?", deletedPrincipalID).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = deletedService.Authenticate(t.Context(), "Bearer "+deletedToken, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+
+	serviceToken, _, err := service.IssueSubjectToken("service-account", "api", "jobs.read", "Worker", "")
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+serviceToken, "")
+	assert.NoError(t, err)
+}
+
+func TestLocalLoginSecurity(t *testing.T) {
+	service, _ := newLocalService(t)
+	for range 5 {
+		_, _, err := service.Login(context.Background(), "admin", "wrong password", "")
+		assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+	}
+	_, _, err := service.Login(context.Background(), "admin", "correct horse battery staple", "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+	_, _, err = service.Login(context.Background(), "missing", "wrong password", "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+	assert.ErrorIs(t, service.ValidateLoginOrigin("https://evil.example"), ErrCSRF)
+	assert.NoError(t, service.ValidateLoginOrigin("https://app.example"))
+}
+
+func TestLocalServiceValidation(t *testing.T) {
+	_, err := NewWebService(authnext.Config{Enabled: true}, nil)
+	assert.Error(t, err)
+	service, err := NewWebService(authnext.Config{}, nil)
+	require.NoError(t, err)
+	assert.False(t, service.Enabled())
+}
+
+func TestWebSessionMetadataAndCSRF(t *testing.T) {
+	service, _ := newLocalService(t)
+	assert.Equal(t, "cp_session", service.SessionCookieName())
+	assert.Equal(t, "https://iam.example", service.Issuer())
+	assert.Equal(t, "https://app.example/login", service.PostLogoutURL())
+	assert.Contains(t, service.ClearCookie(), "Max-Age=0")
+
+	assert.NoError(t, service.ValidateCSRF(http.MethodGet, "", "", ""))
+	assert.NoError(t, service.ValidateCSRF(http.MethodPost, "", "", "Bearer token"))
+	assert.NoError(t, service.ValidateCSRF(http.MethodPost, "", "", ""))
+	assert.ErrorIs(t, service.ValidateCSRF(http.MethodPost, "https://evil.example", "cp_session=value", ""), ErrCSRF)
+	assert.NoError(t, service.ValidateCSRF(http.MethodPost, "https://app.example", "cp_session=value", ""))
+	assert.Equal(t, "https://app.example/login", service.Logout(t.Context(), "invalid cookie"))
+}
+
+func TestSubjectAndIDTokenVariants(t *testing.T) {
+	service, principalID := newLocalService(t)
+	token, expires, err := service.IssueSubjectToken("service-account", "", "jobs.read", "Worker", "worker@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, int64(60), expires)
+	claims, err := service.Authenticate(t.Context(), "Bearer "+token, "")
+	require.NoError(t, err)
+	assert.Equal(t, "service-account", claims.Subject)
+	assert.Equal(t, authnext.SubjectTypeService, claims.SubjectType)
+	assert.Equal(t, []string{"api"}, claims.Audience)
+
+	tenantToken, _, err := service.IssueTenantSubjectToken(t.Context(), "service-account", "tenant", "api", "jobs.write", "Worker", "")
+	require.NoError(t, err)
+	claims, err = service.Authenticate(t.Context(), "Bearer "+tenantToken, "")
+	require.NoError(t, err)
+	assert.Equal(t, "tenant", claims.OrganizationID)
+
+	idToken, err := service.IssueIDToken(t.Context(), principalID, "browser", "nonce")
+	require.NoError(t, err)
+	idTokenParts := strings.Split(idToken, ".")
+	require.Len(t, idTokenParts, 3)
+	idTokenPayload, err := base64.RawURLEncoding.DecodeString(idTokenParts[1])
+	require.NoError(t, err)
+	var idClaims map[string]any
+	require.NoError(t, json.Unmarshal(idTokenPayload, &idClaims))
+	assert.Equal(t, true, idClaims["email_verified"])
+	tenantIDToken, err := service.IssueTenantIDToken(t.Context(), principalID, "tenant", "browser", "")
+	require.NoError(t, err)
+	assert.Len(t, strings.Split(tenantIDToken, "."), 3)
+}
+
+func TestOAuthClientBearerSubjectLifecycle(t *testing.T) {
+	service, _ := newLocalService(t)
+	now := time.Now().UTC().UnixMilli()
+	_, err := service.db.ExecContext(t.Context(), `INSERT INTO iam_oauth_clients
+ (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, "worker", "tenant", "Worker", now, now)
+	require.NoError(t, err)
+
+	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	require.NoError(t, err)
+	claims, err := service.Authenticate(t.Context(), "Bearer "+token, "")
+	require.NoError(t, err)
+	assert.Equal(t, authnext.SubjectTypeOAuthClient, claims.SubjectType)
+	assert.Equal(t, "client:worker", claims.Subject)
+	assert.Equal(t, "tenant", claims.OrganizationID)
+
+	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), "worker", "other-tenant", "api", "jobs.read", "Worker")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	_, err = service.db.NewUpdate().Table("iam_oauth_clients").Set("status = 'disabled'").Where("id = 'worker'").Exec(t.Context())
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	_, err = service.db.NewDelete().Table("iam_oauth_clients").Where("id = 'worker'").Exec(t.Context())
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+
+	for _, subject := range []string{"worker", "client:"} {
+		malformed, _, issueErr := service.issueSubjectToken(t.Context(), authnext.SubjectTypeOAuthClient, subject, "tenant", "api", "", 0, "", "", false, authnext.Assurance{})
+		require.NoError(t, issueErr)
+		_, authenticateErr := service.Authenticate(t.Context(), "Bearer "+malformed, "")
+		assert.ErrorIs(t, authenticateErr, authnext.ErrInvalidToken)
+	}
+	assert.ErrorIs(t, service.verifySubjectState(t.Context(), &authnext.Claims{SubjectType: "unknown"}), authnext.ErrInvalidToken)
+	_, _, err = service.IssueSubjectToken("", "api", "", "", "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+}
+
+func TestServiceAccountBearerSubjectLifecycle(t *testing.T) {
+	service, _ := newLocalService(t)
+	require.NoError(t, organization.Migrate(t.Context(), service.db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, "tenant"))
+	identities := identity.NewService(service.db, authnAuditAppender(auditmod.NewService(service.db)), iam.NewAdministratorGuard())
+	account, err := identities.CreateServiceAccount(t.Context(), "tenant", "automation", "Automation", "", nil)
+	require.NoError(t, err)
+
+	token, _, err := service.IssueTenantServiceAccountToken(t.Context(), account.ID, "tenant", "api", "jobs.read", account.LoginName, 1)
+	require.NoError(t, err)
+	claims, err := service.Authenticate(t.Context(), "Bearer "+token, "")
+	require.NoError(t, err)
+	assert.Equal(t, authnext.SubjectTypeServiceAccount, claims.SubjectType)
+	assert.Equal(t, account.ID, claims.Subject)
+
+	wrongTenant, _, err := service.IssueTenantServiceAccountToken(t.Context(), account.ID, "other", "api", "jobs.read", account.LoginName, 1)
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+wrongTenant, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	_, err = identities.ReplaceServiceAccount(t.Context(), "tenant", account.ID, account.DisplayName, "", "disabled", nil, account.Version)
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+}
+
+func TestOAuthClientBearerSubjectStorageFailure(t *testing.T) {
+	service, _ := newLocalService(t)
+	now := time.Now().UTC().UnixMilli()
+	_, err := service.db.ExecContext(t.Context(), `INSERT INTO iam_oauth_clients
+ (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, "worker", "tenant", "Worker", now, now)
+	require.NoError(t, err)
+	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(t.Context(), "DROP TABLE iam_oauth_clients")
+	require.NoError(t, err)
+
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrUnavailable)
+	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	assert.ErrorIs(t, err, authnext.ErrUnavailable)
+}
+
+func TestTokenAndSessionExpiration(t *testing.T) {
+	service, principalID := newLocalService(t)
+	issuedAt := time.Now().UTC()
+	service.now = func() time.Time { return issuedAt }
+	token, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	require.NoError(t, err)
+	service.now = func() time.Time { return issuedAt.Add(2 * time.Minute) }
+	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+
+	service.now = func() time.Time { return issuedAt }
+	session, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "https://app.example/")
+	require.NoError(t, err)
+	service.now = func() time.Time { return issuedAt.Add(2 * time.Hour) }
+	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(session))
+	assert.ErrorIs(t, err, ErrInvalidSession)
+}
+
+func TestPrincipalSecurityStatesAndReconciliation(t *testing.T) {
+	service, principalID := newLocalService(t)
+	_, err := service.db.NewUpdate().Table("iam_credentials").Set("mfa_required = ?", true).Where("principal_id = ?", principalID).Exec(t.Context())
+	require.NoError(t, err)
+	_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	assert.ErrorIs(t, err, authnext.ErrAdditionalVerification)
-	assert.True(t, h.directDeleted.Load())
-}
-
-func TestWebLogoutRevocationFailureStillLogsOut(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	state, _ := beginFlow(t, web, h, "login")
-	id, _, err := web.Callback(context.Background(), "code", state, state)
+	_, err = service.db.NewUpdate().Table("iam_credentials").Set("mfa_required = ?", false).Where("principal_id = ?", principalID).Exec(t.Context())
 	require.NoError(t, err)
-	h.revokeStatus = http.StatusBadGateway
-	logoutURL := web.Logout(context.Background(), "cp_session="+id)
-	assert.Contains(t, logoutURL, "/end_session", "revocation failure must not block RP-initiated logout")
-	assert.Equal(t, int32(1), h.revokeCalls.Load())
-	_, err = web.Authenticate(context.Background(), "", "cp_session="+id)
-	assert.ErrorIs(t, err, ErrInvalidSession, "local session is destroyed even when revocation fails")
-}
-
-func TestWebRegistrationValidationAndTampering(t *testing.T) {
-	web, h, mr := newWebFixture(t)
-	state, prompt := beginFlow(t, web, h, "register")
-	assert.Equal(t, "create", prompt)
-	_, _, err := web.Callback(context.Background(), "", state, state)
-	assert.ErrorIs(t, err, ErrInvalidFlow)
-	_, _, err = web.Callback(context.Background(), "code", state, "other")
-	assert.ErrorIs(t, err, ErrInvalidFlow)
-	_, _, err = web.Begin(context.Background(), "login", "http://evil.test/")
-	assert.ErrorIs(t, err, ErrInvalidFlow)
-
-	state, _ = beginFlow(t, web, h, "login")
-	h.badNonce = true
-	_, _, err = web.Callback(context.Background(), "code", state, state)
-	assert.ErrorIs(t, err, ErrInvalidFlow)
-	h.badNonce = false
-	state, _ = beginFlow(t, web, h, "login")
-	id, _, err := web.Callback(context.Background(), "code", state, state)
+	oldSession, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
-	sealed := []byte(mustValue(mr.Get(sessionKey(id))))
-	sealed[len(sealed)-1] ^= 0xff
-	mr.Set(sessionKey(id), string(sealed))
-	_, err = web.Authenticate(context.Background(), "", "cp_session="+id)
+	oldCookie := service.SessionCookie(oldSession)
+	oldAccess, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO iam_password_recovery_tokens (token_hmac, principal_id, created_at, expires_at, consumed_at) VALUES (?, ?, 1, 9999999999999, 0)`, strings.Repeat("a", 64), principalID)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO iam_email_verification_tokens (token_hmac, principal_id, email, created_at, expires_at, consumed_at) VALUES (?, ?, 'admin@example.com', 1, 9999999999999, 0)`, strings.Repeat("b", 64), principalID)
+	require.NoError(t, err)
+	_, err = service.db.NewUpdate().Table("iam_principals").Set("status = ?", "disabled").Where("id = ?", principalID).Exec(t.Context())
+	require.NoError(t, err)
+	_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+
+	reconciled, err := EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{
+		LoginName: "admin", Password: "new correct horse battery staple", DisplayName: "Updated", Email: "UPDATED@example.com",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, principalID, reconciled)
+	var reconciledPrincipal principalRow
+	require.NoError(t, service.db.NewSelect().Model(&reconciledPrincipal).Where("id = ?", principalID).Scan(t.Context()))
+	assert.Equal(t, "updated@example.com", reconciledPrincipal.Email)
+	assert.True(t, reconciledPrincipal.EmailVerified)
+	_, err = service.Authenticate(t.Context(), "", oldCookie)
 	assert.ErrorIs(t, err, ErrInvalidSession)
+	_, err = service.Authenticate(t.Context(), "Bearer "+oldAccess, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	var recoveryConsumed, verificationConsumed, credentialVersion int64
+	require.NoError(t, service.db.NewSelect().Table("iam_password_recovery_tokens").Column("consumed_at").Where("token_hmac = ?", strings.Repeat("a", 64)).Scan(t.Context(), &recoveryConsumed))
+	require.NoError(t, service.db.NewSelect().Table("iam_email_verification_tokens").Column("consumed_at").Where("token_hmac = ?", strings.Repeat("b", 64)).Scan(t.Context(), &verificationConsumed))
+	require.NoError(t, service.db.NewSelect().Table("iam_credentials").Column("credential_version").Where("principal_id = ?", principalID).Scan(t.Context(), &credentialVersion))
+	assert.Positive(t, recoveryConsumed)
+	assert.Positive(t, verificationConsumed)
+	_, _, err = service.Login(t.Context(), "admin", "new correct horse battery staple", "")
+	require.NoError(t, err)
+	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{
+		LoginName: "admin", Password: "new correct horse battery staple", DisplayName: "Updated", Email: "updated@example.com",
+	})
+	require.NoError(t, err)
+	var unchangedCredentialVersion int64
+	require.NoError(t, service.db.NewSelect().Table("iam_credentials").Column("credential_version").Where("principal_id = ?", principalID).Scan(t.Context(), &unchangedCredentialVersion))
+	assert.Equal(t, credentialVersion, unchangedCredentialVersion)
+	assert.Error(t, func() error {
+		_, err := EnsureBootstrapPrincipal(t.Context(), nil, BootstrapPrincipal{})
+		return err
+	}())
+	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{LoginName: "", Password: "short"})
+	assert.Error(t, err)
 }
 
-func TestWebSessionRefreshIsSingleFlight(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	state, _ := beginFlow(t, web, h, "login")
-	id, _, err := web.Callback(context.Background(), "code", state, state)
-	require.NoError(t, err)
-	record, err := web.loadSession(context.Background(), id)
-	require.NoError(t, err)
-	now := time.Now()
-	record.AccessToken = h.jwt(map[string]any{"iss": h.server.URL, "sub": "user-1", "aud": h.audience, "exp": now.Add(-time.Minute).Unix(), "iat": now.Add(-time.Hour).Unix()})
-	record.RefreshToken = "refresh-1"
-	require.NoError(t, web.storeEncrypted(context.Background(), sessionKey(id), record, time.Hour))
-	h.refreshDelay = 120 * time.Millisecond
-	start := make(chan struct{})
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() { <-start; _, err := web.Authenticate(context.Background(), "", "cp_session="+id); errs <- err }()
+func TestSigningKeyFormatsAndDefaults(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	for index := range seed {
+		seed[index] = byte(index + 1)
 	}
-	close(start)
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	assert.Equal(t, int32(1), h.refreshCalls.Load())
-}
-
-func TestWebServiceConfigurationAndHelpers(t *testing.T) {
-	verifier, err := authnext.NewVerifier(authnext.Config{})
-	require.NoError(t, err)
-	web, err := NewWebService(context.Background(), authnext.Config{}, verifier, nil)
-	require.NoError(t, err)
-	assert.False(t, web.Enabled())
-	_, err = web.Authenticate(context.Background(), "", "")
-	assert.Error(t, err)
-	_, err = NewWebService(context.Background(), authnext.Config{Web: authnext.WebConfig{Enabled: true}}, verifier, nil)
-	assert.Error(t, err)
-	_, err = NewWebService(context.Background(), authnext.Config{}, nil, nil)
-	assert.Error(t, err)
-	_, err = encryptionKey("short")
-	assert.Error(t, err)
-	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	decoded, err := encryptionKey(key)
-	require.NoError(t, err)
-	assert.Len(t, decoded, 32)
-	assert.NotEqual(t, mustValue(randomToken(16)), mustValue(randomToken(16)))
-	_, err = cookieValue("", "missing")
-	assert.Error(t, err)
-	assert.Equal(t, sessionKey("id"), sessionKey("id"))
-	assert.NotEqual(t, sessionKey("id"), sessionKey("other"))
-}
-
-func TestWebServiceConfigurationFailuresAndDefaults(t *testing.T) {
-	h := newOIDCHarness(t)
-	mr := miniredis.RunT(t)
-	store := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = store.Close() })
-	base := authnext.Config{Enabled: true, Issuer: h.server.URL, Audience: []string{h.audience}, JWKSURL: h.server.URL + "/jwks"}
-	verifier, err := authnext.NewVerifier(base)
-	require.NoError(t, err)
-	base.Web = authnext.WebConfig{Enabled: true, ClientID: h.clientID, RedirectURL: "http://app/callback", PostLoginURL: "http://app/", AllowedReturnURLs: []string{"http://app/"}, EncryptionKey: "0123456789abcdef0123456789abcdef"}
-	_, err = NewWebService(context.Background(), base, verifier, nil)
-	assert.ErrorContains(t, err, "redis")
-	missing := base
-	missing.Web.ClientID = ""
-	_, err = NewWebService(context.Background(), missing, verifier, store)
-	assert.ErrorContains(t, err, "client_id")
-	badReturn := base
-	badReturn.Web.AllowedReturnURLs = []string{"http://other/"}
-	_, err = NewWebService(context.Background(), badReturn, verifier, store)
-	assert.ErrorContains(t, err, "allowed_return_urls")
-	badKey := base
-	badKey.Web.EncryptionKey = "short"
-	_, err = NewWebService(context.Background(), badKey, verifier, store)
-	assert.ErrorContains(t, err, "32 bytes")
-	directWithoutToken := base
-	directWithoutToken.Web.DirectLoginEnabled = true
-	_, err = NewWebService(context.Background(), directWithoutToken, verifier, store)
-	assert.ErrorContains(t, err, "login_client_token")
-	web, err := NewWebService(context.Background(), base, verifier, store)
-	require.NoError(t, err)
-	assert.Equal(t, "cp_session", web.web.CookieName)
-	assert.Equal(t, 8*time.Hour, web.web.SessionTTL)
-	assert.Equal(t, 5*time.Minute, web.web.FlowTTL)
-	web.web.Scopes = []string{"openid", "custom"}
-	assert.Equal(t, []string{"openid", "custom"}, web.scopes())
-}
-
-func TestWebAuthenticateFailureBranches(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	now := time.Now()
-	valid := h.jwt(map[string]any{"iss": h.server.URL, "sub": "bearer-user", "aud": h.audience, "exp": now.Add(time.Hour).Unix()})
-	claims, err := web.Authenticate(context.Background(), "Bearer "+valid, "")
-	require.NoError(t, err)
-	assert.Equal(t, "bearer-user", claims.Subject)
-	_, err = web.Authenticate(context.Background(), "", "")
-	assert.ErrorIs(t, err, ErrInvalidSession)
-
-	for name, record := range map[string]sessionRecord{
-		"absolute expiry":    {AccessToken: valid, AbsoluteEnd: now.Add(-time.Second)},
-		"invalid access":     {AccessToken: "invalid", AbsoluteEnd: now.Add(time.Hour)},
-		"expired no refresh": {AccessToken: h.jwt(map[string]any{"iss": h.server.URL, "sub": "u", "aud": h.audience, "exp": now.Add(-time.Minute).Unix()}), AbsoluteEnd: now.Add(time.Hour)},
+	for name, encoded := range map[string]string{
+		"raw standard": base64.RawStdEncoding.EncodeToString(seed),
+		"standard":     base64.StdEncoding.EncodeToString(seed),
+		"raw url":      base64.RawURLEncoding.EncodeToString(seed),
+		"url":          base64.URLEncoding.EncodeToString(seed),
+		"raw bytes":    strings.Repeat("!", ed25519.SeedSize),
 	} {
 		t.Run(name, func(t *testing.T) {
-			id := strings.ReplaceAll(name, " ", "-")
-			require.NoError(t, web.storeEncrypted(context.Background(), sessionKey(id), record, time.Hour))
-			_, err := web.Authenticate(context.Background(), "", "cp_session="+id)
-			assert.Error(t, err)
+			key, err := parseSigningKey(encoded)
+			require.NoError(t, err)
+			assert.Len(t, key, ed25519.PrivateKeySize)
 		})
 	}
-	assert.NoError(t, web.ValidateCSRF(http.MethodPost, "", "", ""))
-	_, _, err = web.Begin(context.Background(), "login", "")
+	private := ed25519.NewKeyFromSeed(seed)
+	key, err := parseSigningKey(base64.RawStdEncoding.EncodeToString(private))
 	require.NoError(t, err)
-	disabled := &WebService{}
-	_, _, err = disabled.Begin(context.Background(), "login", "")
+	assert.Equal(t, private, key)
+	_, err = parseSigningKey("")
+	assert.Error(t, err)
+	_, err = parseSigningKey("too-short")
+	assert.Error(t, err)
+}
+
+func TestWebServiceDefaultsAndValidation(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	seed := make([]byte, ed25519.SeedSize)
+	encoded := base64.RawStdEncoding.EncodeToString(seed)
+	_, err = NewWebService(authnext.Config{Enabled: true, SigningKey: encoded}, db)
+	assert.ErrorContains(t, err, "issuer is required")
+	_, err = NewWebService(authnext.Config{Enabled: true, Issuer: "https://iam.example"}, db)
+	assert.ErrorContains(t, err, "signing key is required")
+
+	service, err := NewWebService(authnext.Config{
+		Enabled: true, Issuer: " https://iam.example/ ", SigningKey: encoded,
+		MFA: authnext.MFAConfig{EncryptionKey: encoded},
+		Web: authnext.WebConfig{Enabled: true, SessionTTL: time.Minute, IdleTTL: time.Hour},
+	}, db, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "https://iam.example", service.Issuer())
+	assert.Equal(t, []string{"chaosplus-api"}, service.cfg.Audience)
+	assert.Equal(t, 15*time.Minute, service.cfg.AccessTokenTTL)
+	assert.Equal(t, 30*time.Second, service.cfg.ClockSkew)
+	assert.Equal(t, "cp_session", service.SessionCookieName())
+	assert.Equal(t, time.Minute, service.web.IdleTTL)
+}
+
+func TestWebServiceRejectsUnsafeSecurityConfiguration(t *testing.T) {
+	service, _ := newLocalService(t)
+
+	tests := []struct {
+		name   string
+		mutate func(*authnext.Config)
+		match  string
+	}{
+		{
+			name: "MFA limits",
+			mutate: func(cfg *authnext.Config) {
+				cfg.MFA.RecoveryCodes = 21
+			},
+			match: "MFA configuration exceeds security limits",
+		},
+		{
+			name: "MFA secret sources",
+			mutate: func(cfg *authnext.Config) {
+				cfg.MFA.EncryptionKeyFile = "not-used-when-inline-is-set"
+			},
+			match: "mutually exclusive",
+		},
+		{
+			name: "MFA key",
+			mutate: func(cfg *authnext.Config) {
+				cfg.MFA.EncryptionKey = "invalid"
+			},
+			match: "32 bytes",
+		},
+		{
+			name: "Passkey adapter",
+			mutate: func(cfg *authnext.Config) {
+				cfg.Passkey.RPID = "%%&&"
+			},
+			match: "configure passkeys",
+		},
+		{
+			name: "signing key source",
+			mutate: func(cfg *authnext.Config) {
+				cfg.Web.Enabled = false
+				cfg.Passkey.Enabled = false
+				cfg.SigningKeyFile = "not-used-when-inline-is-set"
+			},
+			match: "mutually exclusive",
+		},
+		{
+			name: "signing key",
+			mutate: func(cfg *authnext.Config) {
+				cfg.Web.Enabled = false
+				cfg.Passkey.Enabled = false
+				cfg.SigningKey = "invalid"
+			},
+			match: "signing key",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := service.cfg
+			test.mutate(&cfg)
+			_, err := NewWebService(cfg, service.db)
+			assert.ErrorContains(t, err, test.match)
+		})
+	}
+}
+
+func TestAccessTokenMalformedClaimsAndHeaders(t *testing.T) {
+	service, _ := newLocalService(t)
+	for _, header := range []string{"Basic value", "Bearer malformed", "Bearer !!!.body.signature"} {
+		_, err := service.Authenticate(t.Context(), header, "")
+		assert.Error(t, err, header)
+	}
+
+	wrongIssuer, err := service.sign(map[string]any{
+		"iss": "https://other.example", "sub": "subject", "aud": []string{"api"},
+		"subject_type": authnext.SubjectTypeService,
+		"iat":          time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(),
+	})
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+wrongIssuer, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	wrongAudience, err := service.sign(map[string]any{
+		"iss": service.Issuer(), "sub": "subject", "aud": []string{"other"},
+		"subject_type": authnext.SubjectTypeService,
+		"iat":          time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(),
+	})
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+wrongAudience, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidAud)
+	emptySubject, err := service.sign(map[string]any{
+		"iss": service.Issuer(), "sub": "", "aud": []string{"api"},
+		"subject_type": authnext.SubjectTypeService,
+		"iat":          time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(),
+	})
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "Bearer "+emptySubject, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	for _, subjectType := range []string{"", "unknown"} {
+		token, signErr := service.sign(map[string]any{
+			"iss": service.Issuer(), "sub": "subject", "aud": []string{"api"},
+			"subject_type": subjectType,
+			"iat":          time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(),
+		})
+		require.NoError(t, signErr)
+		_, authenticateErr := service.Authenticate(t.Context(), "Bearer "+token, "")
+		assert.ErrorIs(t, authenticateErr, authnext.ErrInvalidToken)
+	}
+}
+
+func TestAuthenticationDatabaseUnavailable(t *testing.T) {
+	service, principalID := newLocalService(t)
+	session, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	principalToken, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "")
+	require.NoError(t, err)
+	require.NoError(t, service.db.Close())
+	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(session))
+	assert.ErrorIs(t, err, authnext.ErrUnavailable)
+	_, err = service.Authenticate(t.Context(), "Bearer "+principalToken, "")
+	assert.ErrorIs(t, err, authnext.ErrUnavailable)
+	_, _, err = service.IssueTenantAccessToken(t.Context(), "missing", "tenant", "api", "")
+	assert.ErrorIs(t, err, authnext.ErrUnavailable)
+}
+
+func TestDisabledServiceAndLoginValidation(t *testing.T) {
+	service, err := NewWebService(authnext.Config{}, nil, WithClaimEnricher(nil))
+	require.NoError(t, err)
+	_, err = service.Authenticate(t.Context(), "", "")
+	assert.ErrorIs(t, err, authnext.ErrMissingBearer)
+	_, _, err = service.Login(t.Context(), "user", "password", "")
 	assert.ErrorIs(t, err, authnext.ErrDisabled)
-}
 
-func TestWebCallbackAndExchangeFailures(t *testing.T) {
-	web, h, mr := newWebFixture(t)
-	state, _ := beginFlow(t, web, h, "login")
-	sealed := []byte(mustValue(mr.Get(flowKey(state))))
-	sealed[len(sealed)-1] ^= 1
-	mr.Set(flowKey(state), string(sealed))
-	_, _, err := web.Callback(context.Background(), "code", state, state)
-	assert.ErrorIs(t, err, ErrInvalidFlow)
-
-	web.discovery.TokenEndpoint = "://bad"
-	_, err = web.exchange(context.Background(), url.Values{})
-	assert.Error(t, err)
-	web.discovery.TokenEndpoint = h.server.URL + "/token"
-	h.tokenStatus = http.StatusBadGateway
-	_, err = web.exchange(context.Background(), url.Values{"client_id": {h.clientID}})
-	assert.ErrorContains(t, err, "status 502")
-	h.tokenStatus = 0
-	h.badTokenJSON = true
-	_, err = web.exchange(context.Background(), url.Values{"client_id": {h.clientID}})
-	assert.Error(t, err)
-	h.badTokenJSON = false
-	h.incompleteToken = true
-	_, err = web.exchange(context.Background(), url.Values{"client_id": {h.clientID}})
-	assert.ErrorContains(t, err, "incomplete")
-}
-
-func TestWebEncryptionAndDiscoveryFailures(t *testing.T) {
-	web, _, _ := newWebFixture(t)
-	assert.Error(t, web.storeEncrypted(context.Background(), "bad", make(chan int), time.Minute))
-	assert.ErrorIs(t, web.open("x", []byte("short"), &sessionRecord{}), ErrInvalidSession)
-	nonce := make([]byte, web.aead.NonceSize())
-	sealed := web.aead.Seal(nonce, nonce, []byte("not-json"), []byte("x"))
-	assert.Error(t, web.open("x", sealed, &sessionRecord{}))
-
-	for name, handler := range map[string]http.HandlerFunc{
-		"status":  func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", 503) },
-		"json":    func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("{")) },
-		"missing": func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"authorization_endpoint":"x"}`)) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(handler)
-			defer server.Close()
-			_, err := discover(context.Background(), server.Client(), server.URL)
-			assert.Error(t, err)
-		})
-	}
-	_, err := discover(context.Background(), &http.Client{Timeout: 20 * time.Millisecond}, "http://127.0.0.1:1")
-	assert.Error(t, err)
-}
-
-func TestWebRefreshFailureBranches(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	now := time.Now()
-	expired := h.jwt(map[string]any{"iss": h.server.URL, "sub": "user-1", "aud": h.audience, "exp": now.Add(-time.Minute).Unix()})
-	record := sessionRecord{AccessToken: expired, RefreshToken: "refresh", AbsoluteEnd: now.Add(time.Hour)}
-	require.NoError(t, web.storeEncrypted(context.Background(), sessionKey("failed-refresh"), record, time.Hour))
-	h.tokenStatus = http.StatusBadGateway
-	err := web.refresh(context.Background(), "failed-refresh", &record)
-	assert.Error(t, err)
-	h.tokenStatus = 0
-	record = sessionRecord{AccessToken: expired, RefreshToken: "refresh", AbsoluteEnd: time.Now().Add(-time.Second)}
-	require.NoError(t, web.storeEncrypted(context.Background(), sessionKey("expired-refresh"), record, time.Hour))
-	err = web.refresh(context.Background(), "expired-refresh", &record)
+	service, _ = newLocalService(t)
+	_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "https://evil.example/")
+	assert.ErrorContains(t, err, "return URL is not allowed")
+	_, _, err = service.IssueAccessToken(t.Context(), "missing", "api", "")
 	assert.ErrorIs(t, err, ErrInvalidSession)
-
-	lockID := "locked"
-	require.NoError(t, web.redis.Set(context.Background(), sessionKey(lockID)+":refresh", "1", time.Minute).Err())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err = web.refresh(ctx, lockID, &sessionRecord{})
-	assert.ErrorIs(t, err, context.Canceled)
+	_, err = service.IssueIDToken(t.Context(), "missing", "client", "")
+	assert.ErrorIs(t, err, ErrInvalidSession)
 }
 
-func TestRefreshHolderReloadsSessionBeforeUsingRotatingToken(t *testing.T) {
-	web, h, _ := newWebFixture(t)
-	now := time.Now()
-	valid := h.jwt(map[string]any{"iss": h.server.URL, "sub": "user-1", "aud": h.audience, "exp": now.Add(time.Hour).Unix()})
-	current := sessionRecord{AccessToken: valid, RefreshToken: "current-refresh", AbsoluteEnd: now.Add(time.Hour)}
-	require.NoError(t, web.storeEncrypted(context.Background(), sessionKey("race"), current, time.Hour))
-	stale := sessionRecord{AccessToken: "stale", RefreshToken: "consumed-refresh", AbsoluteEnd: now.Add(time.Hour)}
-	require.NoError(t, web.refresh(context.Background(), "race", &stale))
-	assert.Equal(t, "current-refresh", stale.RefreshToken)
-	assert.Equal(t, int32(0), h.refreshCalls.Load(), "a newly refreshed session must not consume the stale refresh token")
+func TestSessionAbsoluteExpiryCapsIdleRefresh(t *testing.T) {
+	service, _ := newLocalService(t)
+	started := time.Now().UTC().Truncate(time.Second)
+	service.web.SessionTTL = time.Minute
+	service.web.IdleTTL = time.Minute
+	service.now = func() time.Time { return started }
+	token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	service.now = func() time.Time { return started.Add(time.Second) }
+	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(token))
+	require.NoError(t, err)
+
+	var expiresAt, absoluteExpiresAt int64
+	err = service.db.NewSelect().Table("iam_sessions").Column("expires_at", "absolute_expires_at").Where("id_hash = ?", tokenHash(token)).Scan(t.Context(), &expiresAt, &absoluteExpiresAt)
+	require.NoError(t, err)
+	assert.Equal(t, absoluteExpiresAt, expiresAt)
 }
 
-func mustValue(value string, err error) string {
-	if err != nil {
-		panic(err)
+func TestLoginDatabaseConstraintFailures(t *testing.T) {
+	t.Run("credential update", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		_, err := service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_credential_update BEFORE UPDATE ON iam_credentials BEGIN SELECT RAISE(ABORT, 'denied'); END`)
+		require.NoError(t, err)
+		_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		assert.ErrorContains(t, err, "reset login failures")
+	})
+
+	t.Run("session insert", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		_, err := service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_session_insert BEFORE INSERT ON iam_sessions BEGIN SELECT RAISE(ABORT, 'denied'); END`)
+		require.NoError(t, err)
+		_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		assert.ErrorContains(t, err, "create session")
+	})
+
+	t.Run("missing credential", func(t *testing.T) {
+		service, principalID := newLocalService(t)
+		_, err := service.db.NewDelete().Table("iam_credentials").Where("principal_id = ?", principalID).Exec(t.Context())
+		require.NoError(t, err)
+		_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		assert.ErrorContains(t, err, "read credential")
+	})
+}
+
+func TestSecurityCenterDatabaseFailures(t *testing.T) {
+	t.Run("revoke session", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_session_revoke BEFORE UPDATE OF revoked_at ON iam_sessions BEGIN SELECT RAISE(ABORT, 'revoke denied'); END`)
+		require.NoError(t, err)
+		err = service.RevokeSession(t.Context(), "", service.SessionCookie(token), tokenHash(token))
+		assert.ErrorContains(t, err, "revoke denied")
+	})
+
+	t.Run("logout all", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_logout_all BEFORE UPDATE OF revoked_at ON iam_sessions BEGIN SELECT RAISE(ABORT, 'logout denied'); END`)
+		require.NoError(t, err)
+		err = service.LogoutAll(t.Context(), "", service.SessionCookie(token))
+		assert.ErrorContains(t, err, "logout denied")
+	})
+
+	t.Run("password history", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_password_history BEFORE INSERT ON iam_password_history BEGIN SELECT RAISE(ABORT, 'history denied'); END`)
+		require.NoError(t, err)
+		err = service.ChangePassword(t.Context(), "", service.SessionCookie(token), "correct horse battery staple", "new correct horse battery staple")
+		assert.ErrorContains(t, err, "history denied")
+	})
+
+	t.Run("audit failure rolls back session revoke", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		first, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		second, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_session_audit BEFORE INSERT ON iam_audit_events WHEN NEW.event_type = 'session_revoke' BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
+		require.NoError(t, err)
+		err = service.RevokeSession(t.Context(), "", service.SessionCookie(first), tokenHash(second))
+		assert.ErrorContains(t, err, "audit denied")
+		_, err = service.Authenticate(t.Context(), "", service.SessionCookie(second))
+		require.NoError(t, err)
+	})
+
+	t.Run("audit failure rolls back logout all", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_logout_audit BEFORE INSERT ON iam_audit_events WHEN NEW.event_type = 'logout_all' BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
+		require.NoError(t, err)
+		err = service.LogoutAll(t.Context(), "", service.SessionCookie(token))
+		assert.ErrorContains(t, err, "audit denied")
+		_, err = service.Authenticate(t.Context(), "", service.SessionCookie(token))
+		require.NoError(t, err)
+	})
+
+	t.Run("audit failure rolls back password change", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_password_audit BEFORE INSERT ON iam_audit_events WHEN NEW.event_type = 'password_change' BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
+		require.NoError(t, err)
+		err = service.ChangePassword(t.Context(), "", service.SessionCookie(token), "correct horse battery staple", "new correct horse battery staple")
+		assert.ErrorContains(t, err, "audit denied")
+		_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		_, _, err = service.Login(t.Context(), "admin", "new correct horse battery staple", "")
+		assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
+	})
+}
+
+func TestSecurityCenterAuthenticationAndReadFailures(t *testing.T) {
+	service, _ := newLocalService(t)
+	_, err := service.ListSessions(t.Context(), "", "")
+	assert.Error(t, err)
+	assert.Error(t, service.RevokeSession(t.Context(), "", "", strings.Repeat("a", 64)))
+	assert.Error(t, service.LogoutAll(t.Context(), "", ""))
+	assert.Error(t, service.ChangePassword(t.Context(), "", "", "current password", "new secure password"))
+
+	token, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	cookie := service.SessionCookie(token)
+	assert.ErrorIs(t, service.RevokeSession(t.Context(), "", cookie, strings.Repeat("a", 64)), ErrSessionNotFound)
+
+	t.Run("session list storage", func(t *testing.T) {
+		storage, principalID := newLocalService(t)
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		require.NoError(t, issueErr)
+		_, dropErr := storage.db.ExecContext(t.Context(), "DROP TABLE iam_sessions")
+		require.NoError(t, dropErr)
+		_, listErr := storage.ListSessions(t.Context(), "Bearer "+bearer, "")
+		assert.ErrorContains(t, listErr, "list browser sessions")
+	})
+
+	t.Run("missing credential", func(t *testing.T) {
+		storage, principalID := newLocalService(t)
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		require.NoError(t, issueErr)
+		_, deleteErr := storage.db.NewDelete().Model((*credentialRow)(nil)).Where("principal_id = ?", principalID).Exec(t.Context())
+		require.NoError(t, deleteErr)
+		changeErr := storage.ChangePassword(t.Context(), "Bearer "+bearer, "", "current password", "new secure password")
+		assert.ErrorIs(t, changeErr, authnext.ErrInvalidToken)
+	})
+
+	t.Run("corrupt credential", func(t *testing.T) {
+		storage, principalID := newLocalService(t)
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		require.NoError(t, issueErr)
+		_, updateErr := storage.db.NewUpdate().Model((*credentialRow)(nil)).Set("password_hash = 'invalid'").Where("principal_id = ?", principalID).Exec(t.Context())
+		require.NoError(t, updateErr)
+		changeErr := storage.ChangePassword(t.Context(), "Bearer "+bearer, "", "current password", "new secure password")
+		assert.ErrorContains(t, changeErr, "verify current password")
+	})
+
+	t.Run("password history storage", func(t *testing.T) {
+		storage, principalID := newLocalService(t)
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		require.NoError(t, issueErr)
+		_, dropErr := storage.db.ExecContext(t.Context(), "DROP TABLE iam_password_history")
+		require.NoError(t, dropErr)
+		changeErr := storage.ChangePassword(t.Context(), "Bearer "+bearer, "", "correct horse battery staple", "new secure password")
+		assert.ErrorContains(t, changeErr, "load password history")
+	})
+}
+
+func TestSigningRejectsUnsupportedPayloadAndMalformedBody(t *testing.T) {
+	service, _ := newLocalService(t)
+	_, err := service.sign(map[string]any{"unsupported": make(chan struct{})})
+	assert.Error(t, err)
+
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","kid":"` + service.kid + `"}`))
+	signed := header + ".!"
+	signature := ed25519.Sign(service.privateKey, []byte(signed))
+	_, err = service.Authenticate(t.Context(), "Bearer "+signed+"."+base64.RawURLEncoding.EncodeToString(signature), "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+}
+
+func authnAuditAppender(service *auditmod.Service) auditx.Appender {
+	return func(ctx context.Context, db bun.IDB, event auditx.Event) error {
+		_, err := service.AppendTo(ctx, db, auditmod.EventInput{
+			TenantID: event.TenantID, PrincipalID: event.PrincipalID,
+			EventType: event.EventType, TargetType: event.TargetType, TargetID: event.TargetID,
+			Outcome: "success", Detail: event.Detail,
+		})
+		return err
 	}
-	return value
-}
-
-func (h *oidcHarness) String() string {
-	return fmt.Sprintf("oidc(%s)", strings.TrimPrefix(h.server.URL, "http://"))
 }

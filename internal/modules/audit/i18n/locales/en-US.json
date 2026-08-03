@@ -1,0 +1,7 @@
+{
+  "invalid_audit_time": "The audit time range is invalid. Use RFC 3339 timestamps and ensure the end is after the start.",
+  "audit_event_not_found": "The requested audit event was not found in this tenant. Verify the event identifier and tenant, then try again.",
+  "invalid_audit_query": "The audit query is invalid. Check the tenant, filters, and pagination values.",
+  "audit_integrity_failed": "Audit integrity verification failed because the event chain was altered or is incomplete. Stop relying on this export and contact an administrator.",
+  "audit_unavailable": "The audit service could not complete the request. Retry later; contact an administrator if the problem continues."
+}

@@ -1,0 +1,12 @@
+{
+  "principal_not_found": "The requested principal was not found in this tenant. Verify the principal identifier and tenant, then try again.",
+  "login_name_exists": "This login name is already in use. Choose a different login name.",
+  "invalid_principal": "The principal data is invalid. Check the login name, profile, email, and password requirements.",
+  "last_tenant_administrator": "The last active tenant administrator cannot be removed or disabled. Assign another active administrator first.",
+  "identity_unavailable": "The identity service could not complete the request. Retry later; contact an administrator if the problem continues.",
+  "service_account_not_found": "The requested service account was not found in this tenant. Verify the identifier and tenant, then try again.",
+  "service_account_credential_not_found": "The requested service account credential was not found. Refresh the credential list and try again.",
+  "service_account_version_conflict": "The service account changed after you opened it. Refresh the account and apply your changes again.",
+  "service_account_credential_limit": "This service account already has the maximum number of active credentials. Revoke an unused credential before creating another.",
+  "invalid_service_account": "The service account data is invalid. Check its name, status, expiry, credential scopes, and tenant state."
+}

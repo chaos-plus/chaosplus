@@ -1,0 +1,9 @@
+{
+  "invalid_client": "The OAuth client credentials or configuration are invalid. Correct the client configuration and try again.",
+  "client_not_found": "The requested OAuth client was not found in this tenant. Verify the client identifier and tenant, then try again.",
+  "oauth_invalid_request": "The OAuth request is missing a required parameter or contains an invalid value. Correct the request and start the flow again.",
+  "oauth_invalid_grant": "The authorization grant is invalid, expired, revoked, or does not match the client. Start a new authorization flow.",
+  "oauth_invalid_client": "OAuth client authentication failed. Verify the client identifier and credential, then try again.",
+  "oauth_invalid_token": "The access token is invalid, expired, or revoked. Obtain a new token before retrying.",
+  "oauth_server_error": "The authorization server could not complete the request. Retry later; contact an administrator if the problem continues."
+}

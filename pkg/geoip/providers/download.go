@@ -6,16 +6,20 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
+
+const maxExtractedDatabaseBytes int64 = 1 << 30
 
 // workDir returns the cache directory for geoip databases.
 func workDir(parts ...string) (string, error) {
@@ -24,7 +28,7 @@ func workDir(parts ...string) (string, error) {
 		base = os.TempDir()
 	}
 	dir := filepath.Join(append([]string{base, "geoip"}, parts...)...)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -46,7 +50,7 @@ func downloadFile(client *http.Client, url, dest string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("http %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return err
 	}
 	out, err := os.Create(dest)
@@ -122,12 +126,19 @@ func downloadVerifiedFile(client *http.Client, url, dest, digest string) error {
 
 // unzipFile extracts the first .bin file from a zip archive to the destination directory.
 func unzipFile(src, dest string) error {
+	return unzipFileLimit(src, dest, maxExtractedDatabaseBytes)
+}
+
+func unzipFileLimit(src, dest string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("database archive size limit must be positive")
+	}
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-	if err := os.MkdirAll(dest, 0755); err != nil {
+	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return err
 	}
 	for _, f := range r.File {
@@ -135,19 +146,25 @@ func unzipFile(src, dest string) error {
 			continue
 		}
 		if strings.HasSuffix(strings.ToLower(f.Name), ".bin") {
+			if f.UncompressedSize64 > uint64(maxBytes) {
+				return fmt.Errorf("database archive entry exceeds %d bytes", maxBytes)
+			}
 			rc, err := f.Open()
 			if err != nil {
 				return err
 			}
-			defer rc.Close()
 			outPath := filepath.Join(dest, filepath.Base(f.Name))
-			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
+			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 			if err != nil {
 				return err
 			}
-			defer outFile.Close()
-			if _, err := io.Copy(outFile, rc); err != nil {
-				return err
+			written, copyErr := io.Copy(outFile, io.LimitReader(rc, maxBytes+1))
+			closeErr := errors.Join(outFile.Close(), rc.Close())
+			if copyErr != nil || closeErr != nil {
+				return errors.Join(copyErr, closeErr, os.Remove(outPath))
+			}
+			if written > maxBytes {
+				return errors.Join(fmt.Errorf("database archive entry exceeds %d bytes", maxBytes), os.Remove(outPath))
 			}
 			return nil
 		}
@@ -172,10 +189,15 @@ type githubAsset struct {
 	Digest string `json:"digest"`
 }
 
+const defaultGitHubAPIBaseURL = "https://api.github.com"
+
 // getGitHubLatestRelease fetches the latest release for owner/repo.
-func getGitHubLatestRelease(client *http.Client, owner, repo string) (*githubRelease, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
-	resp, err := client.Get(url)
+func getGitHubLatestRelease(client *http.Client, apiBaseURL, owner, repo string) (*githubRelease, error) {
+	if apiBaseURL == "" {
+		apiBaseURL = defaultGitHubAPIBaseURL
+	}
+	releaseURL := strings.TrimRight(apiBaseURL, "/") + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/releases/latest"
+	resp, err := client.Get(releaseURL)
 	if err != nil {
 		return nil, err
 	}

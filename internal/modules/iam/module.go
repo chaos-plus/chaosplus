@@ -6,32 +6,28 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
-// Module exposes the first IAM management surface. It is intentionally read-only
-// for now: SpiceDB remains the future source of truth for grants, while these
-// endpoints let the admin UI discover the catalog and scope model.
+// Module exposes IAM management backed by the primary relational database.
 type Module struct {
 	service         *Service
 	registrar       *authz.Registrar
 	db              *bun.DB
-	worker          *OutboxWorker
 	declarationOnly bool
 }
 
-func NewModule(db *bun.DB, registrar *authz.Registrar, writer RelationshipWriter, checker BulkPermissionChecker, nextID IDGenerator, cfg OutboxConfig) *Module {
-	if db == nil || registrar == nil || writer == nil || checker == nil || nextID == nil {
-		panic("iam module requires database, authz registrar, relationship writer, and id generator")
+func NewModule(db *bun.DB, registrar *authz.Registrar, checker AuthorizationEvaluator, audit auditx.Appender, nextID IDGenerator) *Module {
+	if db == nil || registrar == nil || checker == nil || audit == nil || nextID == nil {
+		panic("iam module requires database, authz registrar, authorizer, audit appender, and id generator")
 	}
 	repo := NewRepository(db, nextID)
-	worker := NewOutboxWorker(repo, writer, cfg, nextID)
 	return &Module{
-		service:   NewService(registrar.Registry(), repo, worker, checker),
+		service:   NewService(registrar.Registry(), repo, checker, audit),
 		registrar: registrar,
 		db:        db,
-		worker:    worker,
 	}
 }
 
@@ -47,20 +43,6 @@ func (m *Module) Migrate(ctx context.Context) error {
 		return nil
 	}
 	return Migrate(ctx, m.db)
-}
-
-func (m *Module) Start(ctx context.Context) error {
-	if m.declarationOnly {
-		return nil
-	}
-	return m.worker.Start(ctx)
-}
-
-func (m *Module) Stop(context.Context) error {
-	if !m.declarationOnly {
-		m.worker.Stop()
-	}
-	return nil
 }
 
 func (m *Module) RegisterREST(api huma.API) {

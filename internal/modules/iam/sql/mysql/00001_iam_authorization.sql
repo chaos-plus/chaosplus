@@ -59,7 +59,7 @@ CREATE TABLE authz_outbox (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- +goose Down
-DROP TABLE authz_outbox;
+DROP TABLE IF EXISTS authz_outbox;
 DROP TABLE iam_role_members;
 DROP TABLE iam_role_permissions;
 DROP TABLE iam_roles;

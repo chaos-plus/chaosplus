@@ -5,6 +5,7 @@ import (
 	"embed"
 	"io/fs"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,11 +83,26 @@ func TestRun_UnsupportedDialect(t *testing.T) {
 }
 
 func TestResolveDialect(t *testing.T) {
-	for _, d := range []string{"sqlite", "sqlite3", "mysql", "postgres", "postgresql", "pg"} {
+	for _, d := range []string{"sqlite", "sqlite3", "mysql", "postgres", "postgresql", "pgsql", "pg", " PGSQL "} {
 		_, subdir, err := ResolveDialect(d)
 		require.NoError(t, err, "dialect %q", d)
 		assert.NotEmpty(t, subdir)
 	}
 	_, _, err := ResolveDialect("oracle")
 	assert.Error(t, err)
+}
+
+func TestMigrationFailuresArePropagated(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	root := migrationsRoot(t)
+
+	assert.ErrorContains(t, Run(t.Context(), db.DB, root, "sqlite", "goose_closed_run"), "run migrations")
+	assert.ErrorContains(t, Down(t.Context(), db.DB, root, "sqlite", "goose_closed_down"), "rollback migration")
+	assert.ErrorContains(t, DownTo(t.Context(), db.DB, root, "sqlite", "goose_closed_down_to", 0), "rollback migrations")
+
+	empty := fstest.MapFS{"unrelated.txt": {Data: []byte("value")}}
+	_, err = newProvider(db.DB, empty, "sqlite", "goose_missing_fs")
+	assert.ErrorContains(t, err, "create provider")
 }

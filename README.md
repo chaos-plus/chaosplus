@@ -1,5 +1,10 @@
 # Chaosplus API
 
+IAM 的纯自研目标架构、模块边界、数据模型和迁移计划见
+[docs/iam-platform-architecture.md](docs/iam-platform-architecture.md)。
+访问申请、四眼审批与临时授权契约见
+[docs/access-governance.md](docs/access-governance.md)。
+
 Production bootstrap, Docker Compose quick start, TLS, and external-service
 configuration are documented in [docs/deployment.md](docs/deployment.md).
 
@@ -20,17 +25,30 @@ HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over
 - **Internationalized messages** — `pkg/i18n` resolves the request locale from
   `?lang=` → `X-Lang` → `Accept-Language`, normalized to a supported locale
   (`en-US`, `zh-CN`, `ms-MY`; fallback `en-US`). A huma transformer localizes the
-  envelope message for success, business, and framework errors alike.
+  envelope message for success, business, and framework errors alike. Public
+  business errors are owned by each feature module's `i18n/locales` directory;
+  startup and repository gates require complete key parity across all locales.
 - **Multi-database via bun + goose** — datasources (`internal/core/extension/bunx`)
   support SQLite, MySQL, and PostgreSQL with read/write routing; schema migrations
   run per module via goose (`internal/core/extension/goosex`).
 - **Multi-renderer API docs** — a tabbed `/docs` page hosting five renderers
   (Scalar, Swagger UI, ReDoc, Stoplight, openapi-ui), each also reachable at its
   own path. See `internal/core/extension/humax/docs`.
-- **Feature modules** — a single composition root (`internal/app/modules.go`)
-  wires the modules: `guid` (Snowflake-style ID generation with a leased worker
-  id) and `geoip` (IP geolocation). Supporting infra: `wuid` (worker-id lease)
-  and `dlock` (distributed lock).
+- **Self-hosted IAM** — local principals, Argon2id credentials, opaque browser
+  sessions, email-verified self-service registration without implicit tenant
+  membership, tenant service accounts with one-time client credentials, Ed25519
+  JWT/JWKS, OAuth2/OIDC, tenant RBAC, generic entity scopes,
+  department, position, static group, and rule-driven dynamic group directories, direct/group/position role assignments,
+  tenant-scoped entity and business-resource relationship grants, revision-stable data constraints and authorization explanations,
+  access requests with four-eyes approval, time-limited role grants, direct/temporary grant reviews, menus, OAuth clients, and audit events
+  use the configured primary database. Native SCIM 2.0 inbound provisioning provides
+  tenant-bound directories, hashed Bearer credentials, Users, Groups, PATCH, Bulk,
+  filtering, discovery, ETags, deprovisioning, and transactional audit; see
+  [docs/scim-provisioning.md](docs/scim-provisioning.md).
+- **Feature modules** — the composition root (`internal/app/modules.go`) wires
+  identity, authn, OAuth, IAM, organization, provisioning, governance, audit, GUID and GeoIP modules.
+  Supporting infrastructure includes WUID worker leases and distributed
+  deployment locks.
 
 ## Requirements
 
@@ -134,12 +152,34 @@ lease run against it. With no writable database configured, the `guid` module is
 skipped and the app still serves endpoints that don't need one. In debug mode an
 in-memory SQLite database is used.
 
+### GeoIP endpoints
+
+GeoIP providers use their public upstream endpoints by default. Trusted
+deployments can route lookups and database downloads through internal mirrors
+without replacing HTTP transports in code:
+
+```yaml
+geoip:
+  geolite2:
+    api_base_url: "https://github-api.example.invalid"
+  ip2location:
+    token: "replace-with-secret"
+    download_base_url: "https://geoip-mirror.example.invalid/ip2location"
+  ipapi:
+    base_url: "https://geoip-mirror.example.invalid/ipapi"
+```
+
+These endpoint values are trusted operator configuration. IP2Location tokens
+are added as query parameters only for the outbound request and are never
+written to application logs.
+
 ## Project layout
 
 ```
 cmd/chaosplus-server        # entry point (cobra root command)
 internal/
   app/                      # composition root: config, lifecycle, REST + gRPC servers, modules
+  modules/                  # identity, authn, oauth, iam, organization, provisioning, governance, audit
   core/extension/           # framework adapters
     humax/respx             # uniform {code,message,meta,data} envelope + i18n
     humax/docs              # multi-renderer OpenAPI docs

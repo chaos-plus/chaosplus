@@ -15,10 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 	"github.com/redis/go-redis/v9"
@@ -46,14 +45,12 @@ type App struct {
 	// phases (migrate/start/register/stop) are driven by the phase runners.
 	mods []any
 
-	authnVerifier  *authn.Verifier
 	authnRequest   authz.TokenVerifier
 	authnWeb       *authnmod.WebService
 	authzRegistrar *authz.Registrar
-	spicedb        *spicedbx.AuthzedClient
-
-	rest *http.Server
-	grpc *grpc.Server
+	claimPlugins   *plugin.Claims
+	rest           *http.Server
+	grpc           *grpc.Server
 
 	// ctx is the application's root context; cancel tears down background workers
 	// (e.g. geoip database refresh) during shutdown. Set in Run.
@@ -187,12 +184,6 @@ func (app *App) shutdown() error {
 	if app.redis != nil {
 		if err := app.redis.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("redis close: %w", err))
-		}
-	}
-
-	if app.spicedb != nil {
-		if err := app.spicedb.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("spicedb close: %w", err))
 		}
 	}
 

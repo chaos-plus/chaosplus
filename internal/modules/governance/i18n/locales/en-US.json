@@ -1,0 +1,22 @@
+{
+  "access_request_not_found": "The access request was not found in this tenant. Refresh the request list and verify its identifier.",
+  "access_request_role_not_found": "The requested role no longer exists in this tenant. Choose an available role and submit a new request.",
+  "access_request_expired": "The access request or approved grant has expired. Submit a new request with a future access end time.",
+  "access_request_requester_inactive": "Only an active tenant member can request access. Restore the tenant membership before trying again.",
+  "access_already_granted": "This role is already assigned to the requester. No additional access request is needed.",
+  "access_request_state_conflict": "The access request was already decided or changed. Refresh it before taking another action.",
+  "access_request_self_approval": "Requesters cannot approve or reject their own access requests. Another authorized approver must decide it.",
+  "access_request_requester_only": "Only the original requester can withdraw this access request or relinquish its approved access.",
+  "invalid_access_request": "The access request is invalid. Choose an existing role, provide a clear reason, and set an access end time within 365 days.",
+  "human_principal_required": "This operation requires an authenticated human principal. Service accounts and OAuth clients cannot request, approve, or review access.",
+  "governance_unavailable": "The access governance service is temporarily unavailable. No governance change was committed; try again later.",
+  "access_review_not_found": "The access review was not found in this tenant. Refresh the review list and verify its identifier.",
+  "access_review_item_not_found": "The selected access review item was not found. Refresh the review before deciding it.",
+  "access_review_expired": "The access review deadline has passed. Create a new review to certify current access.",
+  "access_review_empty": "There are no active direct or temporary tenant role grants to review.",
+  "access_review_state_conflict": "The access review or item was already changed. Refresh it before taking another action.",
+  "access_review_incomplete": "Every access review item must be kept or revoked before the review can be completed.",
+  "access_review_self_decision": "Reviewers cannot certify their own access. Another authorized reviewer must decide this item.",
+  "access_review_last_administrator": "This decision would remove the tenant's last durable administrator. Assign another administrator before revoking this access.",
+  "invalid_access_review": "The access review is invalid. Provide a clear name, a deadline within 365 days, and a valid keep or revoke decision."
+}

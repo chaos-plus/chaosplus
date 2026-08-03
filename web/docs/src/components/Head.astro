@@ -1,0 +1,31 @@
+---
+// Wrap Starlight's default <head> and add Astro's ClientRouter so navigation
+// swaps only the page content instead of a full reload (keeps the left menu
+// mounted / scrolled). astro-mermaid already re-inits on `astro:after-swap`.
+import Default from '@astrojs/starlight/components/Head.astro';
+import { ClientRouter } from 'astro:transitions';
+
+const protectedBuild = Boolean(import.meta.env.DOC_PASSWORD);
+const portableBuild = import.meta.env.DOC_BUILD_TARGET === 'portable';
+---
+
+<Default />
+{protectedBuild && !portableBuild && <script is:inline src="/protected-router.js"></script>}
+{!portableBuild && <ClientRouter />}
+<script is:inline>
+	// Right-side TOC collapse (widens content), shared across all articles.
+	// Delegation-based so it works without view-transition events and survives swaps.
+	(() => {
+		const KEY = 'sl-toc-collapsed';
+		const apply = () =>
+			document.documentElement.classList.toggle('toc-collapsed', localStorage.getItem(KEY) === '1');
+		apply(); // before paint on hard load (no flash)
+		// ClientRouter overwrites <html> attributes on nav → re-apply after each swap.
+		document.addEventListener('astro:after-swap', apply);
+		document.addEventListener('click', (e) => {
+			if (!e.target?.closest?.('#toc-toggle')) return;
+			const collapsed = document.documentElement.classList.toggle('toc-collapsed');
+			localStorage.setItem(KEY, collapsed ? '1' : '0');
+		});
+	})();
+</script>

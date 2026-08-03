@@ -1,0 +1,478 @@
+package iam
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+)
+
+func TestAuthorizerImmediateTenantRBAC(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := context.Background()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant-a", Subject: "principal-a", DisplayName: "Principal A", Status: MemberActive})
+	var err error
+	role := createTestRole(t, repo, "tenant-a", "Operators")
+	_, err = repo.GrantPermission(ctx, "tenant-a", role.ID, "store_view")
+	require.NoError(t, err)
+	_, err = repo.AddMember(ctx, "tenant-a", role.ID, "principal-a")
+	require.NoError(t, err)
+	authorizer := NewAuthorizer(repo.db)
+	allowed, err := authorizer.Check(ctx, "tenant-a", "store_view", "principal-a")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	allowed, err = authorizer.Check(ctx, "tenant-b", "store_view", "principal-a")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	_, err = repo.SetMemberStatus(ctx, "tenant-a", "principal-a", MemberDisabled)
+	require.NoError(t, err)
+	allowed, err = authorizer.Check(ctx, "tenant-a", "store_view", "principal-a")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	_, err = repo.SetMemberStatus(ctx, "tenant-a", "principal-a", MemberActive)
+	require.NoError(t, err)
+	allowed, err = authorizer.Check(ctx, "tenant-a", "store_view", "principal-a")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	_, err = repo.RevokePermission(ctx, "tenant-a", role.ID, "store_view")
+	require.NoError(t, err)
+	allowed, err = authorizer.Check(ctx, "tenant-a", "store_view", "principal-a")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+}
+
+func TestAuthorizerFollowsTenantLifecycle(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := t.Context()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	role := createTestRole(t, repo, "tenant", "Viewer")
+	_, err := repo.GrantPermission(ctx, "tenant", role.ID, "store_view")
+	require.NoError(t, err)
+	_, err = repo.AddMember(ctx, "tenant", role.ID, "principal")
+	require.NoError(t, err)
+	entity := entityTestRow("tenant", "store", "", "store")
+	_, err = repo.db.NewInsert().Model(&entity).Exec(ctx)
+	require.NoError(t, err)
+	now := time.Now().UTC().UnixMilli()
+	_, err = repo.db.NewInsert().Model(&roleBindingForTest{TenantID: "tenant", RoleID: role.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "allow", CreatedAt: now}).Exec(ctx)
+	require.NoError(t, err)
+
+	authorizer := NewAuthorizer(repo.db)
+	allowed, err := authorizer.Check(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	allowed, err = authorizer.CheckEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+
+	for _, status := range []string{"suspended", "active", "deleted"} {
+		_, err = repo.db.NewUpdate().Table("iam_tenants").Set("status = ?", status).Where("id = ?", "tenant").Exec(ctx)
+		require.NoError(t, err)
+		allowed, err = authorizer.Check(ctx, "tenant", "store_view", "principal")
+		require.NoError(t, err)
+		assert.Equal(t, status == "active", allowed)
+		allowed, err = authorizer.CheckEntity(ctx, "tenant", "store", "store_view", "principal")
+		require.NoError(t, err)
+		assert.Equal(t, status == "active", allowed)
+		if status != "active" {
+			explanation, explainErr := authorizer.ExplainEntity(ctx, "tenant", "store", "store_view", "principal")
+			require.NoError(t, explainErr)
+			assert.Equal(t, "inactive_tenant", explanation.Reason)
+		}
+	}
+}
+
+func TestAuthorizerPlatformAdministrationIsNotATenantGrant(t *testing.T) {
+	repo := newIAMRepository(t)
+	now := time.Now().UTC().UnixMilli()
+	_, err := repo.db.ExecContext(t.Context(), `INSERT INTO iam_principals
+		(id, login_name, email, display_name, status, created_at, updated_at, disabled_at)
+		VALUES (?, ?, '', ?, 'active', ?, ?, 0)`, "platform-admin", "platform-admin", "Platform Admin", now, now)
+	require.NoError(t, err)
+	changed, err := repo.GrantPlatformAdministrator(t.Context(), "platform-admin")
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = repo.GrantPlatformAdministrator(t.Context(), "platform-admin")
+	require.NoError(t, err)
+	assert.False(t, changed)
+	authorizer := NewAuthorizer(repo.db)
+	allowed, err := authorizer.CheckPlatform(t.Context(), "tenant_view", "platform-admin")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	allowed, err = authorizer.Check(t.Context(), "tenant", "store_view", "platform-admin")
+	require.NoError(t, err)
+	assert.False(t, allowed, "platform administrators must still enter a tenant through active membership")
+
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "platform-admin", DisplayName: "Platform Admin", Status: MemberActive})
+	allowed, err = authorizer.Check(t.Context(), "tenant", "store_view", "platform-admin")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	_, err = repo.db.ExecContext(t.Context(), "UPDATE iam_principals SET status = 'disabled' WHERE id = ?", "platform-admin")
+	require.NoError(t, err)
+	allowed, err = authorizer.CheckPlatform(t.Context(), "tenant_view", "platform-admin")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+}
+
+func TestAuthorizerRejectsInvalidRequestsAndStorageFailure(t *testing.T) {
+	require.Panics(t, func() { NewAuthorizer(nil) })
+	repo := newIAMRepository(t)
+	authorizer := NewAuthorizer(repo.db)
+
+	allowed, err := authorizer.CheckBulk(t.Context(), "", nil, "")
+	require.NoError(t, err)
+	assert.Empty(t, allowed)
+	_, err = authorizer.CheckBulk(t.Context(), "tenant", []string{""}, "principal")
+	assert.Error(t, err)
+	_, err = authorizer.Constraint(t.Context(), "tenant", "store_view", "")
+	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
+	_, err = authorizer.ExplainEntity(t.Context(), "tenant", strings.Repeat("e", 65), "store_view", "principal")
+	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
+
+	_, err = repo.db.ExecContext(t.Context(), "DROP TABLE iam_policy_revisions")
+	require.NoError(t, err)
+	_, err = authorizer.Constraint(t.Context(), "tenant", "store_view", "principal")
+	assert.ErrorContains(t, err, "get IAM policy revision")
+}
+
+func TestAuthorizerConstraintAndExplanation(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := t.Context()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	var err error
+	entities := []entityRowForTest{
+		entityTestRow("tenant", "company", "", "company"),
+		entityTestRow("tenant", "store-a", "company", "store"),
+		entityTestRow("tenant", "store-b", "company", "store"),
+		entityTestRow("tenant", "other", "", "store"),
+		entityTestRow("other-tenant", "foreign", "", "store"),
+	}
+	_, err = repo.db.NewInsert().Model(&entities).Exec(ctx)
+	require.NoError(t, err)
+	allowRole := createTestRole(t, repo, "tenant", "Scoped viewer")
+	denyRole := createTestRole(t, repo, "tenant", "Scoped denial")
+	adminRole := createTestRole(t, repo, "tenant", "Tenant administrator")
+	for _, role := range []Role{allowRole, denyRole} {
+		_, err = repo.GrantPermission(ctx, "tenant", role.ID, "store_view")
+		require.NoError(t, err)
+	}
+	_, err = repo.GrantPermission(ctx, "tenant", adminRole.ID, "tenant_administer")
+	require.NoError(t, err)
+	now := time.Now().UTC().UnixMilli()
+	bindings := []roleBindingForTest{
+		{TenantID: "tenant", RoleID: allowRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "company", Effect: "allow", CreatedAt: now},
+		{TenantID: "tenant", RoleID: denyRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store-b", Effect: "deny", CreatedAt: now},
+	}
+	_, err = repo.db.NewInsert().Model(&bindings).Exec(ctx)
+	require.NoError(t, err)
+	require.NoError(t, policyx.Advance(ctx, repo.db, repo.dialect, "tenant", now))
+
+	authorizer := NewAuthorizer(repo.db)
+	constraint, err := authorizer.Constraint(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, constraint.AllowAll)
+	assert.Equal(t, []string{"company", "store-a"}, constraint.ResourceIDs)
+	assert.Equal(t, []string{"store-b"}, constraint.DeniedIDs)
+	assert.Equal(t, []string{"company"}, []string{constraint.Ancestors[0].ID})
+	assert.EqualValues(t, 1, constraint.Revision)
+	assert.NotNil(t, constraint.OwnerIDs)
+	assert.NotNil(t, constraint.DepartmentIDs)
+
+	allowed, err := authorizer.ExplainEntity(ctx, "tenant", "store-a", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed.Allowed)
+	assert.Equal(t, "permission_grant", allowed.Reason)
+	require.Len(t, allowed.Matches, 1)
+	assert.True(t, allowed.Matches[0].Inherited)
+
+	denied, err := authorizer.ExplainEntity(ctx, "tenant", "store-b", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, denied.Allowed)
+	assert.Equal(t, "explicit_deny", denied.Reason)
+	assert.Len(t, denied.Matches, 2)
+
+	_, err = repo.AddMember(ctx, "tenant", adminRole.ID, "principal")
+	require.NoError(t, err)
+	constraint, err = authorizer.Constraint(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, constraint.AllowAll)
+	assert.Empty(t, constraint.ResourceIDs)
+	assert.Equal(t, []string{"store-b"}, constraint.DeniedIDs)
+	allowed, err = authorizer.ExplainEntity(ctx, "tenant", "other", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed.Allowed)
+	assert.Equal(t, "administrator_grant", allowed.Reason)
+	assert.Contains(t, allowed.Matches[0].SourceType, "role_member")
+
+	_, err = repo.SetMemberStatus(ctx, "tenant", "principal", MemberDisabled)
+	require.NoError(t, err)
+	constraint, err = authorizer.Constraint(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, constraint.AllowAll)
+	assert.Empty(t, constraint.ResourceIDs)
+	explanation, err := authorizer.ExplainEntity(ctx, "tenant", "company", "store_view", "principal")
+	require.NoError(t, err)
+	assert.Equal(t, "inactive_membership", explanation.Reason)
+	_, err = authorizer.ExplainEntity(ctx, "tenant", "missing", "store_view", "principal")
+	assert.True(t, errors.Is(err, iamdomain.ErrEntityNotFound))
+}
+
+func TestAuthorizerAdministratorExpansion(t *testing.T) {
+	repo := newIAMRepository(t)
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	var err error
+	role := createTestRole(t, repo, "tenant", "Administrators")
+	_, err = repo.GrantPermission(context.Background(), "tenant", role.ID, "tenant_administer")
+	require.NoError(t, err)
+	_, err = repo.AddMember(context.Background(), "tenant", role.ID, "principal")
+	require.NoError(t, err)
+	allowed, err := NewAuthorizer(repo.db).Check(context.Background(), "tenant", "menu_delete", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	allowed, err = NewAuthorizer(repo.db).Check(context.Background(), "tenant", "platform_administer", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	_, err = repo.GrantPermission(context.Background(), "tenant", role.ID, "platform_administer")
+	require.NoError(t, err)
+	allowed, err = NewAuthorizer(repo.db).Check(context.Background(), "tenant", "platform_administer", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed, "persisted tenant grants must never confer platform authority")
+}
+
+func TestAuthorizerEntityInheritanceAndDeny(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := context.Background()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	var err error
+	parent := entityTestRow("tenant", "company", "", "company")
+	child := entityTestRow("tenant", "store", "company", "store")
+	_, err = repo.db.NewInsert().Model(&[]entityRowForTest{parent, child}).Exec(ctx)
+	require.NoError(t, err)
+	allowRole := createTestRole(t, repo, "tenant", "Company viewer")
+	denyRole := createTestRole(t, repo, "tenant", "Store deny")
+	_, err = repo.GrantPermission(ctx, "tenant", allowRole.ID, "store_view")
+	require.NoError(t, err)
+	_, err = repo.GrantPermission(ctx, "tenant", denyRole.ID, "store_view")
+	require.NoError(t, err)
+	now := time.Now().UTC().UnixMilli()
+	bindings := []roleBindingForTest{
+		{TenantID: "tenant", RoleID: allowRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "company", Effect: "allow", CreatedAt: now},
+		{TenantID: "tenant", RoleID: denyRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "deny", CreatedAt: now},
+	}
+	_, err = repo.db.NewInsert().Model(&bindings).Exec(ctx)
+	require.NoError(t, err)
+	allowed, err := NewAuthorizer(repo.db).CheckEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	_, err = repo.db.NewDelete().Model((*roleBindingForTest)(nil)).Where("effect = 'deny'").Exec(ctx)
+	require.NoError(t, err)
+	allowed, err = NewAuthorizer(repo.db).CheckEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	_, err = repo.SetMemberStatus(ctx, "tenant", "principal", MemberDisabled)
+	require.NoError(t, err)
+	allowed, err = NewAuthorizer(repo.db).CheckEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+}
+
+func TestAuthorizerScopedAdministratorDenyAndExpiredBinding(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := t.Context()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	var err error
+	_, err = repo.db.NewInsert().Model(&[]entityRowForTest{
+		entityTestRow("tenant", "company", "", "company"),
+		entityTestRow("tenant", "store", "company", "store"),
+	}).Exec(ctx)
+	require.NoError(t, err)
+
+	adminRole := createTestRole(t, repo, "tenant", "Scoped administrator")
+	viewerRole := createTestRole(t, repo, "tenant", "Direct viewer")
+	expiredRole := createTestRole(t, repo, "tenant", "Expired viewer")
+	_, err = repo.GrantPermission(ctx, "tenant", adminRole.ID, "tenant_administer")
+	require.NoError(t, err)
+	for _, role := range []Role{viewerRole, expiredRole} {
+		_, err = repo.GrantPermission(ctx, "tenant", role.ID, "store_view")
+		require.NoError(t, err)
+	}
+	now := repo.now().UnixMilli()
+	bindings := []roleBindingForTest{
+		{TenantID: "tenant", RoleID: adminRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "company", Effect: "allow", CreatedAt: now},
+		{TenantID: "tenant", RoleID: adminRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "deny", CreatedAt: now},
+		{TenantID: "tenant", RoleID: expiredRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "allow", ExpiresAt: now, CreatedAt: now},
+	}
+	_, err = repo.db.NewInsert().Model(&bindings).Exec(ctx)
+	require.NoError(t, err)
+	authorizer := NewAuthorizer(repo.db)
+	authorizer.now = repo.now
+
+	explanation, err := authorizer.ExplainEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, explanation.Allowed)
+	assert.Equal(t, "administrator_scope_denied", explanation.Reason)
+	require.Len(t, explanation.Matches, 2)
+	for _, match := range explanation.Matches {
+		assert.NotEqual(t, expiredRole.ID, match.RoleID)
+	}
+
+	_, err = repo.db.NewInsert().Model(&roleBindingForTest{
+		TenantID: "tenant", RoleID: viewerRole.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "allow", CreatedAt: now,
+	}).Exec(ctx)
+	require.NoError(t, err)
+	explanation, err = authorizer.ExplainEntity(ctx, "tenant", "store", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, explanation.Allowed)
+	assert.Equal(t, "permission_grant", explanation.Reason)
+}
+
+func TestAuthorizerAppliesRoleConditionsToEveryAssignmentSource(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := t.Context()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Email: "principal@example.test", Status: MemberActive})
+	now := repo.now().UTC().UnixMilli()
+	condition := json.RawMessage(`{"version":1,"gte":[{"context":"auth.acr"},{"value":2}]}`)
+	type source struct {
+		name string
+		code string
+		bind func(Role)
+	}
+	sources := []source{
+		{name: "Direct", code: "user_view", bind: func(role Role) {
+			_, err := repo.AddMember(ctx, "tenant", role.ID, "principal")
+			require.NoError(t, err)
+		}},
+		{name: "Temporary", code: "role_view", bind: func(role Role) {
+			_, err := repo.db.ExecContext(ctx, `INSERT INTO iam_temporary_role_grants
+				(tenant_id,id,role_id,principal_id,source_type,source_id,starts_at,ends_at,created_by,created_at)
+				VALUES ('tenant','temporary',?,'principal','access_request','request',?,?, 'approver',?)`, role.ID, now-1, now+time.Hour.Milliseconds(), now)
+			require.NoError(t, err)
+		}},
+		{name: "Static group", code: "menu_view", bind: func(role Role) {
+			_, err := repo.db.ExecContext(ctx, `INSERT INTO iam_groups
+				(tenant_id,id,name,name_key,group_type,description,status,sort_order,version,created_at,updated_at)
+				VALUES ('tenant','static','Static','static','static','','active',0,1,?,?)`, now, now)
+			require.NoError(t, err)
+			_, err = repo.db.ExecContext(ctx, `INSERT INTO iam_group_members
+				(tenant_id,group_id,principal_id,starts_at,ends_at,created_at,updated_at)
+				VALUES ('tenant','static','principal',0,0,?,?)`, now, now)
+			require.NoError(t, err)
+			_, err = repo.db.ExecContext(ctx, "INSERT INTO iam_group_role_bindings (tenant_id,role_id,group_id,created_at) VALUES ('tenant',?,'static',?)", role.ID, now)
+			require.NoError(t, err)
+		}},
+		{name: "Dynamic group", code: "entity_view", bind: func(role Role) {
+			rule := `{"version":1,"match":"all","conditions":[{"field":"member.status","operator":"in","values":["active"]}]}`
+			_, err := repo.db.ExecContext(ctx, `INSERT INTO iam_groups
+				(tenant_id,id,name,name_key,group_type,rule_json,description,status,sort_order,version,created_at,updated_at)
+				VALUES ('tenant','dynamic','Dynamic','dynamic','dynamic',?,'','active',0,1,?,?)`, rule, now, now)
+			require.NoError(t, err)
+			_, err = repo.db.ExecContext(ctx, "INSERT INTO iam_group_role_bindings (tenant_id,role_id,group_id,created_at) VALUES ('tenant',?,'dynamic',?)", role.ID, now)
+			require.NoError(t, err)
+		}},
+		{name: "Position", code: "store_view", bind: func(role Role) {
+			_, err := repo.db.ExecContext(ctx, `INSERT INTO iam_positions
+				(tenant_id,id,code,name,status,sort_order,version,created_at,updated_at)
+				VALUES ('tenant','position','operator','Operator','active',0,1,?,?)`, now, now)
+			require.NoError(t, err)
+			_, err = repo.db.ExecContext(ctx, `INSERT INTO iam_position_members
+				(tenant_id,position_id,principal_id,starts_at,ends_at,created_at,updated_at)
+				VALUES ('tenant','position','principal',0,0,?,?)`, now, now)
+			require.NoError(t, err)
+			_, err = repo.db.ExecContext(ctx, "INSERT INTO iam_position_role_bindings (tenant_id,role_id,position_id,created_at) VALUES ('tenant',?,'position',?)", role.ID, now)
+			require.NoError(t, err)
+		}},
+	}
+	roles := make(map[string]Role, len(sources))
+	codes := make([]string, 0, len(sources))
+	for _, item := range sources {
+		role := createTestRole(t, repo, "tenant", item.name)
+		_, err := repo.GrantPermission(ctx, "tenant", role.ID, item.code)
+		require.NoError(t, err)
+		_, changed, err := repo.SetPermissionCondition(ctx, "tenant", role.ID, item.code, condition)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		item.bind(role)
+		roles[item.code] = role
+		codes = append(codes, item.code)
+	}
+	authorizer := NewAuthorizer(repo.db)
+	authorizer.now = repo.now
+	low := policyx.WithTrustedContext(ctx, policyx.TrustedContext{ACR: 1})
+	allowed, err := authorizer.CheckBulk(low, "tenant", codes, "principal")
+	require.NoError(t, err)
+	for _, code := range codes {
+		assert.False(t, allowed[code], code)
+	}
+	high := policyx.WithTrustedContext(ctx, policyx.TrustedContext{ACR: 2})
+	allowed, err = authorizer.CheckBulk(high, "tenant", codes, "principal")
+	require.NoError(t, err)
+	for _, code := range codes {
+		assert.True(t, allowed[code], code)
+	}
+
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "scoped", DisplayName: "Scoped", Status: MemberActive})
+	entity := entityTestRow("tenant", "store", "", "store")
+	_, err = repo.db.NewInsert().Model(&entity).Exec(ctx)
+	require.NoError(t, err)
+	scopedRole := createTestRole(t, repo, "tenant", "Scoped")
+	_, err = repo.GrantPermission(ctx, "tenant", scopedRole.ID, "store_update")
+	require.NoError(t, err)
+	_, _, err = repo.SetPermissionCondition(ctx, "tenant", scopedRole.ID, "store_update", condition)
+	require.NoError(t, err)
+	_, err = repo.db.NewInsert().Model(&roleBindingForTest{TenantID: "tenant", RoleID: scopedRole.ID, PrincipalID: "scoped", ScopeType: "entity", ScopeID: "store", Effect: "allow", CreatedAt: now}).Exec(ctx)
+	require.NoError(t, err)
+	allowedEntity, err := authorizer.CheckEntity(low, "tenant", "store", "store_update", "scoped")
+	require.NoError(t, err)
+	assert.False(t, allowedEntity)
+	allowedEntity, err = authorizer.CheckEntity(high, "tenant", "store", "store_update", "scoped")
+	require.NoError(t, err)
+	assert.True(t, allowedEntity)
+
+	_, err = repo.db.NewUpdate().Table("iam_role_permissions").Set("condition_json = ?", "{broken").
+		Where("tenant_id = ? AND role_id = ? AND permission_code = ?", "tenant", roles["user_view"].ID, "user_view").Exec(ctx)
+	require.NoError(t, err)
+	allowed, err = authorizer.CheckBulk(high, "tenant", codes, "principal")
+	assert.ErrorContains(t, err, "evaluate role permission condition")
+	assert.Nil(t, allowed)
+}
+
+type entityRowForTest struct {
+	bun.BaseModel `bun:"table:iam_entities"`
+	TenantID      string  `bun:"tenant_id"`
+	ID            string  `bun:"id"`
+	ParentID      *string `bun:"parent_id"`
+	Type          string  `bun:"type"`
+	Name          string  `bun:"name"`
+	Status        string  `bun:"status"`
+	Metadata      string  `bun:"metadata"`
+	CreatedAt     int64   `bun:"created_at"`
+	UpdatedAt     int64   `bun:"updated_at"`
+}
+
+func entityTestRow(tenantID, id, parentID, entityType string) entityRowForTest {
+	var parent *string
+	if parentID != "" {
+		parent = &parentID
+	}
+	return entityRowForTest{TenantID: tenantID, ID: id, ParentID: parent, Type: entityType, Name: id, Status: "active", Metadata: "{}", CreatedAt: 1, UpdatedAt: 1}
+}
+
+type roleBindingForTest struct {
+	bun.BaseModel `bun:"table:iam_role_bindings"`
+	TenantID      string `bun:"tenant_id"`
+	RoleID        string `bun:"role_id"`
+	PrincipalID   string `bun:"principal_id"`
+	ScopeType     string `bun:"scope_type"`
+	ScopeID       string `bun:"scope_id"`
+	Effect        string `bun:"effect"`
+	ExpiresAt     int64  `bun:"expires_at"`
+	CreatedAt     int64  `bun:"created_at"`
+}

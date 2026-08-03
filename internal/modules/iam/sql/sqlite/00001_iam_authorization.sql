@@ -57,7 +57,7 @@ CREATE INDEX idx_authz_outbox_pending ON authz_outbox (status, available_at);
 CREATE INDEX idx_authz_outbox_locked ON authz_outbox (status, locked_at);
 
 -- +goose Down
-DROP TABLE authz_outbox;
+DROP TABLE IF EXISTS authz_outbox;
 DROP TABLE iam_role_members;
 DROP TABLE iam_role_permissions;
 DROP TABLE iam_roles;

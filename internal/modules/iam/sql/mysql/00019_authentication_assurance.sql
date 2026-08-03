@@ -1,0 +1,19 @@
+-- +goose Up
+ALTER TABLE iam_sessions
+    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN acr INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN amr VARCHAR(128) NOT NULL DEFAULT '';
+UPDATE iam_sessions SET auth_time = created_at WHERE auth_time = 0;
+ALTER TABLE iam_oauth_codes
+    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN acr INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN amr VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE iam_refresh_tokens
+    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN acr INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN amr VARCHAR(128) NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE iam_refresh_tokens DROP COLUMN amr, DROP COLUMN acr, DROP COLUMN auth_time;
+ALTER TABLE iam_oauth_codes DROP COLUMN amr, DROP COLUMN acr, DROP COLUMN auth_time;
+ALTER TABLE iam_sessions DROP COLUMN amr, DROP COLUMN acr, DROP COLUMN auth_time;

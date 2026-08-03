@@ -2,42 +2,25 @@ package iam
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 )
 
-type selectiveBulkChecker struct {
-	allowed map[string]bool
-	err     error
-}
-
-func (c selectiveBulkChecker) CheckBulk(_ context.Context, _ spicedbx.ObjectRef, permissions []string, _ spicedbx.SubjectRef, _ spicedbx.ZedToken) (map[string]bool, error) {
-	if c.err != nil {
-		return nil, c.err
-	}
-	result := make(map[string]bool, len(permissions))
-	for _, code := range permissions {
-		result[code] = c.allowed[code]
-	}
-	return result, nil
-}
-
 func TestTenantMemberLifecycleAndFilters(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(t)
 	ctx := context.Background()
-	member, err := svc.PutTenantMember(ctx, "t1", "u1", " Alice ", "alice@example.com", MemberActive)
+	member, err := svc.PutTenantMember(ctx, "t1", "u1", " Alice ", "alice@example.com", "", MemberActive)
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", member.DisplayName)
-	member, err = svc.PutTenantMember(ctx, "t1", "u1", "Alice Updated", "alice@example.com", MemberActive)
+	member, err = svc.PutTenantMember(ctx, "t1", "u1", "Alice Updated", "alice@example.com", "", MemberActive)
 	require.NoError(t, err)
 	assert.Equal(t, "Alice Updated", member.DisplayName)
-	_, err = svc.PutTenantMember(ctx, "t1", "u2", "Bob", "", MemberDisabled)
+	_, err = svc.PutTenantMember(ctx, "t1", "u2", "Bob", "", "", MemberDisabled)
 	require.NoError(t, err)
 
 	members, total, err := svc.ListTenantMembers(ctx, "t1", MemberFilter{Search: "alice", Status: MemberActive, Limit: 50})
@@ -55,7 +38,7 @@ func TestTenantMemberLifecycleAndFilters(t *testing.T) {
 }
 
 func TestTenantMemberRoleAssignmentRequiresActiveMembership(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(t)
 	ctx := context.Background()
 	role, err := svc.CreateRole(ctx, "t1", "Managers", "")
 	require.NoError(t, err)
@@ -67,14 +50,14 @@ func TestTenantMemberRoleAssignmentRequiresActiveMembership(t *testing.T) {
 	assert.NotNil(t, emptyMembers)
 	_, err = svc.AddMember(ctx, "t1", role.ID, "missing")
 	assert.ErrorIs(t, err, ErrMemberInactive)
-	_, err = svc.PutTenantMember(ctx, "t1", "u1", "User", "", MemberActive)
+	_, err = svc.PutTenantMember(ctx, "t1", "u1", "User", "", "", MemberActive)
 	require.NoError(t, err)
 	_, err = svc.AddMember(ctx, "t1", role.ID, "u1")
 	require.NoError(t, err)
 	roles, err := svc.ListTenantMemberRoles(ctx, "t1", "u1")
 	require.NoError(t, err)
 	assert.Equal(t, []string{role.ID}, roles)
-	_, err = svc.PutTenantMember(ctx, "t1", "u2", "Other", "", MemberActive)
+	_, err = svc.PutTenantMember(ctx, "t1", "u2", "Other", "", "", MemberActive)
 	require.NoError(t, err)
 	emptyRoles, err := svc.ListTenantMemberRoles(ctx, "t1", "u2")
 	require.NoError(t, err)
@@ -85,7 +68,7 @@ func TestTenantMemberRoleAssignmentRequiresActiveMembership(t *testing.T) {
 }
 
 func TestTenantMemberValidation(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
 		subject, name, email string
@@ -93,7 +76,7 @@ func TestTenantMemberValidation(t *testing.T) {
 	}{
 		{"", "User", "", MemberActive}, {"u", "", "", MemberActive}, {"u", "User", "bad", MemberActive}, {"u", "User", "", "unknown"},
 	} {
-		_, err := svc.PutTenantMember(ctx, "t1", tc.subject, tc.name, tc.email, tc.status)
+		_, err := svc.PutTenantMember(ctx, "t1", tc.subject, tc.name, tc.email, "", tc.status)
 		assert.ErrorIs(t, err, ErrInvalidArgument)
 	}
 	_, _, err := svc.ListTenantMembers(ctx, "t1", MemberFilter{Limit: 0})
@@ -108,10 +91,17 @@ func TestTenantMemberValidation(t *testing.T) {
 
 func TestMenuCRUDCycleAndEffectiveTree(t *testing.T) {
 	repo := newIAMRepository(t)
-	wake := &wakeRecorder{}
-	checker := selectiveBulkChecker{allowed: map[string]bool{"menu_view": false, "user_view": true}}
-	svc := NewService(authz.DefaultRegistry(), repo, wake, checker)
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "t1"))
+	svc := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	ctx := context.Background()
+	_, err := svc.PutTenantMember(ctx, "t1", "u1", "User", "", "", MemberActive)
+	require.NoError(t, err)
+	role, err := svc.CreateRole(ctx, "t1", "User readers", "")
+	require.NoError(t, err)
+	_, err = svc.GrantPermission(ctx, "t1", role.ID, "user_view")
+	require.NoError(t, err)
+	_, err = svc.AddMember(ctx, "t1", role.ID, "u1")
+	require.NoError(t, err)
 	root, err := svc.CreateMenu(ctx, Menu{TenantID: "t1", Label: "IAM", Route: "/iam", PermissionCode: "menu_view", Status: MenuActive})
 	require.NoError(t, err)
 	child, err := svc.CreateMenu(ctx, Menu{TenantID: "t1", ParentID: root.ID, Label: "Users", Route: "/iam/users", Icon: "Users", SortOrder: 2, PermissionCode: "user_view", Status: MenuActive})
@@ -139,6 +129,10 @@ func TestMenuCRUDCycleAndEffectiveTree(t *testing.T) {
 	assert.Equal(t, "People", tree[0].Children[0].Label)
 	require.NoError(t, svc.DeleteMenu(ctx, "t1", child.ID))
 	require.NoError(t, svc.DeleteMenu(ctx, "t1", root.ID))
+	tree, err = svc.EffectiveMenus(ctx, "t1", "u1")
+	require.NoError(t, err)
+	assert.NotNil(t, tree)
+	assert.Empty(t, tree)
 	_, err = svc.GetMenu(ctx, "t1", root.ID)
 	assert.ErrorIs(t, err, ErrMenuNotFound)
 }
@@ -146,21 +140,28 @@ func TestMenuCRUDCycleAndEffectiveTree(t *testing.T) {
 func TestEffectiveMenusFailClosed(t *testing.T) {
 	repo := newIAMRepository(t)
 	ctx := context.Background()
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "t1"))
+	putTestMember(t, repo, TenantMember{TenantID: "t1", Subject: "u1", DisplayName: "User", Status: MemberActive})
 	_, err := repo.CreateMenu(ctx, Menu{TenantID: "t1", Label: "Bad", Route: "/bad", PermissionCode: "missing_permission", Status: MenuActive})
 	require.NoError(t, err)
-	svc := NewService(authz.DefaultRegistry(), repo, &wakeRecorder{}, selectiveBulkChecker{})
+	svc := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	_, err = svc.EffectiveMenus(ctx, "t1", "u1")
 	assert.ErrorContains(t, err, "unknown persisted")
 	repo = newIAMRepository(t)
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "t1"))
+	putTestMember(t, repo, TenantMember{TenantID: "t1", Subject: "u1", DisplayName: "User", Status: MemberActive})
 	_, err = repo.CreateMenu(ctx, Menu{TenantID: "t1", Label: "Users", Route: "/users", PermissionCode: "user_view", Status: MenuActive})
 	require.NoError(t, err)
-	svc = NewService(authz.DefaultRegistry(), repo, &wakeRecorder{}, selectiveBulkChecker{err: errors.New("spicedb down")})
+	require.NoError(t, Migrate(t.Context(), repo.db))
+	_, err = repo.db.ExecContext(ctx, "DROP TABLE iam_role_permissions")
+	require.NoError(t, err)
+	svc = NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	_, err = svc.EffectiveMenus(ctx, "t1", "u1")
-	assert.ErrorContains(t, err, "spicedb down")
+	assert.ErrorContains(t, err, "check effective menu permissions")
 }
 
 func TestMenuValidation(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(t)
 	ctx := context.Background()
 	for _, menu := range []Menu{
 		{TenantID: "t1", Label: "", Status: MenuActive},
@@ -180,11 +181,11 @@ func TestMenuValidation(t *testing.T) {
 func TestMembershipChecker(t *testing.T) {
 	repo := newIAMRepository(t)
 	checker := NewMembershipChecker(repo.db)
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "t1"))
 	active, err := checker.IsMemberActive(context.Background(), "t1", "u1")
 	require.NoError(t, err)
 	assert.False(t, active)
-	_, err = repo.PutMember(context.Background(), TenantMember{TenantID: "t1", Subject: "u1", DisplayName: "User", Status: MemberActive})
-	require.NoError(t, err)
+	putTestMember(t, repo, TenantMember{TenantID: "t1", Subject: "u1", DisplayName: "User", Status: MemberActive})
 	active, err = checker.IsMemberActive(context.Background(), "t1", "u1")
 	require.NoError(t, err)
 	assert.True(t, active)
@@ -213,7 +214,7 @@ func TestAdminRepositoryDialectAndConflictBranches(t *testing.T) {
 }
 
 func TestAdminServiceTenantValidationBranches(t *testing.T) {
-	svc, _ := newTestService(t)
+	svc := newTestService(t)
 	ctx := context.Background()
 	_, err := svc.ListMenus(ctx, "")
 	assert.ErrorIs(t, err, ErrInvalidArgument)

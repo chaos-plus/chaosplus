@@ -1,33 +1,13 @@
-# Chaosplus 生产部署手册
+# Chaosplus 部署手册
 
-应用 SQL migration 和 SpiceDB schema 已编译进 Go 二进制。Zitadel 自身数据库始终由
-官方镜像的 `init/setup/start` 管理，不复制其内部 schema。
+Chaosplus IAM 是单体模块化 Go 服务，不依赖外部 IAM 或 PDP。默认 Compose 只运行 Traefik、PostgreSQL、
+Redis、Chaosplus API 和管理端。SQLite、MySQL、PostgreSQL 都由同一份应用配置和三套 Goose migration 支持。
 
-## 自动初始化范围
+## 首次启动
 
-首次启动时，Compose 按以下顺序执行：
-
-1. PostgreSQL 空卷初始化 `zitadel`、`spicedb`、`chaosplus` 三个隔离数据库及账号。
-2. Zitadel 官方 `init`、`setup` 创建实例、首个人类管理员、bootstrap machine user 和 Login V2 client。
-3. SpiceDB 官方 migration 执行到 `head`，随后启动服务。
-4. `chaosplus` 进程启动时自动获取数据库 advisory lock，对内嵌的 dlock/wuid/IAM Goose
-   migrations 执行 `up`。
-5. migration 完成后，进程幂等创建 Zitadel Project/Native PKCE App，更新 SpiceDB schema，
-   并绑定初始 tenant admin。
-6. 全部完成后 Chaosplus 才监听 HTTP/gRPC 端口；任一步失败都会退出并由 Compose 报错。
-
-生产初始化不会创建测试角色、测试菜单或测试用户。密码、MFA、登录会话和 token 全部属于
-Zitadel；Chaosplus 数据库只保存 tenant membership 和业务侧展示信息。
-
-## 单机快速启动
-
-要求 Docker Engine 24+、Docker Compose v2.20+，本机 80 端口可用。首次部署或从备份恢复时
-先生成部署密钥；以后启动、升级和重启都不再执行密钥脚本。
-
-Windows PowerShell：
+要求 Docker Engine 24+、Docker Compose v2.20+。在 `deploy/compose` 生成一次部署 secret：
 
 ```powershell
-cd deploy/compose
 ./init-secrets.ps1
 docker compose up -d --build --wait
 ```
@@ -35,131 +15,267 @@ docker compose up -d --build --wait
 Linux：
 
 ```bash
-cd deploy/compose
 ./init-secrets.sh
 docker compose up -d --build --wait
 ```
 
-正常部署只有一条启动命令：
+初始化脚本生成 PostgreSQL 管理/迁移/runtime 凭据、Redis 密码、Ed25519 seed、独立 32 字节认证材料加密主密钥和初始管理员密码。
+`.env` 与 `secrets/` 已被 Git 忽略，必须由部署系统备份并限制为部署账号可读。脚本输出初始密码，服务端
+只从 `/run/secrets/initial_admin_password` 读取，不写入 YAML。
+
+启动顺序：
+
+```text
+postgres + redis -> chaosplus(migrate -> bootstrap -> serve) -> web -> proxy
+```
+
+`chaosplus` 先持有数据库部署锁，执行 dlock/wuid/IAM migration，再幂等创建本地 Principal、租户成员、
+`System Administrator` 角色、完整权限绑定和十一个当前已实现的默认管理菜单。已有同路由菜单不会被覆盖；验证本地 authorizer 放行后才监听端口。
+
+默认地址：
+
+- 管理端：`http://app.localhost`
+- API 文档：`http://app.localhost/docs`
+- OIDC metadata：`http://app.localhost/.well-known/openid-configuration`
+- JWKS：`http://app.localhost/.well-known/jwks.json`
+
+## 配置规则
+
+Compose 挂载 `deploy/compose/config.yaml` 到 `/etc/chaosplus/config.yaml`，通过标准
+`--config /etc/chaosplus/config.yaml` 加载。`internal/app` 不存放部署 YAML。优先级为结构体默认值、YAML、
+环境变量、CLI 参数；环境变量只覆盖配置树中的已有字段。
+
+`authn.web.allowed_return_urls` 使用精确匹配，不是 origin 前缀。管理端每个可直接访问的受保护路由都必须显式登记；默认 Compose 已登记 `/`、`/iam/users`、`/iam/tenants`、`/iam/service-accounts`、`/iam/departments`、`/iam/positions`、`/iam/groups`、`/iam/roles`、`/iam/entities`、`/iam/menus`、`/iam/oauth-clients`、`/iam/scim-directories`、`/iam/audit-events` 和 `/security`。新增路由时必须同时更新 `config.yaml` 与 Compose 的 `AUTHN_WEB_ALLOWED_RETURN_URLS` 覆盖值，否则从深链进入的登录会被拒绝。
+
+### SCIM 目录凭据
+
+管理员在 `/iam/scim-directories` 创建目录和凭据后，将页面显示的 Base URL 与一次性 Bearer token 写入身份源的 secret manager。不要把 token 写入 YAML、环境文件、日志或工单。外部身份源发送：
+
+```bash
+curl -H 'Authorization: Bearer scim_example.replace-with-one-time-secret' \
+  -H 'Content-Type: application/scim+json' \
+  https://iam.example.com/scim/v2/Users
+```
+
+生产代理必须原样转发 `Authorization`、`Content-Type`、`Accept-Language`、`If-Match` 和 `ETag`，并允许 `application/scim+json`。定期检查凭据 `last_used_at`，先创建并切换新凭据，再撤销旧凭据；停用目录会一次性拒绝其全部凭据。完整协议和回滚边界见 [SCIM 2.0 预配](scim-provisioning.md)。
+
+### 服务账号凭据
+
+服务账号凭据不写入配置文件。管理员在 `/iam/service-accounts` 创建凭据后，必须在一次性对话框关闭前把 client ID
+和 secret 存入调用方的 secret manager。调用标准 token endpoint：
+
+```bash
+curl -u 'sac_example:replace-with-one-time-secret' \
+  -d 'grant_type=client_credentials&scope=chaosplus-api' \
+  https://iam.example.com/oauth/token
+```
+
+撤销凭据、禁用/删除服务账号、停用 membership 或 tenant 后，已有 Bearer token 会在下一次请求时被拒绝。监控
+`service_account_*` 审计事件和凭据 `last_used_at`，定期轮换长期凭据；不要把 service account credential 当成
+支持 redirect URI、授权码或用户 consent 的 OAuth Application Client。
+
+数据库不使用额外的“database type 环境变量”。数据源由配置里的 `type + dsn/dsn_file` 决定：
+
+```yaml
+rest:
+  host: 0.0.0.0
+  port: 8080
+  trusted_proxies: [172.30.0.2/32, 172.30.0.3/32]
+
+database:
+  primary:
+    type: postgres # sqlite | mysql | postgres；也接受 sqlite3/pg/pgsql/postgresql
+    dsn_file: /run/secrets/chaosplus_runtime_dsn
+    writable: true
+    readable: true
+```
+
+`rest.trusted_proxies` 只填写实际连接到 API 的反向代理 CIDR。为空时服务端忽略所有转发 IP 头；配置后也只有
+来源地址命中这些 CIDR 才会从右向左解析 `X-Forwarded-For`，防止客户端伪造源 IP 绕过限流。Compose 固定
+Traefik 和 Web 代理地址并只信任两个 `/32`；其他部署必须按实际网络修改，禁止使用不受控的公网或私网大网段。
+
+bootstrap migration datasource 必须和唯一 writable runtime datasource 使用相同 dialect。生产环境建议迁移账号
+拥有 DDL，runtime 账号只拥有目标 schema 的 DML；SQLite 使用单进程文件和同一个 DSN。
+
+敏感配置只使用：
+
+- `database.<name>.dsn_file`
+- `bootstrap.database.dsn_file`
+- `redis.password_file`
+- `authn.signing_key_file`
+- `authn.mfa.encryption_key_file`
+- `authn.notification.authorization_file`
+- `bootstrap.initial_admin.password_file`
+
+同一个值同时配置明文和 `_file` 会启动失败。提交前运行：
+
+```bash
+go run ./cmd/chaosplus-server config validate -c deploy/compose/config.yaml
+```
+
+TOTP 必须配置独立于 Token 签名密钥的 32 字节 Base64 主密钥。Compose 默认从 Docker secret 注入：
+
+```yaml
+authn:
+  mfa:
+    issuer: Chaosplus
+    encryption_key_file: /run/secrets/authn_mfa_key
+    enrollment_ttl: 10m
+    challenge_ttl: 5m
+    recovery_codes: 10
+    max_attempts: 5
+```
+
+该密钥按用途派生 AES-256-GCM TOTP/Passkey Credential Record 加密密钥和恢复码 HMAC 密钥。备份数据库时必须同时以独立受控流程备份该密钥；丢失密钥后已有 TOTP 和 Passkey 无法验证，泄露密钥则必须按安全事件执行轮换并重新绑定认证因子。
+
+Passkey 的 RP ID 和 origin 是独立的可信配置，不能从代理 header 推导：
+
+```yaml
+authn:
+  passkey:
+    enabled: true
+    rp_id: console.example.com
+    display_name: Chaosplus
+    origins: [https://console.example.com]
+    challenge_ttl: 5m
+    max_credentials: 10
+```
+
+`rp_id` 不含 scheme 或 port；`origins` 必须是浏览器看到的完整 HTTPS origin，且同时列入 `authn.web.allowed_origins`。本地 HTTP 只用于浏览器认可的 `localhost`/开发域，生产必须使用 TLS。更换域名会使原 RP ID 下的凭据不可用，升级前必须规划重新注册窗口。
+
+### 自助注册、邮箱验证、密码找回与通知 Webhook
+
+Compose 默认保持 `authn.registration.enabled=false`、`authn.email_verification.enabled=false` 和
+`authn.recovery.enabled=false`，因为仓库不内置或
+伪造邮件供应商。只有通知 Webhook 已部署、TLS 和鉴权配置完成并通过真实投递测试后才能启用：
+
+```yaml
+authn:
+  notification:
+    url: https://notify.internal.example/v1/iam-events
+    authorization_file: /run/secrets/notification_authorization
+    poll_interval: 5s
+    request_timeout: 10s
+    max_attempts: 10
+  email_verification:
+    enabled: true
+    token_ttl: 24h
+    verify_url: https://console.example.com/verify-email
+  registration:
+    enabled: true
+  recovery:
+    enabled: true
+    token_ttl: 15m
+    cooldown: 24h
+    reset_url: https://console.example.com/recover
+```
+
+`notification.url`、`verify_url` 和 `reset_url` 必须是无 userinfo、无 fragment 的绝对 URL；生产只允许 HTTPS，
+HTTP 仅允许 loopback。授权文件保存完整 `Authorization` header 值，不能同时配置明文 `authorization`。
+该 secret 由部署平台单独挂载，默认 Compose 不创建无实际供应商可用的占位 secret。
+
+Webhook 接收 `POST application/json`，并以 `Idempotency-Key` header 和 payload 的 `id` 做幂等：
+
+```json
+{
+  "id": "synthetic-notification-id",
+  "type": "password_recovery",
+  "recipient": "user@example.invalid",
+  "recovery_url": "https://console.example.com/recover?token=redacted",
+  "occurred_at": "2026-08-01T00:00:00Z",
+  "expires_at": "2026-08-01T00:15:00Z"
+}
+```
+
+邮箱验证事件使用 `type=email_verification` 和 `verification_url`，默认 24 小时过期。链接绑定 Principal ID 与
+规范化邮箱快照；邮箱发生变化会在同一身份更新事务中作废活动凭证。完成接口要求当前 Principal active、当前邮箱
+与快照完全一致且尚未验证，并以 compare-and-set 保证并发提交只有一个成功。验证不会撤销 session，因为它不改变
+凭证材料。安全中心发起 `POST /authn/email/verification/start`，公开页面 `/verify-email` 调用
+`POST /authn/email/verification/complete`；两者都不携带 tenant header，前端读取 token 后立即从地址栏移除且不写入
+localStorage/sessionStorage。
+
+自助注册通过 `GET /authn/capabilities` 暴露部署能力，由管理端决定是否显示入口。`POST /authn/register` 只创建
+全局 Principal 和 Argon2id Credential，并设置 `activation_required=true`；它不会创建任何 Tenant Membership，
+租户准入仍只能通过邀请。Principal、Credential、邮箱验证 token、加密通知和 `_system` hash-chain audit 在同一
+事务提交，任一步失败都会整体回滚。注册账号完成邮箱验证后才清除 `activation_required` 并允许登录。已存在邮箱与
+新邮箱始终返回相同 `202 {accepted:true}`，且重复请求不新增通知，避免公开账号枚举。
+
+成功状态为任意 `2xx`。网络错误和非 `2xx` 响应按 `poll_interval` 指数退避，达到 `max_attempts` 后进入
+`failed`；worker 崩溃遗留的 `delivering` 记录在两倍 `request_timeout` 后重新领取。损坏或无法解密的 payload
+直接永久失败。运维必须监控 pending 最老时间、失败数和连续投递错误，并支持按相同 id 安全重放。
+
+找回请求只为 active 且主邮箱 `email_verified=true` 的 Principal 入队，对不存在、禁用、未验证或无邮箱账号
+返回相同 `202` envelope。恢复值带版本前缀、至少 256 bit 熵，数据库只保存 keyed HMAC；通知 payload 在
+outbox 中使用 AES-256-GCM。完成恢复会原子消费凭证、检查最近密码、递增 `credential_version`、撤销全部
+browser session 与 refresh token、写入链式高风险审计并发送密码变更通知。默认 24 小时冷静期禁止新增
+TOTP/Passkey。Bootstrap 邮箱仍由受控部署直接标记为已验证；普通账号必须走邮箱验证流程，不得直接在数据库
+批量把未知邮箱标记为已验证。
+
+## 数据库切换
+
+SQLite 示例：
+
+```yaml
+database:
+  primary: {type: sqlite, dsn: /var/lib/chaosplus/chaosplus.db, writable: true, readable: true}
+bootstrap:
+  database: {type: sqlite, dsn: /var/lib/chaosplus/chaosplus.db}
+```
+
+MySQL 使用标准 DSN，例如 `user:password@tcp(mysql:3306)/chaosplus?parseTime=true`。PostgreSQL 使用 URL DSN。
+变更 datasource 时必须同时修改 runtime 和 bootstrap DSN，并先在目标数据库执行 migration smoke。
+
+## 升级与回滚
+
+普通升级：备份数据库、固定镜像版本，然后执行：
 
 ```bash
 docker compose up -d --build --wait
 ```
 
-Compose 自动执行 `postgres → zitadel/spicedb → chaosplus（Goose up → provision → serve）`，
-不需要手工运行任何 init、setup 或 migration 容器。
-
-打开：
-
-- 管理端：`http://app.localhost`
-- Zitadel Console：`http://auth.localhost/ui/console`
-- API 文档：`http://app.localhost/docs`
-
-首个账号为 `.env` 中的 `ZITADEL_FIRST_ADMIN_LOGIN`，密码由初始化脚本输出并写入
-`ZITADEL_FIRST_ADMIN_PASSWORD`。首次登录必须修改密码。生成后的 `.env` 和 `secrets/`
-已被 Git 忽略，必须纳入主机密钥备份，权限限制为部署账号可读。
+Goose 表使 `up` 幂等，数据库部署锁串行化多副本启动。需要回滚时必须指定模块：
 
 ```bash
-docker compose ps -a
-docker compose logs chaosplus zitadel-setup spicedb-migrate
+docker compose run --rm chaosplus migration down iam
+docker compose run --rm chaosplus migration down-to iam 2
+docker compose run --rm chaosplus migration down organization
 ```
 
-## 公网 TLS
+不要用 `docker compose down -v` 处理启动故障，它会删除 PostgreSQL 和 Redis 数据卷。回滚镜像前确认旧版本
+兼容当前 schema；不兼容时恢复升级前快照。
 
-1. 将 `APP_DOMAIN`、`ZITADEL_DOMAIN` 改成两个已解析到服务器的真实域名。
-2. 设置 `APP_URL=https://<APP_DOMAIN>`、`ZITADEL_URL=https://<ZITADEL_DOMAIN>`、
-   `PUBLIC_SCHEME=https` 和 `ACME_EMAIL`。
-3. 保持公网 80/443 可达，执行：
+## TLS
+
+将 `APP_DOMAIN` 设为真实域名，`APP_URL=https://<APP_DOMAIN>`，设置 `ACME_EMAIL`，然后：
 
 ```bash
 docker compose -f compose.yaml -f compose.tls.yaml up -d --build --wait
 ```
 
-TLS 模式下 migration 和 Chaosplus 也通过同一个公网 issuer 访问 Zitadel。Traefik 在内部网络为公网
-域名提供 alias，因此 JWT audience、OIDC issuer、Host/SNI 和浏览器地址一致，没有跳过证书校验的旁路。
+TLS overlay 开启 HTTPS 路由、Secure Cookie 与 HSTS。OIDC issuer 必须始终等于浏览器可访问的 `APP_URL`，
+不能使用容器内地址或跳过证书校验。
 
-## 配置覆盖
+## 运维检查
 
-默认 Compose 配置已通过 `go:embed` 编译进 `chaosplus-server`。`deploy/compose/compose.yaml` 只需设置
-`CHAOSPLUS_CONFIG_PRESET=compose`，不再挂载额外的应用 YAML。配置优先级为结构体默认值、
-内置预设、显式 YAML、环境变量、CLI 参数。环境变量使用大写下划线形式，例如：
+```bash
+docker compose ps -a
+docker compose logs --tail=200 chaosplus
+docker compose stats --no-stream
+```
+
+至少备份 PostgreSQL、`postgres-data`、Redis 持久卷、`.env` 和 `secrets/`。重点监控登录失败/锁定、会话和
+refresh token 重放、授权拒绝率、数据库连接池、migration 失败、审计写入失败及签名密钥到期/轮换。
+
+### 审计完整性
+
+使用具有 `audit_event:view` 权限的会话和准确的 `X-Tenant-Id` 调用：
 
 ```text
-AUTHN_HTTP_TIMEOUT=15s
-RATELIMIT_IP_RATE=500
-BOOTSTRAP_INITIAL_ADMIN_TENANT_ID=platform
+GET /iam/audit-integrity
 ```
 
-敏感值优先使用文件配置：
+返回的 `valid`、`verified_events`、`head_sequence` 和 `head_hash` 应与该 tenant 的 `iam_audit_heads` 一致。三种数据库迁移都会拒绝更新或删除 `iam_audit_events`；备份和恢复必须同时包含 `iam_audit_events` 与 `iam_audit_heads`，恢复后再次执行完整性验证。
 
-- `database.<name>.dsn_file`
-- `bootstrap.database.dsn_file`
-- `redis.password_file`
-- `authz.spicedb.token_file`
-- `authn.web.encryption_key_file`
-- `authn.web.login_client_token_file`（仅启用 Web 账号密码直登时需要）
+具有 `audit_event:export` 权限的会话可调用 `GET /iam/audit-events/export`，并沿用列表的筛选参数。响应是固定 tenant head 的 `application/x-ndjson`；必须保留首行 manifest 和末行 `complete`，校验完成记录中的事件数及 SHA-256 后再移交。缺少 `complete` 表示传输或数据库读取中断，文件不可作为完整证据。
 
-同一个值同时配置明文和 `_file` 会启动失败。文件必须是非空普通文件，不能超过限制。完整模板可
-通过 `chaosplus-server config generate` 生成，并用 `config validate` 检查。
-
-## 外部基础设施
-
-不使用仓库内 Compose 时，可以只维护一个显式 YAML，由同一个服务进程在监听端口前完成
-migration 和 provisioning：
-
-```bash
-chaosplus-server -c /etc/chaosplus/config.yaml
-```
-
-使用外部服务时遵守以下边界：
-
-- 应用数据库只选择一个 writable MySQL 或 PostgreSQL。
-- migration 使用 DDL 账号；业务数据库连接使用另一个仅有 DML 权限的账号。启用启动时自动
-  migration 的进程需要能读取前者，但业务查询不会复用该连接。
-- PostgreSQL migration owner 需设置 `ALTER DEFAULT PRIVILEGES`，为 runtime role 授予表的
-  `SELECT/INSERT/UPDATE/DELETE` 和 sequence 的 `USAGE/SELECT`。
-- MySQL migration 账号需 DDL；runtime 账号只授予目标库的 `SELECT, INSERT, UPDATE, DELETE`。
-- 外部 Zitadel 可设置 `bootstrap.zitadel.enabled=false`，直接配置已有 project/client ID，
-  并通过 `bootstrap.initial_admin.subject` 绑定已有 subject。
-- 外部 SpiceDB 仍由 bootstrap 声明式写入生成 schema；API 的 `apply_schema` 保持 `false`。
-- 应用改用 MySQL 时，Zitadel 和默认 SpiceDB 仍需要 PostgreSQL，除非它们也改为外部服务。
-
-## Migration 与重跑
-
-Chaosplus 每次启动都会自动执行嵌入二进制的 Goose `up`。Goose version table 会跳过已应用版本，
-数据库 advisory lock 会跨进程、跨主机串行化 migration；之后的 SpiceDB schema/relationship、
-membership upsert 和 Zitadel lookup-or-create 也都是幂等操作。
-
-```bash
-docker compose restart chaosplus
-```
-
-普通升级不需要单独执行 migration。需要主动回滚数据库时，使用同一个镜像和同一个 Go 二进制；
-由于 dlock、wuid、IAM 使用独立 Goose version table，必须明确目标模块：
-
-```bash
-docker compose run --rm chaosplus migration down iam
-docker compose run --rm chaosplus migration down-to iam 1
-```
-
-回滚完成后再部署对应旧版本镜像。不要让旧镜像猜测并自动执行 `down`。
-
-如果同名 Zitadel Project/App 出现多个，bootstrap 会拒绝猜测并退出。不要删除
-`zitadel-bootstrap` volume：其中的 machine key 与 Zitadel 数据库是一组恢复资产。
-
-`postgres/01-databases.sh` 只在 PostgreSQL **空数据卷首次启动**时执行。已有卷缺少账号或数据库
-时不会自动修复，需由 DBA 创建后再重跑 bootstrap。不要用 `docker compose down -v` 处理普通
-启动故障，该命令会删除全部持久数据。
-
-## 备份、升级与回滚
-
-至少备份：PostgreSQL 三个数据库、`postgres-data`、`redis-data`、`zitadel-bootstrap`、
-`chaosplus-runtime`、部署 `.env` 和 `secrets/`。
-
-升级前固定并修改 `.env` 中的镜像版本，先备份，再执行 `docker compose pull` 和 `up -d`。
-Zitadel/SpiceDB 官方 migration 与 Chaosplus 内嵌 Goose migration 都必须成功后服务才会启动。数据库 migration
-通常不能仅通过回退镜像撤销；回滚应恢复升级前数据库和 volume 快照。
-
-Zitadel bootstrap machine key 为高权限凭据且有到期时间。到期前按 Zitadel 官方流程轮换，监控
-其使用，并同步更新 `zitadel-bootstrap` volume 备份。启用自动 provisioning 的 Chaosplus 进程需要
-以只读方式访问该 key。
+当前只对新链式事件进行验证和导出，历史 `sequence=0` 记录仍可查询但不计入 `verified_events`。尚未实现分区 root 签名、外部 WORM 锚定和自动归档/保留，运维不得把数据库内 hash chain 或普通下载文件当作独立不可抵赖存证。

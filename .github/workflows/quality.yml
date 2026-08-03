@@ -1,0 +1,191 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_REDIS_ADDR: 127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify modules
+        run: go mod verify
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Check repository structure
+        shell: bash
+        run: |
+          test -z "$(find internal/app -type f \( -name '*.yml' -o -name '*.yaml' \) -print)"
+          ! rg -n 'CHAOSPLUS_DATABASE_TYPE' --glob '!docs/**' --glob '!README.md' .
+          while IFS= read -r test_file; do
+            implementation="${test_file%_test.go}.go"
+            test -f "$implementation" || { echo "missing $implementation for $test_file"; exit 1; }
+          done < <(find . -type f -name '*_test.go' -not -path './.git/*')
+          ! rg -n --glob '*_test.go' --glob '*.test.ts' --glob '*.test.tsx' '(?i)\b(mock|fake|stub)\b|miniredis' .
+      - name: Vet
+        run: go vet ./...
+      - name: Race test and enforce coverage
+        shell: bash
+        run: |
+          go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          awk 'NR > 1 { total += $2; if ($3 > 0) covered += $2 } END { percentage = 100 * covered / total; printf "repository coverage: %d/%d (%.4f%%)\n", covered, total, percentage; if (percentage < 90) exit 1 }' coverage.out
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  database-dialects:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-mysql-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-mysql-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      postgres:
+        image: postgres:17.5-alpine
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify MySQL IAM lifecycle and behavior
+        env:
+          IAM_DB_LIFECYCLE_TYPE: mysql
+          IAM_DB_LIFECYCLE_ADMIN_DSN: "root:ci-mysql-password@tcp(127.0.0.1:3306)/mysql?multiStatements=true&parseTime=true"
+        run: go test -race ./internal/modules/iam -run 'Test(MigrationDialectLifecycle|ServiceDialectContract)$' -count=1 -v
+      - name: Verify MySQL provisioning lifecycle
+        env:
+          IAM_DB_LIFECYCLE_TYPE: mysql
+          IAM_DB_LIFECYCLE_ADMIN_DSN: "root:ci-mysql-password@tcp(127.0.0.1:3306)/mysql?multiStatements=true&parseTime=true"
+        run: go test -race ./internal/modules/provisioning -run TestProvisioningMigrationDialectLifecycle -count=1 -v
+      - name: Verify PostgreSQL IAM lifecycle and behavior
+        env:
+          IAM_DB_LIFECYCLE_TYPE: postgres
+          IAM_DB_LIFECYCLE_ADMIN_DSN: "postgres://postgres:ci-postgres-password@127.0.0.1:5432/postgres?sslmode=disable"
+        run: go test -race ./internal/modules/iam -run 'Test(MigrationDialectLifecycle|ServiceDialectContract)$' -count=1 -v
+      - name: Verify PostgreSQL provisioning lifecycle
+        env:
+          IAM_DB_LIFECYCLE_TYPE: postgres
+          IAM_DB_LIFECYCLE_ADMIN_DSN: "postgres://postgres:ci-postgres-password@127.0.0.1:5432/postgres?sslmode=disable"
+        run: go test -race ./internal/modules/provisioning -run TestProvisioningMigrationDialectLifecycle -count=1 -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/admin
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.12
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+
+  docs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/docs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.12
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run build
+      - name: Verify protected web build
+        env:
+          DOC_PASSWORD: ci-only-documentation-password
+        run: bun run build && bun run check:protected
+      - name: Verify protected portable build
+        env:
+          DOC_PASSWORD: ci-only-documentation-password
+          DOC_BUILD_TARGET: portable
+        run: bun run build:portable && bun run check:protected
+
+  containers:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: chaosplus-ci
+      APP_DOMAIN: app.localhost
+      APP_URL: http://app.localhost
+      PUBLIC_PORT: "8080"
+      INITIAL_TENANT_ID: platform
+      INITIAL_ADMIN_LOGIN: admin@example.invalid
+      INITIAL_ADMIN_DISPLAY_NAME: CI Admin
+      POSTGRES_IMAGE: postgres:17.5-alpine
+      REDIS_IMAGE: redis:8.0.3-alpine
+      TRAEFIK_IMAGE: traefik:v3.6.4
+      POSTGRES_ADMIN_PASSWORD: ci-postgres-password
+      CHAOSPLUS_MIGRATOR_PASSWORD: ci-migrator-password
+      CHAOSPLUS_RUNTIME_PASSWORD: ci-runtime-password
+      REDIS_PASSWORD: ci-redis-password
+      ACME_EMAIL: ci@example.invalid
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate Compose manifests
+        run: |
+          docker compose -f deploy/compose/compose.yaml config --quiet
+          docker compose -f deploy/compose/compose.yaml -f deploy/compose/compose.tls.yaml config --quiet
+      - name: Build backend image
+        run: docker build --tag chaosplus:ci .
+      - name: Build admin image
+        run: docker build --tag chaosplus-admin:ci web/admin
+      - name: Build documentation image
+        run: docker build --tag chaosplus-docs:ci web/docs
+
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Validate repository skills
+        run: python .agents/skills/chaosplus-quality-gate/scripts/skill-runtime.py validate
+      - name: Test repository skill runtime
+        run: python -m unittest discover -s .agents/skills/chaosplus-quality-gate/scripts -p 'test_*.py'

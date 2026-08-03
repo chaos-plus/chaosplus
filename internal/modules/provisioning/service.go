@@ -1,0 +1,297 @@
+package provisioning
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/modules/identity"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
+	"github.com/uptrace/bun"
+)
+
+const maxActiveCredentials = 10
+
+type IDGenerator func() (string, error)
+
+type IdentityProvisioner interface {
+	CreateProvisionedTo(context.Context, bun.IDB, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
+	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
+}
+
+type GroupProvisioner interface {
+	CreateProvisionedTo(context.Context, bun.IDB, string, organization.ProvisionedGroupInput) (organization.Group, error)
+	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, organization.ProvisionedGroupInput) (organization.Group, error)
+	DisableProvisionedTo(context.Context, bun.IDB, string, string) (organization.Group, error)
+}
+
+type Service struct {
+	db       *bun.DB
+	repo     *Repository
+	audit    auditx.Appender
+	nextID   IDGenerator
+	identity IdentityProvisioner
+	groups   GroupProvisioner
+	now      func() time.Time
+}
+
+func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner) *Service {
+	if db == nil || audit == nil || nextID == nil || identities == nil || groups == nil {
+		panic("provisioning service requires database, audit appender, id generator, identity provisioner, and group provisioner")
+	}
+	return &Service{db: db, repo: NewRepository(db), audit: audit, nextID: nextID, identity: identities, groups: groups, now: time.Now}
+}
+
+func (s *Service) ListDirectories(ctx context.Context, tenantID string) ([]Directory, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || len(tenantID) > 128 {
+		return nil, ErrInvalidDirectory
+	}
+	rows, err := s.repo.listDirectories(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Directory, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, directoryFromRow(row))
+	}
+	return result, nil
+}
+
+func (s *Service) CreateDirectory(ctx context.Context, tenantID, name string) (Directory, error) {
+	tenantID, name = strings.TrimSpace(tenantID), strings.TrimSpace(name)
+	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 {
+		return Directory{}, ErrInvalidDirectory
+	}
+	id, err := s.nextID()
+	if err != nil || strings.TrimSpace(id) == "" || len(id) > 128 {
+		return Directory{}, fmt.Errorf("generate SCIM directory id: %w", firstError(err, ErrInvalidDirectory))
+	}
+	now := s.now().UTC().UnixMilli()
+	row := directoryRow{ID: id, TenantID: tenantID, Name: name, NameKey: strings.ToLower(name), Status: DirectoryActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	event := auditx.NewEvent(ctx, tenantID, "scim_directory_created", "scim_directory", id)
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		active, err := tx.NewSelect().Table("iam_tenants").Where("id = ? AND status = 'active'", tenantID).Exists(ctx)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return ErrInvalidDirectory
+		}
+		if err := s.repo.withExecutor(tx).insertDirectory(ctx, &row); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, event)
+	})
+	if err != nil {
+		return Directory{}, fmt.Errorf("create SCIM directory: %w", err)
+	}
+	return directoryFromRow(row), nil
+}
+
+func (s *Service) ReplaceDirectory(ctx context.Context, tenantID, id, name, status string, version int64) (Directory, error) {
+	tenantID, id, name, status = strings.TrimSpace(tenantID), strings.TrimSpace(id), strings.TrimSpace(name), strings.TrimSpace(status)
+	if tenantID == "" || id == "" || name == "" || len(name) > 128 || version < 1 || status != DirectoryActive && status != DirectoryDisabled {
+		return Directory{}, ErrInvalidDirectory
+	}
+	now := s.now().UTC().UnixMilli()
+	var updated directoryRow
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		repo := s.repo.withExecutor(tx)
+		current, err := repo.getDirectory(ctx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if current.Version != version {
+			return ErrDirectoryVersion
+		}
+		updated = current
+		updated.Name, updated.NameKey, updated.Status = name, strings.ToLower(name), status
+		if updated.Name == current.Name && updated.Status == current.Status {
+			return nil
+		}
+		updated.Version, updated.UpdatedAt = current.Version+1, now
+		if err := repo.updateDirectory(ctx, &updated, current.Version); err != nil {
+			return err
+		}
+		event := auditx.NewEvent(ctx, tenantID, "scim_directory_updated", "scim_directory", id)
+		event.Detail["name_changed"] = updated.Name != current.Name
+		event.Detail["status_changed"] = updated.Status != current.Status
+		return s.audit(ctx, tx, event)
+	})
+	if err != nil {
+		return Directory{}, fmt.Errorf("replace SCIM directory: %w", err)
+	}
+	return directoryFromRow(updated), nil
+}
+
+func (s *Service) ListCredentials(ctx context.Context, tenantID, directoryID string) ([]Credential, error) {
+	if _, err := s.repo.getDirectory(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(directoryID)); err != nil {
+		return nil, err
+	}
+	rows, err := s.repo.listCredentials(ctx, directoryID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Credential, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, credentialFromRow(row))
+	}
+	return result, nil
+}
+
+func (s *Service) CreateCredential(ctx context.Context, tenantID, directoryID, name string, expiresAt *time.Time) (CredentialSecret, error) {
+	tenantID, directoryID, name = strings.TrimSpace(tenantID), strings.TrimSpace(directoryID), strings.TrimSpace(name)
+	nowTime := s.now().UTC()
+	if tenantID == "" || directoryID == "" || name == "" || len(name) > 128 || expiresAt != nil && !expiresAt.UTC().After(nowTime) {
+		return CredentialSecret{}, ErrInvalidDirectory
+	}
+	idPart, err := s.nextID()
+	if err != nil || idPart == "" || len(idPart) > 110 {
+		return CredentialSecret{}, firstError(err, ErrInvalidDirectory)
+	}
+	id := "scim_" + idPart
+	secret, err := randomTokenSecret()
+	if err != nil {
+		return CredentialSecret{}, err
+	}
+	hash, err := passwordx.Hash(secret)
+	if err != nil {
+		return CredentialSecret{}, err
+	}
+	now := nowTime.UnixMilli()
+	row := credentialRow{ID: id, DirectoryID: directoryID, Name: name, TokenHash: hash, ExpiresAt: unixMillis(expiresAt), CreatedAt: now}
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		repo := s.repo.withExecutor(tx)
+		directory, err := repo.getDirectory(ctx, tenantID, directoryID)
+		if err != nil {
+			return err
+		}
+		if directory.Status != DirectoryActive {
+			return ErrInvalidDirectory
+		}
+		count, err := repo.activeCredentialCount(ctx, directoryID, now)
+		if err != nil {
+			return err
+		}
+		if count >= maxActiveCredentials {
+			return ErrCredentialLimit
+		}
+		if err := repo.insertCredential(ctx, &row); err != nil {
+			return err
+		}
+		event := auditx.NewEvent(ctx, tenantID, "scim_credential_created", "scim_credential", id)
+		event.Detail["directory_id"] = directoryID
+		event.Detail["expires_at"] = row.ExpiresAt
+		return s.audit(ctx, tx, event)
+	})
+	if err != nil {
+		return CredentialSecret{}, fmt.Errorf("create SCIM credential: %w", err)
+	}
+	return CredentialSecret{Credential: credentialFromRow(row), Token: id + "." + secret}, nil
+}
+
+func (s *Service) RevokeCredential(ctx context.Context, tenantID, directoryID, id string) error {
+	tenantID, directoryID, id = strings.TrimSpace(tenantID), strings.TrimSpace(directoryID), strings.TrimSpace(id)
+	if tenantID == "" || directoryID == "" || id == "" {
+		return ErrInvalidDirectory
+	}
+	now := s.now().UTC().UnixMilli()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		repo := s.repo.withExecutor(tx)
+		if _, err := repo.getDirectory(ctx, tenantID, directoryID); err != nil {
+			return err
+		}
+		changed, err := repo.revokeCredential(ctx, directoryID, id, now)
+		if err != nil || !changed {
+			return err
+		}
+		event := auditx.NewEvent(ctx, tenantID, "scim_credential_revoked", "scim_credential", id)
+		event.Detail["directory_id"] = directoryID
+		return s.audit(ctx, tx, event)
+	})
+	if err != nil {
+		return fmt.Errorf("revoke SCIM credential: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) Authenticate(ctx context.Context, authorization string) (AuthContext, error) {
+	fields := strings.Fields(authorization)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return AuthContext{}, ErrUnauthorized
+	}
+	id, secret, ok := strings.Cut(fields[1], ".")
+	if !ok || !strings.HasPrefix(id, "scim_") || id == "" || secret == "" || strings.Contains(secret, ".") {
+		return AuthContext{}, ErrUnauthorized
+	}
+	row, err := s.repo.credentialForAuth(ctx, id)
+	if err != nil {
+		return AuthContext{}, err
+	}
+	now := s.now().UTC().UnixMilli()
+	if row.DirectoryStatus != DirectoryActive || row.RevokedAt != 0 || row.ExpiresAt > 0 && row.ExpiresAt <= now {
+		return AuthContext{}, ErrUnauthorized
+	}
+	valid, err := passwordx.Verify(row.TokenHash, secret)
+	if err != nil || !valid {
+		return AuthContext{}, ErrUnauthorized
+	}
+	if err := s.repo.touchCredential(ctx, id, now); err != nil {
+		return AuthContext{}, fmt.Errorf("record SCIM credential use: %w", err)
+	}
+	return AuthContext{TenantID: row.TenantID, DirectoryID: row.DirectoryID, CredentialID: row.ID}, nil
+}
+
+func directoryFromRow(row directoryRow) Directory {
+	return Directory{ID: row.ID, TenantID: row.TenantID, Name: row.Name, Status: row.Status, Version: row.Version, CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}
+}
+
+func credentialFromRow(row credentialRow) Credential {
+	return Credential{ID: row.ID, DirectoryID: row.DirectoryID, Name: row.Name, ExpiresAt: optionalTime(row.ExpiresAt), LastUsedAt: optionalTime(row.LastUsedAt), RevokedAt: optionalTime(row.RevokedAt), CreatedAt: time.UnixMilli(row.CreatedAt).UTC()}
+}
+
+func optionalTime(value int64) *time.Time {
+	if value == 0 {
+		return nil
+	}
+	result := time.UnixMilli(value).UTC()
+	return &result
+}
+
+func unixMillis(value *time.Time) int64 {
+	if value == nil {
+		return 0
+	}
+	return value.UTC().UnixMilli()
+}
+
+func randomTokenSecret() (string, error) {
+	data := make([]byte, 32)
+	if _, err := rand.Read(data); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func firstError(err, fallback error) error {
+	if err != nil {
+		return err
+	}
+	return fallback
+}
+
+func serviceErrorKind(err error) error {
+	for _, known := range []error{ErrInvalidDirectory, ErrDirectoryMissing, ErrDirectoryName, ErrDirectoryVersion, ErrCredentialMissing, ErrCredentialLimit, ErrUnauthorized, ErrResourceMissing, ErrResourceConflict, ErrResourceVersion, ErrInvalidSCIM, ErrInvalidFilter, ErrInvalidPath, ErrTooMany} {
+		if errors.Is(err, known) {
+			return known
+		}
+	}
+	return err
+}

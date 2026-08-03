@@ -12,6 +12,8 @@ package guid
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -48,6 +50,13 @@ func (g *Generator) Next() (int64, error) {
 	id, err := g.sf.NextID()
 	if err != nil {
 		return 0, err
+	}
+	return signedID(id)
+}
+
+func signedID(id uint64) (int64, error) {
+	if id > math.MaxInt64 {
+		return 0, fmt.Errorf("guid: generated id exceeds signed 64-bit storage")
 	}
 	return int64(id), nil
 }

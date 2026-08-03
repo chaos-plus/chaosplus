@@ -1,12 +1,21 @@
 package guid
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSignedIDRejectsOverflow(t *testing.T) {
+	id, err := signedID(math.MaxInt64)
+	require.NoError(t, err)
+	assert.Equal(t, int64(math.MaxInt64), id)
+	_, err = signedID(math.MaxInt64 + 1)
+	assert.ErrorContains(t, err, "exceeds signed 64-bit storage")
+}
 
 func TestNew_Generates(t *testing.T) {
 	g, err := New(7)

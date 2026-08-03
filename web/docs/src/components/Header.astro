@@ -1,0 +1,78 @@
+---
+import config from 'virtual:starlight/user-config';
+import Search from '@astrojs/starlight/components/Search.astro';
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import { GitBranch, Menu, PanelRight, RefreshCw } from 'lucide-astro';
+import { topNavigation } from '../site-nav.mjs';
+
+const shouldRenderSearch =
+	config.pagefind ||
+	config.components.Search !== '@astrojs/starlight/components/Search.astro';
+const path = new URL(Astro.request.url).pathname;
+const section = (value: string) => value.replace(/^\/+/, '').split('/')[0] ?? '';
+const isActive = (href: string) =>
+	href === '/' ? path === '/' : section(path) === section(href);
+const protectedWebBuild = Boolean(import.meta.env.DOC_PASSWORD)
+	&& import.meta.env.DOC_BUILD_TARGET !== 'portable';
+---
+
+<div class="nav-header sl-flex">
+	<div class="title-wrapper sl-flex"><SiteTitle /></div>
+	<nav class="top-nav" aria-label="主导航">
+		{topNavigation.map((item) => (
+			<a href={item.href} title={item.title} aria-current={isActive(item.href) ? 'page' : undefined}>
+				{item.label}
+			</a>
+		))}
+	</nav>
+	<details class="mobile-navigation print:hidden">
+		<summary aria-label="打开主导航" title="主导航">
+			<Menu aria-hidden="true" />
+		</summary>
+		<nav aria-label="移动主导航">
+			{topNavigation.map((item) => (
+				<a href={item.href} title={item.title} aria-current={isActive(item.href) ? 'page' : undefined}>
+					{item.label}
+				</a>
+			))}
+		</nav>
+	</details>
+	<div class="search-cell sl-flex print:hidden">{shouldRenderSearch && <Search />}</div>
+	<a
+		class="repository-link header-link print:hidden"
+		href="https://github.com/chaos-plus/chaosplus"
+		target="_blank"
+		rel="noreferrer"
+		aria-label="GitHub 仓库（新窗口打开）"
+		title="GitHub 仓库（新窗口打开）"
+	>
+		<GitBranch aria-hidden="true" />
+		<span>GitHub</span>
+	</a>
+	<button
+		id="toc-toggle"
+		type="button"
+		class="toc-toggle print:hidden"
+		aria-label="收起或展开本页目录"
+		title="收起或展开本页目录"
+	>
+		<PanelRight />
+	</button>
+</div>
+
+{protectedWebBuild && (
+	<div
+		id="docs-update-notice"
+		class="docs-update-notice print:hidden"
+		role="status"
+		aria-live="polite"
+		data-astro-transition-persist="docs-update-notice"
+		hidden
+	>
+		<span>文档已有新版本</span>
+		<button id="docs-update-refresh" type="button">
+			<RefreshCw aria-hidden="true" />
+			<span>刷新</span>
+		</button>
+	</div>
+)}

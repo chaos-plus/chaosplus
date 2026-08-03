@@ -1,0 +1,273 @@
+:root {
+	color-scheme: light dark;
+	font-family:
+		Inter, "Noto Sans SC", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	background: #f7f8fb;
+	color: #1d2433;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	min-width: 20rem;
+	min-height: 100vh;
+	min-height: 100svh;
+	margin: 0;
+	background: #f7f8fb;
+}
+
+.access-loading {
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	display: grid;
+	place-content: center;
+	place-items: center;
+	gap: 0.875rem;
+	background: #f7f8fb;
+	color: #4e5969;
+	font-size: 0.875rem;
+}
+
+.access-loading[hidden] {
+	display: none;
+}
+
+.access-spinner {
+	width: 2rem;
+	height: 2rem;
+	border: 0.1875rem solid #d8dce5;
+	border-top-color: #4f46e5;
+	border-radius: 50%;
+	animation: access-spin 700ms linear infinite;
+}
+
+@keyframes access-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+
+.access-shell {
+	display: grid;
+	min-height: 100vh;
+	min-height: 100svh;
+	place-items: center;
+	padding: 1.5rem;
+}
+
+.access-shell[hidden] {
+	display: none;
+}
+
+.access-panel {
+	width: min(100%, 26rem);
+	padding: 2rem;
+	border: 1px solid #e0e4ec;
+	border-radius: 0.5rem;
+	background: #ffffff;
+	box-shadow: 0 0.75rem 2.5rem rgb(55 48 107 / 10%);
+}
+
+.access-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-bottom: 2rem;
+	font-size: 0.875rem;
+	font-weight: 650;
+}
+
+.access-brand-mark {
+	display: grid;
+	width: 2.25rem;
+	height: 2.25rem;
+	place-items: center;
+	border-radius: 0.5rem;
+	background: #4f46e5;
+	color: #ffffff;
+	font-size: 0.75rem;
+	letter-spacing: 0;
+}
+
+.access-panel h1 {
+	margin: 0;
+	font-size: 1.5rem;
+	line-height: 1.3;
+	letter-spacing: 0;
+}
+
+.access-intro {
+	margin: 0.625rem 0 1.5rem;
+	color: #5e6878;
+	font-size: 0.9375rem;
+	line-height: 1.6;
+}
+
+.access-label {
+	display: block;
+	margin-bottom: 0.5rem;
+	font-size: 0.875rem;
+	font-weight: 600;
+}
+
+.access-input {
+	width: 100%;
+	height: 3rem;
+	padding: 0 0.875rem;
+	border: 1px solid #c8cfdb;
+	border-radius: 0.5rem;
+	background: #ffffff;
+	color: #1d2433;
+	font: inherit;
+	transition:
+		border-color 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.access-input:hover {
+	border-color: #8994a6;
+}
+
+.access-input:focus-visible {
+	border-color: #4f46e5;
+	outline: 0;
+	box-shadow: 0 0 0 0.1875rem rgb(79 70 229 / 20%);
+}
+
+.access-show-password,
+.access-remember {
+	display: inline-flex;
+	min-height: 2.75rem;
+	align-items: center;
+	gap: 0.625rem;
+	color: #4e5969;
+	font-size: 0.875rem;
+	cursor: pointer;
+}
+
+.access-show-password input,
+.access-remember input {
+	width: 1rem;
+	height: 1rem;
+	margin: 0;
+	accent-color: #4f46e5;
+}
+
+.access-status {
+	min-height: 1.5rem;
+	margin: 0.25rem 0 0.75rem;
+	color: #5e6878;
+	font-size: 0.8125rem;
+	line-height: 1.5rem;
+}
+
+.access-status[data-state="error"] {
+	color: #b42318;
+}
+
+.access-submit {
+	width: 100%;
+	height: 3rem;
+	border: 0;
+	border-radius: 0.5rem;
+	background: #4f46e5;
+	color: #ffffff;
+	font: inherit;
+	font-weight: 650;
+	cursor: pointer;
+	transition:
+		background-color 160ms ease,
+		transform 160ms ease;
+}
+
+.access-submit:hover:not(:disabled) {
+	background: #4338ca;
+}
+
+.access-submit:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+.access-submit:focus-visible {
+	outline: 0.1875rem solid rgb(79 70 229 / 25%);
+	outline-offset: 0.1875rem;
+}
+
+.access-submit:disabled,
+.access-input:disabled,
+.access-show-password:has(input:disabled),
+.access-remember:has(input:disabled) {
+	cursor: wait;
+	opacity: 0.65;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root,
+	body {
+		background: #11131a;
+		color: #f5f6fa;
+	}
+
+	.access-panel {
+		border-color: #303543;
+		background: #191c25;
+		box-shadow: 0 0.75rem 2.5rem rgb(0 0 0 / 28%);
+	}
+
+	.access-loading {
+		background: #11131a;
+		color: #aeb6c5;
+	}
+
+	.access-spinner {
+		border-color: #303543;
+		border-top-color: #818cf8;
+	}
+
+	.access-intro,
+	.access-status,
+	.access-show-password,
+	.access-remember {
+		color: #aeb6c5;
+	}
+
+	.access-input {
+		border-color: #495064;
+		background: #11131a;
+		color: #f5f6fa;
+	}
+
+	.access-input:hover {
+		border-color: #717b91;
+	}
+
+	.access-status[data-state="error"] {
+		color: #ff8a80;
+	}
+
+}
+
+@media (max-width: 30rem) {
+	.access-shell {
+		align-items: start;
+		padding: max(3rem, env(safe-area-inset-top)) 1rem 1rem;
+	}
+
+	.access-panel {
+		padding: 1.5rem;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.access-spinner {
+		animation: none;
+	}
+
+	.access-input,
+	.access-submit {
+		transition: none;
+	}
+}

@@ -36,7 +36,7 @@ func RegisterREST(a huma.API, next NextFunc) {
 	}, func(ctx context.Context, _ *struct{}) (*respx.Body[string], error) {
 		id, err := next()
 		if err != nil {
-			return nil, huma.Error503ServiceUnavailable("guid_not_ready", err)
+			return nil, huma.Error503ServiceUnavailable("guid_not_ready")
 		}
 		return respx.OK(ctx, strconv.FormatInt(id, 10)), nil
 	})
@@ -54,7 +54,7 @@ func RegisterREST(a huma.API, next NextFunc) {
 		for range in.Count {
 			id, err := next()
 			if err != nil {
-				return nil, huma.Error503ServiceUnavailable("guid_not_ready", err)
+				return nil, huma.Error503ServiceUnavailable("guid_not_ready")
 			}
 			ids = append(ids, strconv.FormatInt(id, 10))
 		}

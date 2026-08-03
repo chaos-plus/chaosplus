@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,9 +17,16 @@ func TestDefaultRegistryContainsBasicIAM(t *testing.T) {
 		"store_view",
 		"user_view",
 		"role_view",
+		"role_manage_assignee",
 		"dept_view",
+		"position_manage_member",
+		"group_manage_member",
 		"menu_view",
 		"menu_bind_permission",
+		"access_review_view",
+		"access_review_create",
+		"access_review_decide",
+		"access_review_manage",
 	} {
 		_, ok := r.Find(code)
 		assert.True(t, ok, "missing %s", code)
@@ -43,11 +49,19 @@ func TestRegistryValidation(t *testing.T) {
 		{Resource: "store", Verb: "View"},
 		{Resource: "store", Verb: "view", Code: "store:view"},
 		{Resource: "store", Verb: "view", Code: "administer"},
+		{Resource: "store", Verb: "view", AllowedRelations: []string{"unknown"}},
+		{Resource: "store", Verb: "view", AllowedRelations: []string{"owner", "owner"}},
 	}
 	for _, tc := range cases {
 		_, err := NewRegistry(tc)
 		require.Error(t, err)
 	}
+}
+
+func TestRegistryRelationshipGrants(t *testing.T) {
+	action := DefaultRegistry().MustFind("store_view")
+	assert.Equal(t, []string{"editor", "owner", "viewer"}, action.AllowedRelations)
+	assert.Empty(t, DefaultRegistry().MustFind("store_create").AllowedRelations)
 }
 
 func TestRegistryRejectsGeneratedRelationCollision(t *testing.T) {
@@ -79,23 +93,4 @@ func TestRegisterInitializesZeroRegistry(t *testing.T) {
 	require.NoError(t, r.Register(Action{Resource: "store", Verb: "view"}))
 	_, ok := r.Find("store_view")
 	assert.True(t, ok)
-}
-
-func TestDefaultSchemaIncludesGeneratedTenantGrants(t *testing.T) {
-	schema := DefaultSchema()
-
-	assert.Contains(t, schema, "definition tenant")
-	assert.Contains(t, schema, "relation store_view_role: role#member")
-	assert.Contains(t, schema, "permission store_view = store_view_role + administer")
-	assert.Contains(t, schema, "definition merchant")
-	assert.Contains(t, schema, "definition store")
-	assert.Contains(t, schema, "definition dept")
-	assert.Contains(t, schema, "definition menu")
-	assert.False(t, strings.Contains(schema, "relation _role"))
-}
-
-func TestGenerateSchemaUsesCustomCatalog(t *testing.T) {
-	schema := GenerateSchema([]Action{{Resource: "device", Verb: "view"}})
-	assert.Contains(t, schema, "relation device_view_role: role#member")
-	assert.Contains(t, schema, "permission device_view = device_view_role + administer")
 }

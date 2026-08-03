@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
@@ -17,7 +19,7 @@ import (
 )
 
 type Datasource struct {
-	Type    string `mapstructure:"type" description:"type" default:"mysql"`
+	Type    string `mapstructure:"type" description:"database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)" default:"mysql"`
 	Dsn     string `mapstructure:"dsn" description:"dsn"`
 	DsnFile string `mapstructure:"dsn_file" description:"file containing the DSN; mutually exclusive with dsn" default:""`
 
@@ -49,10 +51,15 @@ func (d *Datasource) Open() (*bun.DB, error) {
 	}
 	var sqldb *sql.DB
 	var dialect schema.Dialect
+	dialectName, err := NormalizeDialect(d.Type)
+	if err != nil {
+		slog.Error("unsupported datasource type", "type", d.Type)
+		return nil, err
+	}
 
-	switch d.Type {
+	switch dialectName {
 	case "sqlite":
-		conn, err := sql.Open("sqliteshim", dsn)
+		conn, err := sql.Open("sqliteshim", sqliteDSN(dsn, d.Writable))
 		if err != nil {
 			slog.Error("failed to open sqlite", "error", err)
 			return nil, err
@@ -68,13 +75,65 @@ func (d *Datasource) Open() (*bun.DB, error) {
 	case "postgres":
 		sqldb = sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(dsn)))
 		dialect = pgdialect.New()
-	default:
-		slog.Error("unsupported datasource type", "type", d.Type)
-		return nil, fmt.Errorf("unsupported datasource type %q", d.Type)
 	}
 
 	d.applyPool(sqldb)
 	return bun.NewDB(sqldb, dialect), nil
+}
+
+func sqliteDSN(dsn string, writable bool) string {
+	query := url.Values{}
+	if index := strings.IndexByte(dsn, '?'); index >= 0 {
+		if parsed, err := url.ParseQuery(dsn[index+1:]); err == nil {
+			query = parsed
+		}
+	}
+	pragmas := query["_pragma"]
+	hasPragma := func(name string) bool {
+		for _, pragma := range pragmas {
+			value := strings.ToLower(strings.TrimSpace(pragma))
+			if strings.HasPrefix(value, name+"(") || strings.HasPrefix(value, name+"=") {
+				return true
+			}
+		}
+		return false
+	}
+
+	defaults := make([]string, 0, 3)
+	if !hasPragma("busy_timeout") {
+		defaults = append(defaults, "busy_timeout(5000)")
+	}
+	if !hasPragma("foreign_keys") {
+		defaults = append(defaults, "foreign_keys(1)")
+	}
+	if writable && dsn != ":memory:" && !hasPragma("journal_mode") {
+		defaults = append(defaults, "journal_mode(WAL)")
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	for _, pragma := range defaults {
+		dsn += separator + "_pragma=" + url.QueryEscape(pragma)
+		separator = "&"
+	}
+	return dsn
+}
+
+// NormalizeDialect returns the canonical datasource type used by the driver
+// switch. Config accepts common PostgreSQL and SQLite spellings, while emitted
+// templates continue to use sqlite, mysql, and postgres.
+func NormalizeDialect(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sqlite", "sqlite3":
+		return "sqlite", nil
+	case "mysql":
+		return "mysql", nil
+	case "pg", "pgsql", "postgres", "postgresql":
+		return "postgres", nil
+	default:
+		return "", fmt.Errorf("unsupported datasource type %q", value)
+	}
 }
 
 // applyPool applies the configured connection-pool limits. Each is applied only
@@ -140,7 +199,7 @@ func NewDatasourceRouter(tracerName string, debug bool, datasources map[string]D
 	for _, datasource := range datasources {
 		db := datasource.NewDB()
 		if db == nil {
-			slog.Error("failed to create db", "datasource", datasource)
+			slog.Error("failed to create db", "type", datasource.Type)
 			continue
 		}
 		// Verbose per-query logging is opt-in via debug mode; it is far too noisy

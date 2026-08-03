@@ -49,8 +49,12 @@ func (r *luaRuntime) Eval(ctx context.Context, expr string) (any, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	stackTop := r.L.GetTop()
 	if err := r.L.DoString(expr); err != nil {
 		return nil, fmt.Errorf("interpreter/lua: eval: %w", err)
+	}
+	if r.L.GetTop() <= stackTop {
+		return nil, nil
 	}
 	ret := r.L.Get(-1)
 	r.L.Pop(1)
@@ -162,7 +166,7 @@ func luaValueToGo(v lua.LValue) any {
 func luaBindGoFunction(L *lua.LState, rv reflect.Value) (lua.LValue, error) {
 	ft := rv.Type()
 	if ft.NumOut() > 1 {
-		return nil, fmt.Errorf("Lua-bound Go function may return at most one value")
+		return nil, fmt.Errorf("lua-bound Go function may return at most one value")
 	}
 	return L.NewFunction(func(L *lua.LState) int {
 		n := L.GetTop()
@@ -171,7 +175,12 @@ func luaBindGoFunction(L *lua.LState, rv reflect.Value) (lua.LValue, error) {
 			L.RaiseError("%s", err.Error())
 			return 0
 		}
-		out := rv.Call(args)
+		var out []reflect.Value
+		if rv.Type().IsVariadic() {
+			out = rv.CallSlice(args)
+		} else {
+			out = rv.Call(args)
+		}
 		if len(out) > 0 {
 			lv, err := goValueToLua(L, out[0].Interface())
 			if err != nil {
@@ -224,16 +233,16 @@ func luaBuildCallArgs(L *lua.LState, rv reflect.Value, n int) ([]reflect.Value, 
 	}
 
 	variadic := ft.In(numIn - 1).Elem()
-	extra := make([]reflect.Value, n-(numIn-1))
+	extra := reflect.MakeSlice(ft.In(numIn-1), 0, n-(numIn-1))
 	for i := numIn - 1; i < n; i++ {
 		gv := luaValueToGo(L.Get(i + 1))
 		cv, err := convertToType(reflect.TypeOf(gv), variadic, gv)
 		if err != nil {
 			return nil, fmt.Errorf("arg %d: %w", i+1, err)
 		}
-		extra[i-(numIn-1)] = cv
+		extra = reflect.Append(extra, cv)
 	}
-	args[numIn-1] = reflect.AppendSlice(reflect.MakeSlice(ft.In(numIn-1), 0, len(extra)), reflect.ValueOf(extra))
+	args[numIn-1] = extra
 	return args, nil
 }
 

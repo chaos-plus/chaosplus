@@ -1,0 +1,30 @@
+{
+  "name": "chaosplus-docs",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.12",
+  "scripts": {
+    "sync": "node scripts/sync-source-docs.mjs",
+    "dev": "bun run sync && astro dev",
+    "build": "node scripts/protect-docs.mjs --require && bun run check && astro build && node scripts/check-built-site.mjs && node scripts/protect-docs.mjs",
+    "build:portable": "DOC_BUILD_TARGET=portable bun run build",
+    "check": "bun run sync && node scripts/check-docs.mjs",
+    "check:built": "node scripts/check-built-site.mjs",
+    "check:protected": "node scripts/protect-docs.mjs --check",
+    "audit:browser": "bun scripts/browser-audit.mjs",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.0.2",
+    "astro-mermaid": "^2.1.0",
+    "dotenv": "^17.4.2",
+		"esbuild": "^0.28.1",
+		"lucide-astro": "^0.556.0",
+		"mermaid": "^11.16.0",
+    "parse5": "^8.0.1",
+    "sharp": "^0.34.5"
+  }
+}

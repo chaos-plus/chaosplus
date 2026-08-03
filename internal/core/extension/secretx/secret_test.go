@@ -17,8 +17,11 @@ func TestResolve(t *testing.T) {
 	path := filepath.Join(dir, "secret")
 	require.NoError(t, os.WriteFile(path, []byte("from-file\r\n"), 0o600))
 	assert.Equal(t, "from-file", mustResolve(t, "", path))
+	resolved, err := Resolve("test", "", path, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "from-file", resolved)
 
-	_, err := Resolve("test", "inline", path, 100)
+	_, err = Resolve("test", "inline", path, 100)
 	assert.ErrorContains(t, err, "mutually exclusive")
 	_, err = Resolve("test", "", dir, 100)
 	assert.ErrorContains(t, err, "not a regular file")

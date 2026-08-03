@@ -1,20 +1,48 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
 
 var (
-	ErrRoleNotFound       = errors.New("iam role not found")
-	ErrRoleNameConflict   = errors.New("iam role name already exists")
-	ErrInvalidArgument    = errors.New("invalid iam argument")
-	ErrPermissionNotFound = errors.New("iam permission not found")
-	ErrMemberNotFound     = errors.New("iam tenant member not found")
-	ErrMemberInactive     = errors.New("iam tenant member inactive")
-	ErrMenuNotFound       = errors.New("iam menu not found")
-	ErrMenuConflict       = errors.New("iam menu route already exists")
-	ErrMenuHasChildren    = errors.New("iam menu has children")
+	ErrRoleNotFound                   = errors.New("iam role not found")
+	ErrRoleNameConflict               = errors.New("iam role name already exists")
+	ErrInvalidArgument                = errors.New("invalid iam argument")
+	ErrPermissionNotFound             = errors.New("iam permission not found")
+	ErrRolePermissionNotGranted       = errors.New("iam role permission is not granted")
+	ErrInvalidRolePermissionCondition = errors.New("invalid iam role permission condition")
+	ErrMemberNotFound                 = errors.New("iam tenant member not found")
+	ErrMemberInactive                 = errors.New("iam tenant member inactive")
+	ErrMenuNotFound                   = errors.New("iam menu not found")
+	ErrMenuConflict                   = errors.New("iam menu route already exists")
+	ErrMenuHasChildren                = errors.New("iam menu has children")
+	ErrDirectoryAssigneeNotFound      = errors.New("iam directory assignee not found")
+	ErrDirectoryAssigneeInactive      = errors.New("iam directory assignee inactive")
+	ErrLastTenantAdministrator        = errors.New("cannot remove the last tenant administrator")
+	ErrEntityNotFound                 = errors.New("iam entity not found")
+	ErrEntityConflict                 = errors.New("iam entity already exists")
+	ErrEntityHasChildren              = errors.New("iam entity has children")
+	ErrEntityHasBindings              = errors.New("iam entity has role bindings")
+	ErrEntityHasRelationships         = errors.New("iam entity has relationships")
+	ErrEntityHierarchy                = errors.New("invalid iam entity hierarchy")
+	ErrInvalidRelationship            = errors.New("invalid iam relationship")
+	ErrRelationshipSubjectMissing     = errors.New("iam relationship subject not found")
+	ErrRelationshipSubjectInactive    = errors.New("iam relationship subject inactive")
+	ErrRelationshipResourceInactive   = errors.New("iam relationship resource inactive")
+	ErrRelationshipHierarchy          = errors.New("invalid iam relationship graph")
+	ErrInvalidRelationshipWindow      = errors.New("invalid iam relationship validity window")
+	ErrInvalidRelationshipCondition   = errors.New("invalid iam relationship condition")
+	ErrInvalidResourceAuthorization   = errors.New("invalid business resource authorization")
+	ErrAuthorizationChanged           = errors.New("iam authorization policy changed during evaluation")
+	ErrInvalidRoleDataScope           = errors.New("invalid role data scope")
+	ErrRoleScopeDepartmentNeeded      = errors.New("role data scope requires departments")
+	ErrRoleScopeDepartmentsExtra      = errors.New("role data scope does not accept departments")
+	ErrRoleScopeDepartmentMissing     = errors.New("role scope department not found")
+	ErrRoleScopeDepartmentInactive    = errors.New("role scope department inactive")
+	ErrMemberDepartmentMissing        = errors.New("member department not found")
+	ErrMemberDepartmentInactive       = errors.New("member department inactive")
 )
 
 type IDGenerator func() (string, error)
@@ -28,6 +56,43 @@ type Role struct {
 	UpdatedAt   time.Time
 }
 
+type RolePermissionGrant struct {
+	PermissionCode string
+	Condition      json.RawMessage
+	CreatedAt      time.Time
+}
+
+type DataScope string
+
+const (
+	DataScopeAll                      DataScope = "all"
+	DataScopeSelf                     DataScope = "self"
+	DataScopeDepartment               DataScope = "department"
+	DataScopeDepartmentAndDescendants DataScope = "department_and_descendants"
+	DataScopeSelectedDepartments      DataScope = "selected_departments"
+)
+
+type RoleDataScope struct {
+	RoleID        string
+	Scope         DataScope
+	DepartmentIDs []string
+	UpdatedAt     time.Time
+}
+
+type DirectoryAssigneeType string
+
+const (
+	DirectoryAssigneeGroup    DirectoryAssigneeType = "group"
+	DirectoryAssigneePosition DirectoryAssigneeType = "position"
+)
+
+type RoleDirectoryBinding struct {
+	RoleID       string
+	AssigneeType DirectoryAssigneeType
+	AssigneeID   string
+	CreatedAt    time.Time
+}
+
 type MemberStatus string
 
 const (
@@ -36,14 +101,79 @@ const (
 )
 
 type TenantMember struct {
-	TenantID    string
-	Subject     string
-	DisplayName string
-	Email       string
-	Status      MemberStatus
+	TenantID     string
+	Subject      string
+	DisplayName  string
+	Email        string
+	DepartmentID string
+	Status       MemberStatus
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DisabledAt   time.Time
+}
+
+type EntityStatus string
+
+const (
+	EntityActive   EntityStatus = "active"
+	EntityDisabled EntityStatus = "disabled"
+)
+
+type Entity struct {
+	ID        string
+	TenantID  string
+	ParentID  string
+	Type      string
+	Name      string
+	Status    EntityStatus
+	Metadata  map[string]any
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type EntityPatch struct {
+	ParentID *string
+	Type     *string
+	Name     *string
+	Status   *EntityStatus
+	Metadata *map[string]any
+}
+
+type BindingEffect string
+
+const (
+	BindingAllow BindingEffect = "allow"
+	BindingDeny  BindingEffect = "deny"
+)
+
+type EntityRoleBinding struct {
+	EntityID    string
+	RoleID      string
+	PrincipalID string
+	Effect      BindingEffect
+	ExpiresAt   time.Time
 	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DisabledAt  time.Time
+}
+
+type Relationship struct {
+	TenantID        string
+	EntityID        string
+	SubjectType     string
+	SubjectID       string
+	SubjectRelation string
+	Relation        string
+	ResourceType    string
+	ResourceID      string
+	StartsAt        *time.Time
+	EndsAt          *time.Time
+	Condition       json.RawMessage
+	CreatedAt       time.Time
+}
+
+type RelationshipFilter struct {
+	EntityID     string
+	ResourceType string
+	ResourceID   string
 }
 
 type MemberFilter struct {
@@ -73,12 +203,3 @@ type Menu struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
-
-type OutboxStatus string
-
-const (
-	OutboxPending    OutboxStatus = "pending"
-	OutboxProcessing OutboxStatus = "processing"
-	OutboxDelivered  OutboxStatus = "delivered"
-	OutboxDead       OutboxStatus = "dead"
-)

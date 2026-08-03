@@ -15,13 +15,16 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 )
 
 const (
 	defaultHTTPTimeout = 5 * time.Second
 	defaultClockSkew   = 30 * time.Second
+
+	SubjectTypePrincipal      = "principal"
+	SubjectTypeOAuthClient    = "oauth_client"
+	SubjectTypeService        = "service"
+	SubjectTypeServiceAccount = "service_account"
 )
 
 var (
@@ -33,48 +36,112 @@ var (
 	ErrInvalidAud             = errors.New("invalid audience")
 	ErrInvalidCredentials     = errors.New("invalid login credentials")
 	ErrAdditionalVerification = errors.New("additional verification required")
+	ErrRegistrationDisabled   = errors.New("self-service registration disabled")
+	ErrInvalidRegistration    = errors.New("invalid self-service registration")
+	ErrRegistrationConflict   = errors.New("self-service registration identity exists")
+	ErrUnavailable            = errors.New("authentication unavailable")
 )
 
-// Config describes a Zitadel/OIDC issuer. JWKSURL is optional; when empty, the
-// verifier discovers it from <issuer>/.well-known/openid-configuration.
+// Config describes the local issuer and optional upstream JWT verification.
 type Config struct {
-	Enabled       bool          `mapstructure:"enabled" description:"enable Zitadel/OIDC JWT authentication" default:"false"`
-	Issuer        string        `mapstructure:"issuer" description:"OIDC issuer, e.g. http://10.0.0.100:38080"`
-	Audience      []string      `mapstructure:"audience" description:"accepted JWT audience values; empty skips audience check"`
-	ResourcesFile string        `mapstructure:"resources_file" description:"bootstrap-generated JSON containing Zitadel project and client IDs" default:""`
-	JWKSURL       string        `mapstructure:"jwks_url" description:"OIDC JWKS URL; empty discovers from issuer"`
-	HTTPTimeout   time.Duration `mapstructure:"http_timeout" description:"OIDC discovery/JWKS HTTP timeout" default:"5s"`
-	ClockSkew     time.Duration `mapstructure:"clock_skew" description:"allowed token clock skew" default:"30s"`
-	Web           WebConfig     `mapstructure:"web" group:"web"`
+	Enabled           bool                    `mapstructure:"enabled" description:"enable local identity and authentication" default:"false"`
+	Issuer            string                  `mapstructure:"issuer" description:"canonical local OAuth/OIDC issuer URL"`
+	Audience          []string                `mapstructure:"audience" description:"accepted JWT audience values; empty skips audience check"`
+	JWKSURL           string                  `mapstructure:"jwks_url" description:"optional upstream JWKS URL for federation adapters"`
+	HTTPTimeout       time.Duration           `mapstructure:"http_timeout" description:"upstream discovery/JWKS HTTP timeout" default:"5s"`
+	ClockSkew         time.Duration           `mapstructure:"clock_skew" description:"allowed token clock skew" default:"30s"`
+	SigningKey        string                  `mapstructure:"signing_key" description:"base64 Ed25519 seed; prefer signing_key_file" default:""`
+	SigningKeyFile    string                  `mapstructure:"signing_key_file" description:"file containing the base64 Ed25519 seed" default:""`
+	AccessTokenTTL    time.Duration           `mapstructure:"access_token_ttl" description:"local OAuth access token lifetime" default:"15m"`
+	Web               WebConfig               `mapstructure:"web" group:"web"`
+	MFA               MFAConfig               `mapstructure:"mfa" group:"mfa"`
+	Passkey           PasskeyConfig           `mapstructure:"passkey" group:"passkey"`
+	Notification      NotificationConfig      `mapstructure:"notification" group:"notification"`
+	Recovery          RecoveryConfig          `mapstructure:"recovery" group:"recovery"`
+	EmailVerification EmailVerificationConfig `mapstructure:"email_verification" group:"email_verification"`
+	Registration      RegistrationConfig      `mapstructure:"registration" group:"registration"`
 }
 
-// WebConfig enables the browser-facing OIDC BFF. Access and refresh tokens are
-// kept encrypted in Redis; the browser only receives an opaque session cookie.
+// RegistrationConfig enables email-verified self-service global principals.
+// Tenant membership is deliberately granted only through invitations.
+type RegistrationConfig struct {
+	Enabled bool `mapstructure:"enabled" description:"enable email-verified self-service registration" default:"false"`
+}
+
+type Capabilities struct {
+	Registration     bool `json:"registration"`
+	PasswordRecovery bool `json:"password_recovery"`
+	Passkey          bool `json:"passkey"`
+}
+
+// NotificationConfig controls the shared durable webhook delivery used by
+// authentication notifications. Payloads remain encrypted while queued.
+type NotificationConfig struct {
+	URL               string        `mapstructure:"url" description:"HTTPS webhook receiving authentication notification events"`
+	Authorization     string        `mapstructure:"authorization" description:"optional Authorization header; prefer authorization_file" default:""`
+	AuthorizationFile string        `mapstructure:"authorization_file" description:"file containing the optional notification Authorization header" default:""`
+	PollInterval      time.Duration `mapstructure:"poll_interval" description:"notification outbox polling interval" default:"5s"`
+	RequestTimeout    time.Duration `mapstructure:"request_timeout" description:"notification webhook request timeout" default:"10s"`
+	MaxAttempts       int           `mapstructure:"max_attempts" description:"notification delivery attempts before permanent failure" default:"10"`
+}
+
+// RecoveryConfig controls password recovery policy. Delivery uses the shared
+// Notification configuration.
+type RecoveryConfig struct {
+	Enabled  bool          `mapstructure:"enabled" description:"enable password recovery" default:"false"`
+	TokenTTL time.Duration `mapstructure:"token_ttl" description:"single-use password recovery credential lifetime" default:"15m"`
+	Cooldown time.Duration `mapstructure:"cooldown" description:"post-recovery restriction window for high-risk account changes" default:"24h"`
+	ResetURL string        `mapstructure:"reset_url" description:"absolute browser URL used to complete password recovery"`
+}
+
+// EmailVerificationConfig controls proof of ownership for the current primary
+// email. Delivery uses the shared Notification configuration.
+type EmailVerificationConfig struct {
+	Enabled   bool          `mapstructure:"enabled" description:"enable primary email verification" default:"false"`
+	TokenTTL  time.Duration `mapstructure:"token_ttl" description:"single-use email verification credential lifetime" default:"24h"`
+	VerifyURL string        `mapstructure:"verify_url" description:"absolute browser URL used to complete email verification"`
+}
+
+// PasskeyConfig pins the WebAuthn relying party trust boundary. Values are
+// deployment configuration and are never inferred from browser headers.
+type PasskeyConfig struct {
+	Enabled        bool          `mapstructure:"enabled" description:"enable passkey registration and passwordless login" default:"false"`
+	RPID           string        `mapstructure:"rp_id" description:"WebAuthn relying party domain without scheme or port"`
+	DisplayName    string        `mapstructure:"display_name" description:"relying party name shown by authenticators" default:"Chaosplus"`
+	Origins        []string      `mapstructure:"origins" description:"exact trusted WebAuthn browser origins"`
+	ChallengeTTL   time.Duration `mapstructure:"challenge_ttl" description:"one-time registration and login challenge lifetime" default:"5m"`
+	MaxCredentials int           `mapstructure:"max_credentials" description:"maximum active passkeys per principal" default:"10"`
+}
+
+// WebConfig enables database-backed opaque browser sessions.
 type WebConfig struct {
-	Enabled              bool          `mapstructure:"enabled" description:"enable browser OIDC BFF" default:"false"`
-	DirectLoginEnabled   bool          `mapstructure:"direct_login_enabled" description:"enable first-party username/password login through the Zitadel Session API" default:"false"`
-	ClientID             string        `mapstructure:"client_id" description:"OIDC public client id"`
-	RedirectURL          string        `mapstructure:"redirect_url" description:"exact OIDC callback URL"`
-	PostLoginURL         string        `mapstructure:"post_login_url" description:"default frontend URL after login"`
-	PostLogoutURL        string        `mapstructure:"post_logout_url" description:"frontend URL after logout"`
-	AllowedReturnURLs    []string      `mapstructure:"allowed_return_urls" description:"exact frontend return URL allowlist"`
-	AllowedOrigins       []string      `mapstructure:"allowed_origins" description:"origins allowed for cookie-authenticated writes"`
-	CookieName           string        `mapstructure:"cookie_name" description:"opaque session cookie name" default:"cp_session"`
-	CookieSecure         bool          `mapstructure:"cookie_secure" description:"require HTTPS for session cookies" default:"true"`
-	SessionTTL           time.Duration `mapstructure:"session_ttl" description:"maximum browser session lifetime" default:"8h"`
-	FlowTTL              time.Duration `mapstructure:"flow_ttl" description:"OIDC state lifetime" default:"5m"`
-	EncryptionKey        string        `mapstructure:"encryption_key" description:"base64 or raw 32-byte AES key"`
-	EncryptionKeyFile    string        `mapstructure:"encryption_key_file" description:"file containing the BFF encryption key; mutually exclusive with encryption_key" default:""`
-	LoginClientToken     string        `mapstructure:"login_client_token" description:"Zitadel login-client token used only by the server" default:""`
-	LoginClientTokenFile string        `mapstructure:"login_client_token_file" description:"file containing the Zitadel login-client token" default:""`
-	Scopes               []string      `mapstructure:"scopes" description:"OIDC scopes; defaults to openid profile email offline_access plus API audience"`
+	Enabled           bool          `mapstructure:"enabled" description:"enable browser OIDC BFF" default:"false"`
+	PostLoginURL      string        `mapstructure:"post_login_url" description:"default frontend URL after login"`
+	PostLogoutURL     string        `mapstructure:"post_logout_url" description:"frontend URL after logout"`
+	AllowedReturnURLs []string      `mapstructure:"allowed_return_urls" description:"exact frontend return URL allowlist"`
+	AllowedOrigins    []string      `mapstructure:"allowed_origins" description:"origins allowed for cookie-authenticated writes"`
+	CookieName        string        `mapstructure:"cookie_name" description:"opaque session cookie name" default:"cp_session"`
+	CookieSecure      bool          `mapstructure:"cookie_secure" description:"require HTTPS for session cookies" default:"true"`
+	SessionTTL        time.Duration `mapstructure:"session_ttl" description:"absolute browser session lifetime" default:"8h"`
+	IdleTTL           time.Duration `mapstructure:"idle_ttl" description:"browser session inactivity lifetime" default:"30m"`
 }
 
-// Claims contains the token fields this API needs. Raw keeps provider-specific
-// Zitadel claims available without baking them into the core model.
+// MFAConfig controls trusted storage and short-lived state for local MFA.
+type MFAConfig struct {
+	Issuer            string        `mapstructure:"issuer" description:"TOTP issuer shown by authenticator applications" default:"Chaosplus"`
+	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 32-byte AES key; prefer encryption_key_file" default:""`
+	EncryptionKeyFile string        `mapstructure:"encryption_key_file" description:"file containing the base64 32-byte MFA encryption key" default:""`
+	EnrollmentTTL     time.Duration `mapstructure:"enrollment_ttl" description:"lifetime of an unconfirmed TOTP enrollment" default:"10m"`
+	ChallengeTTL      time.Duration `mapstructure:"challenge_ttl" description:"lifetime of a password-verified MFA login challenge" default:"5m"`
+	RecoveryCodes     int           `mapstructure:"recovery_codes" description:"one-time recovery codes issued after enrollment" default:"10"`
+	MaxAttempts       int           `mapstructure:"max_attempts" description:"failed codes allowed per login challenge" default:"5"`
+}
+
+// Claims contains the identity fields required by authentication and guards.
 type Claims struct {
 	Issuer            string         `json:"iss"`
 	Subject           string         `json:"sub"`
+	SubjectType       string         `json:"subject_type,omitempty"`
 	Audience          []string       `json:"aud"`
 	ExpiresAt         time.Time      `json:"exp"`
 	NotBefore         time.Time      `json:"nbf,omitempty"`
@@ -82,12 +149,22 @@ type Claims struct {
 	PreferredUsername string         `json:"preferred_username,omitempty"`
 	Email             string         `json:"email,omitempty"`
 	EmailVerified     bool           `json:"email_verified,omitempty"`
-	OrganizationID    string         `json:"urn:zitadel:iam:org:id,omitempty"`
+	OrganizationID    string         `json:"organization_id,omitempty"`
+	CredentialVersion int64          `json:"credential_version,omitempty"`
+	AuthTime          time.Time      `json:"auth_time,omitempty"`
+	ACR               int            `json:"acr,omitempty"`
+	AMR               []string       `json:"amr,omitempty"`
+	ClientID          string         `json:"client_id,omitempty"`
+	NetworkZone       string         `json:"network_zone,omitempty"`
 	Raw               map[string]any `json:"raw,omitempty"`
 }
 
-func (c *Claims) SubjectRef() spicedbx.SubjectRef {
-	return spicedbx.SubjectRef{Object: spicedbx.ObjectRef{Type: "user", ID: c.Subject}}
+type Assurance struct {
+	AuthTime    time.Time
+	Level       int
+	Methods     []string
+	ClientID    string
+	NetworkZone string
 }
 
 // Verifier verifies compact JWTs signed by the issuer's JWKS.
@@ -341,10 +418,17 @@ func parseClaims(raw map[string]any) (*Claims, error) {
 	claims := &Claims{Raw: raw}
 	claims.Issuer, _ = raw["iss"].(string)
 	claims.Subject, _ = raw["sub"].(string)
+	claims.SubjectType, _ = raw["subject_type"].(string)
 	claims.PreferredUsername, _ = raw["preferred_username"].(string)
 	claims.Email, _ = raw["email"].(string)
 	claims.EmailVerified, _ = raw["email_verified"].(bool)
-	claims.OrganizationID, _ = raw["urn:zitadel:iam:org:id"].(string)
+	claims.OrganizationID, _ = raw["organization_id"].(string)
+	claims.CredentialVersion = int64Claim(raw["credential_version"])
+	claims.AuthTime = unixClaim(raw["auth_time"])
+	claims.ACR = int(int64Claim(raw["acr"]))
+	claims.AMR = stringSliceClaim(raw["amr"])
+	claims.ClientID, _ = raw["client_id"].(string)
+	claims.NetworkZone, _ = raw["network_zone"].(string)
 	claims.Audience = stringSliceClaim(raw["aud"])
 	claims.ExpiresAt = unixClaim(raw["exp"])
 	claims.NotBefore = unixClaim(raw["nbf"])
@@ -381,6 +465,18 @@ func unixClaim(v any) time.Time {
 		return time.Unix(n, 0)
 	default:
 		return time.Time{}
+	}
+}
+
+func int64Claim(v any) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return n
+	default:
+		return 0
 	}
 }
 

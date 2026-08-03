@@ -16,6 +16,7 @@ var ip2regionDatabase = "ip2region_v4.xdb"
 type IP2Region struct {
 	vector  []byte
 	version *xdb.Version
+	worker  maintenanceWorker
 }
 
 func init() {
@@ -26,9 +27,13 @@ func init() {
 // Unlike the other providers it builds the xdb from the upstream git repo rather
 // than an HTTP download, so it needs no injected HTTP client.
 func (m *IP2Region) Start(ctx context.Context) error {
-	maintainDB(ctx, "ip2region", m.GetDbPath, m.DownloadDb)
+	m.worker.start(ctx, func(ctx context.Context) {
+		maintainDB(ctx, "ip2region", m.GetDbPath, m.DownloadDb)
+	})
 	return nil
 }
+
+func (m *IP2Region) Stop(ctx context.Context) error { return m.worker.stop(ctx) }
 
 func (m *IP2Region) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {

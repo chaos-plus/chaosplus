@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
@@ -31,7 +34,11 @@ const readHeaderTimeout = 10 * time.Second
 func (app *App) StartRestServer() error {
 	router := chi.NewMux()
 	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
+	clientIP, err := trustedProxyClientIP(app.cfg.RestServer.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	router.Use(clientIP)
 	router.Use(middleware.Recoverer)
 	app.useSecurity(router)  // security response headers
 	app.useCors(router)      // CORS (handles preflight before routing)
@@ -61,6 +68,10 @@ func (app *App) StartRestServer() error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", app.cfg.RestServer.Host, app.cfg.RestServer.Port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("rest listen %s: %w", addr, err)
+	}
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,
@@ -70,12 +81,67 @@ func (app *App) StartRestServer() error {
 
 	go func() {
 		slog.Info("rest server listening", "addr", addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			app.serveErr <- fmt.Errorf("rest serve: %w", err)
 		}
 	}()
 
 	return nil
+}
+
+func trustedProxyClientIP(values []string) (func(http.Handler) http.Handler, error) {
+	prefixes := make([]netip.Prefix, len(values))
+	for i, value := range values {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("rest trusted proxy %q: %w", value, err)
+		}
+		prefixes[i] = prefix
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			peer, ok := remoteIP(request.RemoteAddr)
+			if ok && trustedIP(peer, prefixes) {
+				client := peer
+				for i := len(request.Header.Values("X-Forwarded-For")) - 1; i >= 0; i-- {
+					parts := strings.Split(request.Header.Values("X-Forwarded-For")[i], ",")
+					for j := len(parts) - 1; j >= 0; j-- {
+						candidate, err := netip.ParseAddr(strings.TrimSpace(parts[j]))
+						if err != nil {
+							next.ServeHTTP(writer, request)
+							return
+						}
+						client = candidate.Unmap().WithZone("")
+						if !trustedIP(client, prefixes) {
+							request.RemoteAddr = client.String()
+							next.ServeHTTP(writer, request)
+							return
+						}
+					}
+				}
+				request.RemoteAddr = client.String()
+			}
+			next.ServeHTTP(writer, request)
+		})
+	}, nil
+}
+
+func remoteIP(value string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		host = value
+	}
+	ip, err := netip.ParseAddr(host)
+	return ip.Unmap(), err == nil
+}
+
+func trustedIP(ip netip.Addr, prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // useSecurity mounts the security-headers middleware when enabled.

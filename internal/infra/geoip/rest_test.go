@@ -1,10 +1,12 @@
 package geoip
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
 
+	geoiplib "github.com/chaos-plus/chaosplus/pkg/geoip"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,4 +83,16 @@ func TestModule_LookupSelf_IPv6LoopbackMapsToIPv4(t *testing.T) {
 	resp := api.Get("/geoip", "X-Real-IP: ::1")
 	assert.Equal(t, http.StatusTemporaryRedirect, resp.Code)
 	assert.Equal(t, "/geoip/127.0.0.1", resp.Header().Get("Location"))
+}
+
+func TestLookupHandlersFailureBranches(t *testing.T) {
+	_, err := lookupSelf(t.Context(), &selfInput{})
+	assert.Error(t, err)
+
+	saved := geoiplib.GeoIpProviders
+	geoiplib.GeoIpProviders = map[string]geoiplib.GeoIpProvider{}
+	t.Cleanup(func() { geoiplib.GeoIpProviders = saved })
+	_, err = lookupGeoIP(context.Background(), &lookupInput{IP: "127.0.0.1"})
+	assert.Error(t, err)
+	assert.Equal(t, "127.0.0.1", hostOnly("127.0.0.1"))
 }

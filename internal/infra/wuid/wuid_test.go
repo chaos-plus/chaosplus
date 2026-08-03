@@ -2,6 +2,7 @@ package wuid
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -230,6 +231,14 @@ func TestFromEnv(t *testing.T) {
 	})
 }
 
+func TestWorkerIDRejectsCorruptStoredValue(t *testing.T) {
+	w := &Worker{}
+	w.id.Store(-1)
+	assert.Panics(t, func() { w.ID() })
+	w.id.Store(MaxWorkerID + 1)
+	assert.Panics(t, func() { w.ID() })
+}
+
 func TestClose_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	database := newDB(t)
@@ -298,4 +307,42 @@ func TestClose_AfterDBClosed(t *testing.T) {
 
 	require.NoError(t, database.Close())
 	assert.Error(t, w.Close(ctx)) // release UPDATE fails on the closed DB
+}
+
+func TestClaimIDDatabaseFailures(t *testing.T) {
+	t.Run("expired row update", func(t *testing.T) {
+		database := newDB(t)
+		_, err := database.NewInsert().Model(&workerRow{ID: 7, Token: "old", ExpiresAt: -1}).Exec(t.Context())
+		require.NoError(t, err)
+		_, err = database.ExecContext(t.Context(), `CREATE TRIGGER deny_worker_update BEFORE UPDATE ON worker_ids BEGIN SELECT RAISE(ABORT, 'denied'); END`)
+		require.NoError(t, err)
+		_, err = claimID(t.Context(), database, "new", sysinfo{}, time.Minute.Milliseconds(), "0")
+		assert.ErrorContains(t, err, "denied")
+	})
+
+	t.Run("new row insert", func(t *testing.T) {
+		database := newDB(t)
+		_, err := database.ExecContext(t.Context(), `CREATE TRIGGER deny_worker_insert BEFORE INSERT ON worker_ids BEGIN SELECT RAISE(ABORT, 'denied'); END`)
+		require.NoError(t, err)
+		_, err = claimID(t.Context(), database, "new", sysinfo{}, time.Minute.Milliseconds(), "0")
+		assert.ErrorContains(t, err, "denied")
+	})
+
+	t.Run("closed database", func(t *testing.T) {
+		database := newDB(t)
+		require.NoError(t, database.Close())
+		_, err := claimID(t.Context(), database, "new", sysinfo{}, time.Minute.Milliseconds(), "0")
+		assert.Error(t, err)
+	})
+}
+
+func TestWorkerTimingAndRepeatedLoss(t *testing.T) {
+	worker := &Worker{lease: 0}
+	worker.alive.Store(true)
+	assert.Equal(t, time.Second, worker.renewInterval())
+	worker.lease = time.Hour
+	assert.Equal(t, renewRetryInterval, worker.retryInterval())
+	worker.declareLost(errors.New("first"))
+	worker.declareLost(errors.New("second"))
+	assert.False(t, worker.Alive())
 }

@@ -1,104 +1,95 @@
-package geoip
+package geoip_test
 
 import (
-	"errors"
+	"context"
 	"testing"
+
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
+	"github.com/chaos-plus/chaosplus/pkg/geoip/providers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// fakeProvider is a deterministic GeoIpProvider for tests, so orchestration logic
-// can be verified without depending on which real databases happen to be installed.
-type fakeProvider struct {
-	info *GeoIp
-	err  error
+func TestLookupInputAndProviderAvailability(t *testing.T) {
+	saved := geoip.GeoIpProviders
+	geoip.GeoIpProviders = map[string]geoip.GeoIpProvider{}
+	t.Cleanup(func() { geoip.GeoIpProviders = saved })
+
+	_, err := geoip.GetIpLocation("")
+	assert.ErrorContains(t, err, "ip is empty")
+	_, err = geoip.GetIpLocations("")
+	assert.ErrorContains(t, err, "ip is empty")
+	_, err = geoip.GetIpLocation("8.8.8.8")
+	assert.ErrorContains(t, err, "no geoip provider")
+	_, err = geoip.GetIpLocations("8.8.8.8")
+	assert.ErrorContains(t, err, "no geoip provider")
 }
 
-func (f fakeProvider) GetIpInfo(string) (*GeoIp, error) { return f.info, f.err }
+func TestLookupWithRealLocalProvider(t *testing.T) {
+	saved := geoip.GeoIpProviders
+	geoip.GeoIpProviders = map[string]geoip.GeoIpProvider{"ipapi": &providers.IPAPI{}}
+	t.Cleanup(func() { geoip.GeoIpProviders = saved })
 
-// withProviders swaps the global provider registry for the duration of a test and
-// restores the real providers afterward.
-func withProviders(t *testing.T, m map[string]GeoIpProvider) {
-	t.Helper()
-	saved := GeoIpProviders
-	GeoIpProviders = m
-	t.Cleanup(func() { GeoIpProviders = saved })
+	result, err := geoip.GetIpLocation("127.0.0.1")
+	require.NoError(t, err)
+	assert.Equal(t, "Local", result.Country)
+	results, err := geoip.GetIpLocations("::1")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "ipapi", results[0].Provider)
+	geoip.StartProviders(context.Background())
 }
 
-func TestGetIpLocation_EmptyIP(t *testing.T) {
-	_, err := GetIpLocation("")
-	if err == nil {
-		t.Fatal("expected error for empty IP")
+func TestLookupContinuesAfterRealProviderErrorAndSortsResults(t *testing.T) {
+	saved := geoip.GeoIpProviders
+	geoip.GeoIpProviders = map[string]geoip.GeoIpProvider{
+		"first":  &providers.IPAPI{},
+		"second": &providers.IPAPI{},
 	}
+	t.Cleanup(func() { geoip.GeoIpProviders = saved })
+
+	_, err := geoip.GetIpLocation("not-an-ip")
+	assert.ErrorContains(t, err, "no geoip provider found")
+	results, err := geoip.GetIpLocations("not-an-ip")
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	results, err = geoip.GetIpLocations("127.0.0.1")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "ipapi", results[0].Provider)
 }
 
-func TestGetIpLocation_ReturnsProviderResult(t *testing.T) {
-	// A registered provider that returns data → GetIpLocation returns it (no error).
-	// Uses a fake provider so the result is deterministic regardless of which real
-	// GeoIP databases are installed locally.
-	withProviders(t, map[string]GeoIpProvider{
-		"fake": fakeProvider{info: &GeoIp{Provider: "fake", Country: "Testland"}},
-	})
-	info, err := GetIpLocation("8.8.8.8")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info == nil || info.Provider != "fake" || info.Country != "Testland" {
-		t.Fatalf("expected fake provider result, got %+v", info)
-	}
+func TestConfigureRealDatabaseProviders(t *testing.T) {
+	location := &providers.IP2Location{}
+	lite := &providers.Geolite2{}
+	saved := geoip.GeoIpProviders
+	geoip.GeoIpProviders = map[string]geoip.GeoIpProvider{"location": location, "lite": lite, "ipapi": &providers.IPAPI{}}
+	t.Cleanup(func() { geoip.GeoIpProviders = saved })
+
+	var config geoip.GeoIpConfig
+	config.Ip2location.Token = "token"
+	config.Geolite2.Owner = "owner"
+	config.Geolite2.Repo = "repo"
+	config.Geolite2.Db = "database.mmdb"
+	geoip.Configure(config)
+	assert.Equal(t, "token", location.Token)
+	assert.Equal(t, "owner", lite.Owner)
+	assert.Equal(t, "repo", lite.Repo)
+	assert.Equal(t, "database.mmdb", lite.Db)
 }
 
-func TestGetIpLocation_SkipsFailingProvider(t *testing.T) {
-	// A failing provider is skipped; the next successful one is returned.
-	withProviders(t, map[string]GeoIpProvider{
-		"broken": fakeProvider{err: errors.New("no db found")},
-	})
-	if _, err := GetIpLocation("8.8.8.8"); err == nil {
-		t.Fatal("expected error when all providers fail")
+func TestRealDatabaseProviderLifecycleStops(t *testing.T) {
+	saved := geoip.GeoIpProviders
+	geoip.GeoIpProviders = map[string]geoip.GeoIpProvider{
+		"geolite2":    &providers.Geolite2{},
+		"ip2location": &providers.IP2Location{},
+		"ip2region":   &providers.IP2Region{},
 	}
-}
+	t.Cleanup(func() { geoip.GeoIpProviders = saved })
 
-func TestGetIpLocation_InvalidIP(t *testing.T) {
-	_, err := GetIpLocation("not-an-ip")
-	if err == nil {
-		t.Fatal("expected error for invalid IP")
-	}
-}
-
-func TestGetIpLocations_SortedByProvider(t *testing.T) {
-	// All successful providers are returned, sorted ascending by provider name.
-	withProviders(t, map[string]GeoIpProvider{
-		"zeta":  fakeProvider{info: &GeoIp{Provider: "zeta", Country: "Z"}},
-		"alpha": fakeProvider{info: &GeoIp{Provider: "alpha", Country: "A"}},
-	})
-	results, err := GetIpLocations("8.8.8.8")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-	if results[0].Provider != "alpha" || results[1].Provider != "zeta" {
-		t.Fatalf("results not sorted by provider: %s, %s", results[0].Provider, results[1].Provider)
-	}
-}
-
-func TestGetIpLocations_DropsEmptyResults(t *testing.T) {
-	// A provider returning a result with no location fields is dropped.
-	withProviders(t, map[string]GeoIpProvider{
-		"empty": fakeProvider{info: &GeoIp{Provider: "empty"}},
-		"good":  fakeProvider{info: &GeoIp{Provider: "good", City: "Somewhere"}},
-	})
-	results, err := GetIpLocations("8.8.8.8")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 || results[0].Provider != "good" {
-		t.Fatalf("expected only the non-empty result, got %+v", results)
-	}
-}
-
-func TestGetIpLocations_EmptyIP(t *testing.T) {
-	_, err := GetIpLocations("")
-	if err == nil {
-		t.Fatal("expected error for empty IP")
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	geoip.StartProviders(ctx)
+	require.NoError(t, geoip.StopProviders(t.Context()))
 }

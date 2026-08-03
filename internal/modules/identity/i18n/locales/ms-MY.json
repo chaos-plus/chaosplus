@@ -1,0 +1,12 @@
+{
+  "principal_not_found": "Prinsipal yang diminta tidak ditemui dalam penyewa ini. Semak pengecam prinsipal dan penyewa, kemudian cuba lagi.",
+  "login_name_exists": "Nama log masuk ini telah digunakan. Pilih nama log masuk lain.",
+  "invalid_principal": "Data prinsipal tidak sah. Semak nama log masuk, profil, e-mel dan keperluan kata laluan.",
+  "last_tenant_administrator": "Pentadbir aktif terakhir penyewa tidak boleh dibuang atau dinyahaktifkan. Tetapkan pentadbir aktif lain terlebih dahulu.",
+  "identity_unavailable": "Perkhidmatan identiti tidak dapat menyelesaikan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan.",
+  "service_account_not_found": "Akaun perkhidmatan yang diminta tidak ditemui dalam penyewa ini. Semak pengecam dan penyewa, kemudian cuba lagi.",
+  "service_account_credential_not_found": "Bukti kelayakan akaun perkhidmatan yang diminta tidak ditemui. Muat semula senarai bukti kelayakan dan cuba lagi.",
+  "service_account_version_conflict": "Akaun perkhidmatan telah berubah selepas anda membukanya. Muat semula akaun dan gunakan perubahan sekali lagi.",
+  "service_account_credential_limit": "Akaun perkhidmatan ini telah mencapai bilangan maksimum bukti kelayakan aktif. Batalkan bukti kelayakan yang tidak digunakan dahulu.",
+  "invalid_service_account": "Data akaun perkhidmatan tidak sah. Semak nama, status, tamat tempoh, skop bukti kelayakan dan keadaan penyewa."
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chaosplus Quality Gate"
+  short_description: "Route work and enforce repository quality"
+  default_prompt: "Use $chaosplus-quality-gate to route this change and run every applicable gate."

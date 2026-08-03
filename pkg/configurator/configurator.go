@@ -126,9 +126,7 @@ func (f *Flagger) UseEnvKeyReplacer(replacer *strings.Replacer) {
 	f.GetViper().SetEnvKeyReplacer(replacer)
 }
 
-func (f *Flagger) BindEnv(in ...string) {
-	f.GetViper().BindEnv(in...)
-}
+func (f *Flagger) BindEnv(in ...string) error { return f.GetViper().BindEnv(in...) }
 
 func (f *Flagger) Parse(o interface{}, args ...string) error {
 
@@ -146,8 +144,12 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 		return err
 	}
 	for k, v := range m {
-		bindFlags(flags, k, v)
-		vip.BindEnv(k)
+		if err := bindFlags(flags, k, v); err != nil {
+			return err
+		}
+		if err := vip.BindEnv(k); err != nil {
+			return err
+		}
 	}
 	for _, arg := range args {
 		maparg := strings.TrimLeft(arg, "-")
@@ -156,8 +158,12 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 		if mapkey == nil {
 			continue
 		}
-		bindFlags(flags, maparg, *mapkey)
-		vip.BindEnv(maparg)
+		if err := bindFlags(flags, maparg, *mapkey); err != nil {
+			return err
+		}
+		if err := vip.BindEnv(maparg); err != nil {
+			return err
+		}
 	}
 
 	prefix := vip.GetEnvPrefix()
@@ -174,11 +180,17 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 		if mapkey == nil {
 			continue
 		}
-		bindFlags(flags, mapenv, *mapkey)
-		vip.BindEnv(mapenv)
+		if err := bindFlags(flags, mapenv, *mapkey); err != nil {
+			return err
+		}
+		if err := vip.BindEnv(mapenv); err != nil {
+			return err
+		}
 	}
 
-	flags.Parse(args)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 	explicitConfig := f.configFile != nil && *f.configFile != ""
 	if f.configFile != nil && *f.configFile != "" {
 		vip.SetConfigFile(*f.configFile)
@@ -201,7 +213,9 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 
 	vip.AutomaticEnv()
 
-	vip.BindPFlags(flags)
+	if err := vip.BindPFlags(flags); err != nil {
+		return err
+	}
 
 	return f.unmarshal(o, m)
 }
@@ -295,6 +309,9 @@ func parseFlags(m *map[string]sFlag, c interface{}, parent string, field *reflec
 		reflect.Float32, reflect.Float64,
 		reflect.String,
 		reflect.Array, reflect.Slice:
+		if field == nil || fieldValue == nil {
+			return fmt.Errorf("parsing flag %q requires field metadata", key)
+		}
 		if strings.EqualFold(field.Tag.Get("hidden"), "true") {
 			return nil
 		}
@@ -309,8 +326,15 @@ func parseFlags(m *map[string]sFlag, c interface{}, parent string, field *reflec
 		}
 		return nil
 	case reflect.Map:
+		if field == nil {
+			return fmt.Errorf("parsing map %q requires field metadata", key)
+		}
 		valueType := t.Elem()
 		valueNew := reflect.New(valueType)
+		if valueType.Kind() == reflect.Ptr {
+			valueType = valueType.Elem()
+			valueNew = reflect.New(valueType)
+		}
 		if valueNew.Type().Kind() == reflect.Ptr {
 			valueNew = valueNew.Elem()
 		}
@@ -318,7 +342,20 @@ func parseFlags(m *map[string]sFlag, c interface{}, parent string, field *reflec
 		if tagmap != "" {
 			mapkey = tagmap
 		}
-		err := parseFlags(m, valueNew.Interface(), key+"."+mapkey, nil, nil, mapkey)
+		mapEntryKey := key + "." + mapkey
+		switch valueType.Kind() {
+		case reflect.Bool,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+			reflect.Float32, reflect.Float64, reflect.String,
+			reflect.Array, reflect.Slice:
+			(*m)[mapEntryKey] = sFlag{
+				Key: mapEntryKey, Desc: field.Tag.Get("description"), Type: valueType,
+				Value: valueNew, Mapkey: mapkey,
+			}
+			return nil
+		}
+		err := parseFlags(m, valueNew.Interface(), mapEntryKey, nil, nil, mapkey)
 		if err != nil {
 			return err
 		}
@@ -381,9 +418,10 @@ func bindFlags(flags *pflag.FlagSet, k string, v sFlag) error {
 		switch et.Kind() {
 		case reflect.Bool:
 			flags.BoolSlice(k, []bool{}, v.Desc)
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			flags.Int64Slice(k, []int64{}, v.Desc)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			flags.IntSlice(k, []int{}, v.Desc)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			flags.UintSlice(k, []uint{}, v.Desc)
 		case reflect.Float32, reflect.Float64:
 			flags.Float64Slice(k, []float64{}, v.Desc)
 		case reflect.String:

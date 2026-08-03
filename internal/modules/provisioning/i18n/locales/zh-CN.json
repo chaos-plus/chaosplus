@@ -1,0 +1,20 @@
+{
+  "invalid_scim_directory": "SCIM 目录数据无效，请检查名称、状态、版本和凭据过期时间。",
+  "scim_directory_not_found": "当前租户中不存在指定的 SCIM 目录，请刷新目录列表后选择有效目录。",
+  "scim_directory_name_exists": "当前租户中已存在同名 SCIM 目录，请使用其他名称。",
+  "scim_directory_version_conflict": "SCIM 目录已被其他请求修改，请重新加载后再试。",
+  "scim_credential_not_found": "当前 SCIM 目录中不存在指定凭据，请刷新凭据列表后选择有效凭据。",
+  "scim_credential_limit": "该 SCIM 目录的有效凭据数量已达到上限，请先撤销不再使用的凭据。",
+  "provisioning_unavailable": "预配服务暂时无法完成请求，请稍后重试；若问题持续，请联系管理员。",
+  "scim_unauthorized": "SCIM Bearer 凭据缺失、无效、已过期、已撤销，或所属目录已停用。",
+  "scim_resource_not_found": "当前 SCIM 目录中不存在指定资源。",
+  "scim_invalid_syntax": "SCIM 请求体不是有效 JSON，或不符合要求的资源结构。",
+  "scim_invalid_filter": "SCIM 过滤器无效，或使用了当前资源不支持的属性或比较操作。",
+  "scim_invalid_path": "SCIM PATCH 路径或值不适用于当前资源。",
+  "scim_uniqueness_conflict": "SCIM 用户名、组名或外部标识在当前目录中已被使用。",
+  "scim_version_conflict": "SCIM 资源在读取后已发生变化，请获取最新版本后重试。",
+  "scim_last_tenant_administrator": "该 SCIM 变更会移除或停用最后一个有效租户管理员，请先分配另一个有效管理员。",
+  "scim_too_many": "SCIM 请求超过支持的条目数、结果数、操作数或请求体大小限制。",
+  "scim_bulk_failed": "SCIM Bulk 请求已达到指定的失败阈值，剩余操作未执行。",
+  "scim_operation_failed": "该预配变更会破坏 IAM 不变量，因此无法完成。"
+}

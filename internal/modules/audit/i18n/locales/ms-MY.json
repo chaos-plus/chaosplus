@@ -1,0 +1,7 @@
+{
+  "invalid_audit_time": "Julat masa audit tidak sah. Gunakan cap masa RFC 3339 dan pastikan masa tamat selepas masa mula.",
+  "audit_event_not_found": "Peristiwa audit yang diminta tidak ditemui dalam penyewa ini. Semak pengecam peristiwa dan penyewa, kemudian cuba lagi.",
+  "invalid_audit_query": "Pertanyaan audit tidak sah. Semak penyewa, penapis dan nilai penomboran halaman.",
+  "audit_integrity_failed": "Pengesahan integriti audit gagal kerana rantaian peristiwa telah diubah atau tidak lengkap. Jangan bergantung pada eksport ini dan hubungi pentadbir.",
+  "audit_unavailable": "Perkhidmatan audit tidak dapat menyelesaikan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan."
+}

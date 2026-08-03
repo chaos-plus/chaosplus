@@ -89,7 +89,7 @@ func (i *lookupInput) Resolve(_ huma.Context) []error {
 func lookupGeoIP(ctx context.Context, in *lookupInput) (*respx.Body[[]*geoiplib.GeoIp], error) {
 	infos, err := geoiplib.GetIpLocations(in.IP)
 	if err != nil {
-		return nil, huma.Error404NotFound("geoip_not_found", err)
+		return nil, huma.Error404NotFound("geoip_not_found")
 	}
 	if len(infos) == 0 {
 		return nil, huma.Error404NotFound("geoip_not_found")

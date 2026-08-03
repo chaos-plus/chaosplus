@@ -1,0 +1,22 @@
+{
+  "access_request_not_found": "Permintaan akses tidak ditemui dalam penyewa ini. Muat semula senarai dan semak pengecam permintaan.",
+  "access_request_role_not_found": "Peranan yang diminta tidak lagi wujud dalam penyewa ini. Pilih peranan yang tersedia dan hantar permintaan baharu.",
+  "access_request_expired": "Permintaan akses atau pemberian yang diluluskan telah tamat tempoh. Hantar permintaan baharu dengan masa tamat akses pada masa hadapan.",
+  "access_request_requester_inactive": "Hanya ahli penyewa yang aktif boleh meminta akses. Pulihkan keahlian penyewa sebelum mencuba lagi.",
+  "access_already_granted": "Peranan ini sudah diberikan kepada pemohon. Permintaan akses tambahan tidak diperlukan.",
+  "access_request_state_conflict": "Permintaan akses telah diputuskan atau berubah. Muat semula sebelum mengambil tindakan lain.",
+  "access_request_self_approval": "Pemohon tidak boleh meluluskan atau menolak permintaan akses sendiri. Pelulus lain yang diberi kuasa mesti membuat keputusan.",
+  "access_request_requester_only": "Hanya pemohon asal boleh menarik balik permintaan ini atau melepaskan akses yang telah diluluskan.",
+  "invalid_access_request": "Permintaan akses tidak sah. Pilih peranan sedia ada, berikan sebab yang jelas dan tetapkan masa tamat akses dalam tempoh 365 hari.",
+  "human_principal_required": "Operasi ini memerlukan prinsipal manusia yang disahkan. Akaun perkhidmatan dan klien OAuth tidak boleh meminta, meluluskan atau menyemak akses.",
+  "governance_unavailable": "Perkhidmatan tadbir urus akses tidak tersedia buat sementara waktu. Tiada perubahan dilakukan; cuba lagi kemudian.",
+  "access_review_not_found": "Semakan akses tidak ditemui dalam penyewa ini. Muat semula senarai dan semak pengecam semakan.",
+  "access_review_item_not_found": "Item semakan akses yang dipilih tidak ditemui. Muat semula semakan sebelum membuat keputusan.",
+  "access_review_expired": "Tarikh akhir semakan akses telah berlalu. Cipta semakan baharu untuk mengesahkan akses semasa.",
+  "access_review_empty": "Tiada pemberian peranan penyewa langsung atau sementara yang aktif untuk disemak.",
+  "access_review_state_conflict": "Semakan akses atau item telah berubah. Muat semula sebelum mengambil tindakan lain.",
+  "access_review_incomplete": "Setiap item semakan akses mesti dikekalkan atau ditarik balik sebelum semakan boleh diselesaikan.",
+  "access_review_self_decision": "Penyemak tidak boleh mengesahkan akses sendiri. Penyemak lain yang diberi kuasa mesti memutuskan item ini.",
+  "access_review_last_administrator": "Keputusan ini akan membuang pentadbir kekal terakhir penyewa. Tetapkan pentadbir lain sebelum menarik balik akses ini.",
+  "invalid_access_review": "Semakan akses tidak sah. Berikan nama yang jelas, tarikh akhir dalam tempoh 365 hari dan keputusan kekal atau tarik balik yang sah."
+}

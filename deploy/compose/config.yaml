@@ -1,0 +1,128 @@
+name: chaosplus
+debug: false
+timezone: UTC
+
+rest:
+  host: 0.0.0.0
+  port: 8080
+  trusted_proxies: [172.30.0.2/32, 172.30.0.3/32]
+grpc:
+  host: 0.0.0.0
+  port: 9090
+
+migrations:
+  auto: true
+
+database:
+  primary:
+    # Supported types: sqlite, mysql, postgres. The DSN selects the datasource.
+    type: postgres
+    dsn_file: /run/secrets/chaosplus_runtime_dsn
+    writable: true
+    readable: true
+    max_open_conns: 25
+    max_idle_conns: 5
+
+redis:
+  addrs: [redis:6379]
+  password_file: /run/secrets/redis_password
+  db: 0
+
+ratelimit:
+  enabled: true
+  prefix: chaosplus:rl
+  ip:
+    enabled: true
+    rate: 300
+    period: 1m
+    burst: 100
+  account:
+    enabled: true
+    rate: 600
+    period: 1m
+    burst: 200
+    header: X-Account-Id
+
+security:
+  enabled: true
+  hsts: false
+
+authn:
+  enabled: true
+  issuer: http://app.localhost
+  audience: [chaosplus-api]
+  signing_key_file: /run/secrets/authn_signing_key
+  access_token_ttl: 15m
+  clock_skew: 30s
+  mfa:
+    issuer: Chaosplus
+    encryption_key_file: /run/secrets/authn_mfa_key
+    enrollment_ttl: 10m
+    challenge_ttl: 5m
+    recovery_codes: 10
+    max_attempts: 5
+  passkey:
+    enabled: true
+    rp_id: app.localhost
+    display_name: Chaosplus
+    origins: [http://app.localhost]
+    challenge_ttl: 5m
+    max_credentials: 10
+  # Keep email delivery features disabled until a real notification webhook is reachable.
+  notification:
+    poll_interval: 5s
+    request_timeout: 10s
+    max_attempts: 10
+  recovery:
+    enabled: false
+    token_ttl: 15m
+    cooldown: 24h
+  email_verification:
+    enabled: false
+    token_ttl: 24h
+  registration:
+    enabled: false
+  web:
+    enabled: true
+    cookie_name: cp_session
+    cookie_secure: false
+    session_ttl: 8h
+    idle_ttl: 30m
+    post_login_url: http://app.localhost/
+    post_logout_url: http://app.localhost/login
+    allowed_return_urls:
+      - http://app.localhost/
+      - http://app.localhost/iam/users
+      - http://app.localhost/iam/invitations
+      - http://app.localhost/iam/service-accounts
+      - http://app.localhost/iam/tenants
+      - http://app.localhost/iam/entities
+      - http://app.localhost/iam/departments
+      - http://app.localhost/iam/positions
+      - http://app.localhost/iam/groups
+      - http://app.localhost/iam/roles
+      - http://app.localhost/iam/access-requests
+      - http://app.localhost/iam/access-reviews
+      - http://app.localhost/iam/menus
+      - http://app.localhost/iam/oauth-clients
+      - http://app.localhost/iam/scim-directories
+      - http://app.localhost/iam/audit-events
+      - http://app.localhost/security
+    allowed_origins: [http://app.localhost]
+
+authz:
+  enabled: true
+
+bootstrap:
+  auto: true
+  lock_timeout: 30s
+  database:
+    type: postgres
+    dsn_file: /run/secrets/chaosplus_migration_dsn
+    max_open_conns: 5
+    max_idle_conns: 1
+  initial_admin:
+    tenant_id: platform
+    login_name: admin@chaosplus.local
+    password_file: /run/secrets/initial_admin_password
+    display_name: Platform Admin

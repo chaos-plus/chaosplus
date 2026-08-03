@@ -5,9 +5,8 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
-	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 )
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
@@ -25,6 +24,7 @@ type Config struct {
 	Security    Security                   `mapstructure:"security" group:"security"`
 	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
 	Authz       Authz                      `mapstructure:"authz" group:"authz"`
+	Plugins     plugin.Config              `mapstructure:"plugins" group:"plugins"`
 	Migrations  Migrations                 `mapstructure:"migrations" group:"migrations"`
 	Bootstrap   BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
 	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
@@ -36,36 +36,23 @@ type Migrations struct {
 }
 
 type BootstrapConfig struct {
-	Auto         bool                  `mapstructure:"auto" description:"provision external Zitadel/SpiceDB resources before server startup" default:"false"`
+	Auto         bool                  `mapstructure:"auto" description:"provision the local initial administrator before server startup" default:"false"`
 	LockTimeout  time.Duration         `mapstructure:"lock_timeout" description:"maximum wait for the deployment advisory lock" default:"30s"`
 	Database     bunx.Datasource       `mapstructure:"database" group:"database"`
-	Zitadel      BootstrapZitadel      `mapstructure:"zitadel" group:"zitadel"`
 	InitialAdmin BootstrapInitialAdmin `mapstructure:"initial_admin" group:"initial_admin"`
 }
 
-type BootstrapZitadel struct {
-	Enabled             bool          `mapstructure:"enabled" description:"provision the Chaosplus project and Native OIDC app" default:"false"`
-	MachineKeyFile      string        `mapstructure:"machine_key_file" description:"Zitadel service-user JWT profile key file" default:""`
-	ProjectName         string        `mapstructure:"project_name" description:"Zitadel project name" default:"Chaosplus API"`
-	ApplicationName     string        `mapstructure:"application_name" description:"Zitadel Native OIDC application name" default:"Chaosplus Admin"`
-	RedirectURIs        []string      `mapstructure:"redirect_uris" description:"exact OIDC callback URI list"`
-	PostLogoutURIs      []string      `mapstructure:"post_logout_uris" description:"exact post-logout redirect URI list"`
-	DevMode             bool          `mapstructure:"dev_mode" description:"allow HTTP redirect URIs for local evaluation only" default:"false"`
-	ResourcesOutputFile string        `mapstructure:"resources_output_file" description:"path for generated project/client ID JSON" default:""`
-	Timeout             time.Duration `mapstructure:"timeout" description:"timeout for Zitadel provisioning" default:"30s"`
-}
-
 type BootstrapInitialAdmin struct {
-	TenantID    string `mapstructure:"tenant_id" description:"initial tenant receiving the first administrator" default:""`
-	LoginName   string `mapstructure:"login_name" description:"exact Zitadel login name to resolve when subject is empty" default:""`
-	Subject     string `mapstructure:"subject" description:"existing identity subject for external Zitadel" default:""`
-	DisplayName string `mapstructure:"display_name" description:"display name used when subject is configured directly" default:""`
-	Email       string `mapstructure:"email" description:"email used when subject is configured directly" default:""`
+	TenantID     string `mapstructure:"tenant_id" description:"initial tenant receiving the first administrator" default:""`
+	LoginName    string `mapstructure:"login_name" description:"initial local administrator login name" default:""`
+	Password     string `mapstructure:"password" description:"initial password; prefer password_file" default:""`
+	PasswordFile string `mapstructure:"password_file" description:"file containing the initial password" default:""`
+	DisplayName  string `mapstructure:"display_name" description:"initial administrator display name" default:""`
+	Email        string `mapstructure:"email" description:"initial administrator email" default:""`
 }
 
 type Authz struct {
-	SpiceDB spicedbx.Config  `mapstructure:"spicedb" group:"spicedb"`
-	Outbox  iam.OutboxConfig `mapstructure:"outbox" group:"outbox"`
+	Enabled bool `mapstructure:"enabled" description:"enable local database-backed authorization" default:"true"`
 }
 
 // Cors configures cross-origin resource sharing on the REST server. Disabled by
@@ -153,8 +140,9 @@ type Log struct {
 }
 
 type RestServer struct {
-	Host string `mapstructure:"host" description:"host" default:"0.0.0.0"`
-	Port int    `mapstructure:"port" description:"http/rest port" default:"8080"`
+	Host           string   `mapstructure:"host" description:"host" default:"0.0.0.0"`
+	Port           int      `mapstructure:"port" description:"http/rest port" default:"8080"`
+	TrustedProxies []string `mapstructure:"trusted_proxies" description:"CIDRs allowed to supply X-Forwarded-For; empty trusts no proxy"`
 }
 
 type GrpcServer struct {

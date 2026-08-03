@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/pkg/geoip"
 )
 
 func TestIPAPI_GetIpInfo_EmptyIP(t *testing.T) {
@@ -57,7 +59,7 @@ func TestIPAPI_GetIpInfo_Success(t *testing.T) {
 	defer ts.Close()
 
 	// Inject a client that redirects ipapi.co to the test server.
-	p := &IPAPI{client: rewriteClient(ts.URL)}
+	p := &IPAPI{BaseURL: ts.URL}
 	geo, err := p.GetIpInfo("8.8.8.8")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -76,7 +78,7 @@ func TestIPAPI_GetIpInfo_Non200(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	p := &IPAPI{client: rewriteClient(ts.URL)}
+	p := &IPAPI{BaseURL: ts.URL}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "unexpected status") {
 		t.Fatalf("expected unexpected status error, got %v", err)
@@ -89,7 +91,7 @@ func TestIPAPI_GetIpInfo_BadJSON(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	p := &IPAPI{client: rewriteClient(ts.URL)}
+	p := &IPAPI{BaseURL: ts.URL}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("expected decode error, got %v", err)
@@ -102,7 +104,7 @@ func TestIPAPI_GetIpInfo_TransportError(t *testing.T) {
 	url := ts.URL
 	ts.Close()
 
-	p := &IPAPI{client: rewriteClient(url)}
+	p := &IPAPI{BaseURL: url}
 	_, err := p.GetIpInfo("8.8.8.8")
 	if err == nil || !strings.Contains(err.Error(), "http request") {
 		t.Fatalf("expected http request error, got %v", err)
@@ -110,50 +112,20 @@ func TestIPAPI_GetIpInfo_TransportError(t *testing.T) {
 }
 
 func TestIPAPI_HTTPClient_Default(t *testing.T) {
-	p := &IPAPI{}
-	c := p.httpClient()
-	if c == nil {
+	if defaultLookupClient == nil {
 		t.Fatal("expected non-nil default client")
 	}
-	if c.Timeout != 3*time.Second {
-		t.Fatalf("expected 3s timeout, got %v", c.Timeout)
-	}
-	// With no injected client, every call returns the shared read-only default.
-	if p.httpClient() != c {
-		t.Fatal("expected the shared default client")
-	}
-
-	// An injected client takes precedence over the default.
-	injected := &http.Client{}
-	p = &IPAPI{client: injected}
-	if p.httpClient() != injected {
-		t.Fatal("expected the injected client to be used")
+	if defaultLookupClient.Timeout != 3*time.Second {
+		t.Fatalf("expected 3s timeout, got %v", defaultLookupClient.Timeout)
 	}
 }
 
-// rewriteClient builds an http.Client whose transport rewrites the request URL's
-// scheme+host to target, preserving the path/query. This lets tests intercept the
-// provider's fixed ipapi.co endpoint without real network access.
-func rewriteClient(target string) *http.Client {
-	return &http.Client{
-		Transport: &rewriteTransport{target: target},
-		Timeout:   3 * time.Second,
+func TestIPAPIConfigure(t *testing.T) {
+	var config geoip.GeoIpConfig
+	config.Ipapi.BaseURL = "http://127.0.0.1:9000/"
+	provider := &IPAPI{}
+	provider.Configure(config)
+	if provider.BaseURL != "http://127.0.0.1:9000" {
+		t.Fatalf("unexpected base URL %q", provider.BaseURL)
 	}
-}
-
-type rewriteTransport struct {
-	target string
-}
-
-func (rt *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// target is like "http://127.0.0.1:port"
-	scheme := "http"
-	host := strings.TrimPrefix(rt.target, "http://")
-	if strings.HasPrefix(rt.target, "https://") {
-		scheme = "https"
-		host = strings.TrimPrefix(rt.target, "https://")
-	}
-	req.URL.Scheme = scheme
-	req.URL.Host = host
-	return http.DefaultTransport.RoundTrip(req)
 }

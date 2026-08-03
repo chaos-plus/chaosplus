@@ -40,6 +40,7 @@ func TestGenerateYAML_RoundTripsWithDefaults(t *testing.T) {
 	assert.Equal(t, 8080, out.Port)
 	assert.False(t, out.Debug)
 	assert.Equal(t, "info", out.Log.Level)
+	assert.Zero(t, out.unexported)
 	require.Contains(t, out.Sources, "srckey", "map placeholder entry uses the cleaned mapkey")
 	assert.Equal(t, "info", out.Sources["srckey"].Level)
 }

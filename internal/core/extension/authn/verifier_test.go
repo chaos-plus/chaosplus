@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,7 +48,7 @@ func TestVerifyAuthorization(t *testing.T) {
 	claims, err := verifier.VerifyAuthorization(context.Background(), "Bearer "+token)
 	require.NoError(t, err)
 	assert.Equal(t, "u123", claims.Subject)
-	assert.Equal(t, "user:u123", claims.SubjectRef().String())
+	assert.Equal(t, "u123", claims.Subject)
 	assert.Equal(t, "alice", claims.PreferredUsername)
 	authenticated, err := verifier.Authenticate(context.Background(), "Bearer "+token, "")
 	require.NoError(t, err)
@@ -141,7 +140,7 @@ func TestContextHelpers(t *testing.T) {
 	assert.Equal(t, "u1", claims.Subject)
 	subject, ok := SubjectFromContext(ctx)
 	require.True(t, ok)
-	assert.Equal(t, "user:u1", subject.String())
+	assert.Equal(t, "u1", subject)
 }
 
 func TestVerifierErrorBranches(t *testing.T) {
@@ -190,17 +189,30 @@ func TestRefreshAndDiscoveryErrors(t *testing.T) {
 	_, err = verifier.jwksURLValue(context.Background())
 	assert.Error(t, err)
 
-	verifier.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("network")
-	})
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	verifier, err = NewVerifier(Config{Enabled: true, Issuer: closedURL})
+	require.NoError(t, err)
 	_, err = verifier.jwksURLValue(context.Background())
 	assert.Error(t, err)
-}
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+	badDiscovery := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{invalid`))
+	}))
+	defer badDiscovery.Close()
+	verifier, err = NewVerifier(Config{Enabled: true, Issuer: badDiscovery.URL})
+	require.NoError(t, err)
+	_, err = verifier.jwksURLValue(context.Background())
+	assert.ErrorContains(t, err, "decode oidc discovery")
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
+	badJWKSJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{invalid`))
+	}))
+	defer badJWKSJSON.Close()
+	verifier, err = NewVerifier(Config{Enabled: true, Issuer: "https://issuer.example", JWKSURL: badJWKSJSON.URL})
+	require.NoError(t, err)
+	assert.ErrorContains(t, verifier.refreshKeys(context.Background()), "decode jwks")
 }
 
 type testKey struct {
