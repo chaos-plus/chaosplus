@@ -10,7 +10,7 @@ CREATE TABLE iam_audit_heads (
     sequence BIGINT NOT NULL DEFAULT 0,
     event_hash CHAR(64) NOT NULL DEFAULT '',
     updated_at BIGINT NOT NULL
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- +goose StatementBegin
 CREATE TRIGGER trg_iam_audit_events_no_update
 BEFORE UPDATE ON iam_audit_events FOR EACH ROW

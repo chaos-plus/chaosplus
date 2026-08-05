@@ -13,7 +13,7 @@ CREATE TABLE iam_scim_directories (
     CONSTRAINT uq_iam_scim_directories_name UNIQUE (tenant_id, name_key),
     CONSTRAINT fk_iam_scim_directories_tenant FOREIGN KEY (tenant_id) REFERENCES iam_tenants(id) ON DELETE CASCADE,
     KEY idx_iam_scim_directories_tenant (tenant_id, status, name_key, id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_scim_credentials (
     id VARCHAR(128) NOT NULL PRIMARY KEY,
@@ -27,7 +27,7 @@ CREATE TABLE iam_scim_credentials (
     CONSTRAINT chk_iam_scim_credentials_times CHECK (expires_at >= 0 AND last_used_at >= 0 AND revoked_at >= 0),
     CONSTRAINT fk_iam_scim_credentials_directory FOREIGN KEY (directory_id) REFERENCES iam_scim_directories(id) ON DELETE CASCADE,
     KEY idx_iam_scim_credentials_directory (directory_id, revoked_at, expires_at, created_at)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_scim_resources (
     directory_id VARCHAR(128) NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE iam_scim_resources (
     CONSTRAINT uq_iam_scim_resources_external UNIQUE (directory_id, resource_type, external_key),
     CONSTRAINT fk_iam_scim_resources_directory FOREIGN KEY (directory_id) REFERENCES iam_scim_directories(id) ON DELETE CASCADE,
     KEY idx_iam_scim_resources_list (directory_id, resource_type, deleted_at, resource_id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE iam_scim_resources;

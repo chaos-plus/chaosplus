@@ -8,7 +8,7 @@ CREATE TABLE iam_roles (
     updated_at   BIGINT       NOT NULL,
     PRIMARY KEY (tenant_id, id),
     UNIQUE KEY uq_iam_roles_name (tenant_id, name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_role_permissions (
     tenant_id       VARCHAR(128) NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE iam_role_permissions (
     PRIMARY KEY (tenant_id, role_id, permission_code),
     CONSTRAINT fk_iam_role_permissions_role FOREIGN KEY (tenant_id, role_id)
         REFERENCES iam_roles (tenant_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_role_members (
     tenant_id    VARCHAR(128) NOT NULL,
@@ -28,7 +28,7 @@ CREATE TABLE iam_role_members (
     PRIMARY KEY (tenant_id, role_id, user_subject),
     CONSTRAINT fk_iam_role_members_role FOREIGN KEY (tenant_id, role_id)
         REFERENCES iam_roles (tenant_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE authz_outbox (
     id                  VARCHAR(32)   NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE authz_outbox (
     UNIQUE KEY uq_authz_outbox_relationship (tenant_id, relationship_key),
     KEY idx_authz_outbox_pending (status, available_at),
     KEY idx_authz_outbox_locked (status, locked_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS authz_outbox;

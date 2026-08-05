@@ -4,7 +4,7 @@ CREATE TABLE iam_passkey_users (
     user_handle VARCHAR(86) NOT NULL UNIQUE,
     created_at BIGINT NOT NULL,
     CONSTRAINT fk_iam_passkey_users_principal FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_passkeys (
     id_hash CHAR(64) NOT NULL PRIMARY KEY,
@@ -17,7 +17,7 @@ CREATE TABLE iam_passkeys (
     last_used_at BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT fk_iam_passkeys_principal FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE,
     INDEX idx_iam_passkeys_principal (principal_id, created_at)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_passkey_challenges (
     id_hash CHAR(64) NOT NULL PRIMARY KEY,
@@ -30,7 +30,7 @@ CREATE TABLE iam_passkey_challenges (
     consumed_at BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT chk_iam_passkey_challenges_kind CHECK (kind IN ('registration', 'login')),
     INDEX idx_iam_passkey_challenges_expiry (expires_at, consumed_at)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_passkey_challenges;

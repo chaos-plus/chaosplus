@@ -7,7 +7,7 @@ CREATE TABLE iam_mfa_enrollments (
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     CONSTRAINT fk_iam_mfa_enrollment_principal FOREIGN KEY (principal_id) REFERENCES iam_principals(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_recovery_codes (
     principal_id VARCHAR(64) NOT NULL,
@@ -17,7 +17,7 @@ CREATE TABLE iam_recovery_codes (
     PRIMARY KEY (principal_id, code_hash),
     KEY idx_iam_recovery_codes_available (principal_id, used_at),
     CONSTRAINT fk_iam_recovery_principal FOREIGN KEY (principal_id) REFERENCES iam_principals(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_mfa_challenges (
     id_hash CHAR(64) PRIMARY KEY,
@@ -29,7 +29,7 @@ CREATE TABLE iam_mfa_challenges (
     attempts INT NOT NULL DEFAULT 0,
     KEY idx_iam_mfa_challenges_principal (principal_id, consumed_at, expires_at),
     CONSTRAINT fk_iam_mfa_challenge_principal FOREIGN KEY (principal_id) REFERENCES iam_principals(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE iam_mfa_challenges;

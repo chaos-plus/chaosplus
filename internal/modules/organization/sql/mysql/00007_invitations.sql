@@ -19,7 +19,7 @@ CREATE TABLE iam_invitations (
     KEY idx_iam_invitations_email (tenant_id, email_key, status),
     KEY idx_iam_invitations_expiry (status, expires_at),
     CONSTRAINT fk_iam_invitations_tenant FOREIGN KEY (tenant_id) REFERENCES iam_tenants (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_invitation_roles (
     tenant_id VARCHAR(128) NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE iam_invitation_roles (
         REFERENCES iam_invitations (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT fk_iam_invitation_roles_role FOREIGN KEY (tenant_id, role_id)
         REFERENCES iam_roles (tenant_id, id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_invitation_roles;

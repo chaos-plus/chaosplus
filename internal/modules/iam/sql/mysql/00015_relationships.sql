@@ -2,7 +2,7 @@
 CREATE TABLE iam_relationships (
     tenant_id VARCHAR(128) NOT NULL,
     subject_type VARCHAR(16) NOT NULL,
-    subject_id VARCHAR(255) NOT NULL,
+    subject_id VARCHAR(128) NOT NULL,
     subject_relation VARCHAR(16) NOT NULL DEFAULT '',
     relation VARCHAR(16) NOT NULL,
     resource_type VARCHAR(64) NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE iam_relationships (
         REFERENCES iam_entities (tenant_id, id) ON DELETE RESTRICT,
     INDEX idx_iam_relationships_subject (tenant_id, subject_type, subject_id, subject_relation),
     INDEX idx_iam_relationships_resource (tenant_id, resource_type, resource_id, relation)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE iam_relationships;

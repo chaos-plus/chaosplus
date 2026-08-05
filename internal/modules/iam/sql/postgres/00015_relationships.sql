@@ -2,7 +2,7 @@
 CREATE TABLE iam_relationships (
     tenant_id VARCHAR(128) NOT NULL,
     subject_type VARCHAR(16) NOT NULL CHECK (subject_type IN ('principal', 'group', 'position', 'entity')),
-    subject_id VARCHAR(255) NOT NULL,
+    subject_id VARCHAR(128) NOT NULL,
     subject_relation VARCHAR(16) NOT NULL DEFAULT '',
     relation VARCHAR(16) NOT NULL CHECK (relation IN ('owner', 'editor', 'viewer')),
     resource_type VARCHAR(64) NOT NULL,

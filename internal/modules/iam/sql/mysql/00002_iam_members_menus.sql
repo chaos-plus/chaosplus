@@ -11,7 +11,7 @@ CREATE TABLE iam_tenant_members (
     PRIMARY KEY (tenant_id, user_subject),
     CONSTRAINT chk_iam_tenant_member_status CHECK (status IN ('active', 'disabled')),
     INDEX idx_iam_tenant_members_status (tenant_id, status, display_name, user_subject)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_menus (
     tenant_id VARCHAR(128) NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE iam_menus (
     CONSTRAINT fk_iam_menus_parent FOREIGN KEY (tenant_id, parent_id) REFERENCES iam_menus (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT chk_iam_menu_status CHECK (status IN ('active', 'disabled')),
     INDEX idx_iam_menus_tree (tenant_id, status, parent_id, sort_order, id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE iam_menus;

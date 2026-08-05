@@ -16,7 +16,7 @@ CREATE TABLE iam_temporary_role_grants (
     CONSTRAINT fk_iam_temporary_role_grants_role FOREIGN KEY (tenant_id, role_id)
         REFERENCES iam_roles (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_temporary_role_grants_source CHECK (source_type IN ('access_request'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_temporary_role_grants;

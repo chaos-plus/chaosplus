@@ -1275,7 +1275,7 @@ Identity 主体创建在一个事务内写入全局 Principal、Credential、当
 
 事件 detail 不记录邮箱、密码、Cookie、Token 或 client secret。登录、MFA、Passkey 和账号恢复事件统一进入可验证 hash chain。当前管理 API 支持 tenant 分区查询、详情、完整性验证和固定 head 的流式 NDJSON 导出；导出请求本身进入同一 tenant 链，管理端可按当前筛选下载且会拒绝缺失完成记录的响应。
 
-真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。尚未完成：分区 root 签名与独立 WORM 锚定、归档/保留策略，以及 SQLite 之外的 live 数据库行为验收。因此当前实现是可验证审计与可移交证据基线，不是完整合规治理交付。
+真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。尚未完成：分区 root 签名与独立 WORM 锚定、归档/保留策略，因此当前实现是可验证审计与可移交证据基线，不是完整合规治理交付。
 
 ### 17.2 审批
 
@@ -1744,7 +1744,7 @@ web/admin                                   -> 完整 IAM 管理台
 - [ ] 撤权数据库提交后立即生效，未使用陈旧 allow cache。
 - [ ] 最后管理员保护覆盖 UI、API、SCIM、到期 worker 和批量导入。
 - [ ] 审计 hash chain 可验证，敏感材料扫描无泄漏。
-- [ ] SQLite、MySQL、PostgreSQL contract suite 通过，目标生产 dialect 的备份恢复演练通过。
+- [x] SQLite、MySQL、PostgreSQL contract suite 通过（SQLite 常驻；MySQL 8.0.42 / PostgreSQL 17.5 本机真实迁移生命周期、全栈启动与 bootstrap 登录验收通过）；目标生产 dialect 的备份恢复演练通过。
 - [ ] Primary 数据库、Redis、KMS、邮件和 worker 故障演练符合预期。
 - [ ] SLO dashboard、告警、备份恢复和 on-call runbook 可用。
 - [ ] 独立安全评审和渗透测试的高危问题清零。

@@ -14,7 +14,7 @@ CREATE TABLE iam_access_reviews (
     CONSTRAINT fk_iam_access_reviews_tenant FOREIGN KEY (tenant_id)
         REFERENCES iam_tenants (id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_access_reviews_status CHECK (status IN ('open', 'completed', 'cancelled'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_access_review_items (
     tenant_id        VARCHAR(128) NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE iam_access_review_items (
         REFERENCES iam_access_reviews (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_access_review_items_grant_type CHECK (grant_type IN ('permanent', 'temporary')),
     CONSTRAINT chk_iam_access_review_items_decision CHECK (decision IN ('pending', 'keep', 'revoke'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_access_review_items;

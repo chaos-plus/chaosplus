@@ -52,7 +52,7 @@ CREATE TABLE iam_entities (
 );
 CREATE INDEX idx_iam_entities_tree ON iam_entities (tenant_id,parent_id,type,status);
 CREATE TABLE iam_role_bindings (
-    tenant_id VARCHAR(128) NOT NULL, role_id VARCHAR(64) NOT NULL, principal_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(128) NOT NULL, role_id VARCHAR(32) NOT NULL, principal_id VARCHAR(64) NOT NULL,
     scope_type VARCHAR(32) NOT NULL DEFAULT 'tenant', scope_id VARCHAR(64) NOT NULL,
     effect VARCHAR(8) NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow','deny')),
     expires_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL,

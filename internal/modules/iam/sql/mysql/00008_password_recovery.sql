@@ -12,7 +12,7 @@ CREATE TABLE iam_password_recovery_tokens (
     consumed_at BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT fk_iam_password_recovery_principal FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE,
     INDEX idx_iam_password_recovery_principal (principal_id, consumed_at, expires_at)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_notification_outbox (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -29,7 +29,7 @@ CREATE TABLE iam_notification_outbox (
     updated_at BIGINT NOT NULL,
     CONSTRAINT chk_iam_notification_outbox_status CHECK (status IN ('pending', 'delivering', 'sent', 'failed')),
     INDEX idx_iam_notification_outbox_pending (status, available_at, created_at)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_notification_outbox;

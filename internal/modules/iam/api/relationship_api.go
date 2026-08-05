@@ -29,7 +29,7 @@ type Relationship struct {
 type relationshipFields struct {
 	EntityID        string          `json:"entity_id,omitempty" maxLength:"64"`
 	SubjectType     string          `json:"subject_type" enum:"principal,group,position,entity"`
-	SubjectID       string          `json:"subject_id" maxLength:"255"`
+	SubjectID       string          `json:"subject_id" maxLength:"128"`
 	SubjectRelation string          `json:"subject_relation,omitempty" maxLength:"16"`
 	Relation        string          `json:"relation" enum:"owner,editor,viewer"`
 	ResourceType    string          `json:"resource_type" maxLength:"64"`
@@ -78,7 +78,7 @@ type deleteRelationshipInput struct {
 	TenantID        string `header:"X-Tenant-Id" maxLength:"128"`
 	EntityID        string `query:"entity_id" maxLength:"64"`
 	SubjectType     string `query:"subject_type" enum:"principal,group,position,entity"`
-	SubjectID       string `query:"subject_id" maxLength:"255"`
+	SubjectID       string `query:"subject_id" maxLength:"128"`
 	SubjectRelation string `query:"subject_relation" maxLength:"16"`
 	Relation        string `query:"relation" enum:"owner,editor,viewer"`
 	ResourceType    string `query:"resource_type" maxLength:"64"`
@@ -92,7 +92,7 @@ type authorizationCheckInput struct {
 		ResourceType   string `json:"resource_type,omitempty" maxLength:"64"`
 		ResourceID     string `json:"resource_id,omitempty" maxLength:"255"`
 		PermissionCode string `json:"permission_code" maxLength:"128"`
-		Subject        string `json:"subject" maxLength:"255"`
+		Subject        string `json:"subject" maxLength:"128"`
 	}
 }
 

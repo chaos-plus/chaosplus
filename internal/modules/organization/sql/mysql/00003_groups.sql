@@ -18,7 +18,7 @@ CREATE TABLE iam_groups (
     CONSTRAINT chk_iam_groups_status CHECK (status IN ('active', 'disabled')),
     CONSTRAINT chk_iam_groups_sort_order CHECK (sort_order >= 0 AND sort_order <= 1000000),
     CONSTRAINT chk_iam_groups_version CHECK (version >= 1)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_group_members (
     tenant_id VARCHAR(128) NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE iam_group_members (
     CONSTRAINT fk_iam_group_members_principal FOREIGN KEY (tenant_id, principal_id) REFERENCES iam_tenant_members (tenant_id, user_subject) ON DELETE CASCADE,
     CONSTRAINT chk_iam_group_members_starts CHECK (starts_at >= 0),
     CONSTRAINT chk_iam_group_members_ends CHECK (ends_at >= 0 AND (ends_at = 0 OR starts_at = 0 OR ends_at > starts_at))
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_group_members;

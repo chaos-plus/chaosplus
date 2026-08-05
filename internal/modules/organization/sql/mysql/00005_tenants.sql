@@ -7,6 +7,6 @@ CREATE TABLE iam_tenants (
     version BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- +goose Down
 DROP TABLE iam_tenants;

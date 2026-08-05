@@ -24,7 +24,7 @@ CREATE TABLE iam_access_requests (
     CONSTRAINT fk_iam_access_requests_tenant FOREIGN KEY (tenant_id)
         REFERENCES iam_tenants (id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_access_requests_status CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled', 'revoked'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_approval_steps (
     tenant_id  VARCHAR(128) NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE iam_approval_steps (
     CONSTRAINT fk_iam_approval_steps_request FOREIGN KEY (tenant_id, request_id)
         REFERENCES iam_access_requests (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_approval_steps_decision CHECK (decision IN ('pending', 'approved', 'rejected'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- +goose Down
 DROP TABLE IF EXISTS iam_approval_steps;
