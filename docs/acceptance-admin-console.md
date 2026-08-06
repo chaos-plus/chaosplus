@@ -273,3 +273,22 @@ bun run audit:passkey -- 9333 http://localhost:8091
 ```
 
 > 通行密钥审计必须使用与 `authn.passkey.rp_id` 匹配的浏览器来源（本机验收配置为 `localhost`，因此 baseURL 用 `http://localhost:8091`）；其余审计使用 `127.0.0.1` 不受影响。
+## 验收记录（2026-08-05/2026-08-06）
+
+以下证据均在本仓库 HEAD `iam-ds` 上真实执行；条目对应上方清单各章节。人工/硬件类条目（TOTP 物理验证器、真实二维码扫码、真实邮箱供应商投递）仍标记为待验。
+
+| 清单章节 | 验证方式 | 证据 |
+| --- | --- | --- |
+| 0 环境准备 | 本地 SQLite 实例运行中，`/.well-known/openid-configuration` 与 `/.well-known/jwks.json` 均 200；资源占用实测 | backend(18080) WS 117MB/21 线程；web(8091) WS 129MB；docs(4322) WS 63MB；通知接收器(18081) WS 55MB；MySQL(3308) WS 564MB；PostgreSQL(5432) WS 23MB |
+| 1 本地身份与会话 | 真实 Chromium 浏览器审计（13 个 audit 脚本） | `audit:tenants`、`audit:invitations`、`audit:passkey` 等全部通过：登录/退出/深链回跳、无控制台错误、1440px/390px 无横向溢出 |
+| 1.1 TOTP 与恢复码 | 真实后端测试 + 浏览器绑定截图 | `internal/modules/authn/mfa_test.go`：`TestTOTPEnrollmentAndLogin`、`TestRecoveryCodesRegenerationAndDisable`、`TestMFAChallengeAttemptsAndExpiration`、`TestMFAAuditFailuresRollBackSecurityMutations`；`.local/screenshots/admin-mfa-*` 绑定/轮换/停用截图 |
+| 1.2 Passkey/WebAuthn | 真实 Chromium CTAP2 虚拟认证器（CDP WebAuthn） | `audit:passkey` 全流程：注册→重命名→无密码登录→删除→删除后拒绝；rp_id=localhost，来源匹配要求已写入验收命令 |
+| 1.3 自助注册 | 真实浏览器 + Webhook 通知 + 直接查库 | `audit:registration`：验证 token 一次性消费、`activation_required` 清除、tenant 成员数 0、注册后登录成功 |
+| 1.4/1.5 邮箱验证与密码找回 | 真实后端测试 + 注册审计的验证链 | `internal/modules/authn`：`TestEmailVerification*` 与 `TestPasswordRecovery*`（生命周期、过期、一次性、回滚、并发） |
+| 2-6 主体/角色/实体/OAuth/SCIM | 真实浏览器审计 + 后端测试 | 13 个 audit 全部通过：租户生命周期、邀请、角色+数据范围、部门/岗位/用户组、实体关系、访问申请/复核、服务账号、SCIM 预配；截图见 `.local/screenshots/` |
+| 7 审计日志 | 运行实例 API + 三方言测试 | `GET /iam/audit-integrity` valid=true（639 条事件链，head_sequence=639 且 head_hash 一致）；UPDATE/DELETE 拒绝由三方言测试覆盖 |
+| 8 Web 安全 | 真实请求 + 配置校验 | 坏 Origin 写请求返回 403；`cp_session` 实测 `HttpOnly; SameSite=Lax`；生产 TLS overlay（`compose.tls.yaml`）设 `AUTHN_WEB_COOKIE_SECURE=true`；`config validate` 输出无密码/DSN/密钥 |
+| 9 数据库兼容性 | 真实 MySQL 8.0.42 / PostgreSQL 17.5 一次性数据库 | IAM/Provisioning/Federation `Test*MigrationDialectLifecycle` 全部 PASS（create→migrate→down→re-migrate）；SQLite 由全量门禁覆盖 |
+| 10 结构约束 | 门禁扫描 | `check-gates.ps1 -Scope all -Full` 通过：Go race 测试、90.0% 覆盖率、govulncheck 0 漏洞、vet、前端 lint/typecheck/真实测试/构建、文档构建/链接/Mermaid |
+
+仍待人工/硬件验证：TOTP 物理验证器真机流、真实二维码扫码、真实邮箱供应商投递、实体/层级真机扫码。
