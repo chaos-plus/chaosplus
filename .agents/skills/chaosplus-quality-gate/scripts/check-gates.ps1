@@ -15,12 +15,19 @@ $failures = [Collections.Generic.List[string]]::new()
 function Invoke-NativeStep([string]$Label, [string]$WorkingDirectory, [string]$Command, [string[]]$Arguments) {
     Write-Host "`n== $Label ==" -ForegroundColor Cyan
     Push-Location $WorkingDirectory
+    $previousErrorAction = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 promotes native stderr to terminating errors under
+        # $ErrorActionPreference='Stop', which misreports successful tools that write
+        # progress to stderr (python unittest, turbo, node). Continue keeps the output
+        # visible while the $LASTEXITCODE check below still catches real failures.
+        $ErrorActionPreference = 'Continue'
         & $Command @Arguments
         if ($LASTEXITCODE -ne 0) { throw "$Command exited with $LASTEXITCODE" }
     } catch {
         $script:failures.Add("$Label`: $($_.Exception.Message)")
     } finally {
+        $ErrorActionPreference = $previousErrorAction
         Pop-Location
     }
 }
