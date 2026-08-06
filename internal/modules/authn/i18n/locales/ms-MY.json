@@ -9,6 +9,7 @@
   "passkey_unavailable": "Pengesahan kunci laluan tidak dapat menyelesaikan permintaan. Cuba lagi kemudian atau gunakan kaedah log masuk lain.",
   "invalid_passkey_challenge": "Cabaran kunci laluan tidak sah atau telah tamat tempoh. Mulakan semula operasi kunci laluan.",
   "invalid_passkey_credential": "Kelayakan kunci laluan tidak dapat disahkan. Cuba dengan kunci laluan berdaftar atau gunakan kaedah log masuk lain.",
+  "passkey_attestation_rejected": "Pengesahan passkey ditolak oleh dasar pengesah yang dikonfigurasikan. Gunakan kunci keselamatan yang diluluskan atau hubungi pentadbir.",
   "passkey_limit_reached": "Akaun telah mencapai had kunci laluan berdaftar. Buang kunci laluan yang tidak digunakan sebelum menambah yang baharu.",
   "passkey_not_found": "Kunci laluan yang diminta tidak ditemui. Muat semula senarai dan pilih kunci laluan yang wujud.",
   "csrf_rejected": "Permintaan gagal perlindungan pemalsuan permintaan rentas tapak. Muat semula halaman dan cuba lagi.",

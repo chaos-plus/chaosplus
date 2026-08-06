@@ -530,6 +530,9 @@ func TestPasskeyCredentialCommit(t *testing.T) {
 	assert.Equal(t, "Security key", view.Name)
 	assert.Equal(t, uint32(12), view.SignCount)
 	assert.Equal(t, now, view.CreatedAt)
+	assert.Equal(t, "none", view.AttestationFormat)
+	assert.Equal(t, "none", view.AttestationType)
+	assert.Equal(t, "0102", view.AAGUID)
 
 	var row passkeyRow
 	require.NoError(t, service.db.NewSelect().Model(&row).Where("id_hash = ?", view.ID).Scan(t.Context()))
@@ -606,17 +609,36 @@ func TestPasskeyLoginCommitAndCounterProtection(t *testing.T) {
 	})
 }
 
+func TestPasskeyAttestationPolicy(t *testing.T) {
+	service, _ := newLocalService(t)
+	policy := service.cfg.Passkey
+	assert.NoError(t, service.checkPasskeyAttestation(webauthnx.Credential{AttestationFormat: "none", AAGUID: []byte{0xaa}}))
+
+	policy.AllowedAttestationFormats = []string{"packed"}
+	service.cfg.Passkey = policy
+	assert.NoError(t, service.checkPasskeyAttestation(webauthnx.Credential{AttestationFormat: "packed", AAGUID: []byte{0xaa}}))
+	assert.ErrorIs(t, service.checkPasskeyAttestation(webauthnx.Credential{AttestationFormat: "none", AAGUID: []byte{0xaa}}), authnext.ErrPasskeyAttestation)
+
+	policy = service.cfg.Passkey
+	policy.AllowedAttestationFormats = nil
+	policy.AllowedAAGUIDs = []string{"aa"}
+	service.cfg.Passkey = policy
+	assert.NoError(t, service.checkPasskeyAttestation(webauthnx.Credential{AttestationFormat: "none", AAGUID: []byte{0xaa}}))
+	assert.ErrorIs(t, service.checkPasskeyAttestation(webauthnx.Credential{AttestationFormat: "none", AAGUID: []byte{0xbb}}), authnext.ErrPasskeyAttestation)
+}
+
 func webauthnxCredential(id []byte, signCount uint32, cloneWarning bool) webauthnx.Credential {
 	stored := webauthn.Credential{
 		ID: id, PublicKey: []byte{1, 2, 3},
+		AttestationFormat: "none", AttestationType: "none",
 		Flags:         webauthn.NewCredentialFlags(protocol.FlagUserPresent | protocol.FlagUserVerified),
-		Authenticator: webauthn.Authenticator{SignCount: signCount, CloneWarning: cloneWarning},
+		Authenticator: webauthn.Authenticator{AAGUID: []byte{1, 2}, SignCount: signCount, CloneWarning: cloneWarning},
 	}
 	data, err := json.Marshal(stored)
 	if err != nil {
 		panic(err)
 	}
-	return webauthnx.Credential{ID: append([]byte(nil), id...), Data: data, SignCount: signCount, CloneWarning: cloneWarning}
+	return webauthnx.Credential{ID: append([]byte(nil), id...), Data: data, SignCount: signCount, CloneWarning: cloneWarning, AttestationFormat: "none", AttestationType: "none", AAGUID: []byte{1, 2}}
 }
 
 func authenticatedCookie(t *testing.T, service *WebService) string {

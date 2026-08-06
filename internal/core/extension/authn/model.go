@@ -19,6 +19,7 @@ var (
 	ErrPasskeyDisabled           = errors.New("passkey authentication is disabled")
 	ErrPasskeyChallenge          = errors.New("invalid or expired passkey challenge")
 	ErrPasskeyCredential         = errors.New("invalid passkey credential")
+	ErrPasskeyAttestation        = errors.New("passkey attestation rejected by policy")
 	ErrPasskeyLimit              = errors.New("passkey credential limit reached")
 	ErrPasskeyNotFound           = errors.New("passkey credential not found")
 	ErrReturnURL                 = errors.New("return URL is not allowed")
@@ -48,11 +49,14 @@ type PasskeyOptions struct {
 }
 
 type Passkey struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	SignCount  uint32     `json:"sign_count"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	SignCount         uint32     `json:"sign_count"`
+	CreatedAt         time.Time  `json:"created_at"`
+	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
+	AttestationFormat string     `json:"attestation_format,omitempty"`
+	AttestationType   string     `json:"attestation_type,omitempty"`
+	AAGUID            string     `json:"aaguid,omitempty"`
 }
 
 type MFAStatus struct {
@@ -68,6 +72,17 @@ type MFAEnrollment struct {
 
 type MFAConfirmation struct {
 	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+type StepUpOptions struct {
+	ChallengeID string    `json:"challenge_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Methods     []string  `json:"methods"`
+}
+
+type StepUpResult struct {
+	SessionID string    `json:"-"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // BrowserSession is a revocable browser session visible to its owner.

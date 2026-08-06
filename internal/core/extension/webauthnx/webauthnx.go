@@ -4,6 +4,7 @@ package webauthnx
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -12,10 +13,37 @@ import (
 
 var ErrInvalidCredential = errors.New("invalid WebAuthn credential")
 
+// AttestationPreference mirrors the WebAuthn attestation conveyance values.
+// The empty value defaults to "none" to preserve prior behavior.
+type AttestationPreference string
+
+const (
+	AttestationNone       AttestationPreference = "none"
+	AttestationIndirect   AttestationPreference = "indirect"
+	AttestationDirect     AttestationPreference = "direct"
+	AttestationEnterprise AttestationPreference = "enterprise"
+)
+
+func (p AttestationPreference) protocol() (protocol.ConveyancePreference, error) {
+	switch p {
+	case AttestationNone:
+		return protocol.PreferNoAttestation, nil
+	case AttestationIndirect:
+		return protocol.PreferIndirectAttestation, nil
+	case AttestationDirect:
+		return protocol.PreferDirectAttestation, nil
+	case AttestationEnterprise:
+		return protocol.PreferEnterpriseAttestation, nil
+	default:
+		return "", fmt.Errorf("unsupported attestation preference %q", p)
+	}
+}
+
 type Config struct {
-	RPID        string
-	DisplayName string
-	Origins     []string
+	RPID                  string
+	DisplayName           string
+	Origins               []string
+	AttestationPreference AttestationPreference
 }
 
 type Adapter struct {
@@ -30,18 +58,28 @@ type User struct {
 }
 
 type Credential struct {
-	ID           []byte
-	Data         []byte
-	SignCount    uint32
-	CloneWarning bool
+	ID                []byte
+	Data              []byte
+	SignCount         uint32
+	CloneWarning      bool
+	AttestationFormat string
+	AttestationType   string
+	AAGUID            []byte
 }
 
 func New(cfg Config) (*Adapter, error) {
+	if cfg.AttestationPreference == "" {
+		cfg.AttestationPreference = AttestationNone
+	}
+	preference, err := cfg.AttestationPreference.protocol()
+	if err != nil {
+		return nil, err
+	}
 	instance, err := webauthn.New(&webauthn.Config{
 		RPID:                  cfg.RPID,
 		RPDisplayName:         cfg.DisplayName,
 		RPOrigins:             cfg.Origins,
-		AttestationPreference: protocol.PreferNoAttestation,
+		AttestationPreference: preference,
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
 			ResidentKey:      protocol.ResidentKeyRequirementRequired,
 			UserVerification: protocol.VerificationRequired,
@@ -155,9 +193,12 @@ func encodeCredential(credential *webauthn.Credential) (Credential, error) {
 		return Credential{}, err
 	}
 	return Credential{
-		ID:           append([]byte(nil), credential.ID...),
-		Data:         data,
-		SignCount:    credential.Authenticator.SignCount,
-		CloneWarning: credential.Authenticator.CloneWarning,
+		ID:                append([]byte(nil), credential.ID...),
+		Data:              data,
+		SignCount:         credential.Authenticator.SignCount,
+		CloneWarning:      credential.Authenticator.CloneWarning,
+		AttestationFormat: credential.AttestationFormat,
+		AttestationType:   credential.AttestationType,
+		AAGUID:            append([]byte(nil), credential.Authenticator.AAGUID...),
 	}, nil
 }

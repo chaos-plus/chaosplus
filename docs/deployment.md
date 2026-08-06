@@ -139,6 +139,9 @@ authn:
     origins: [https://console.example.com]
     challenge_ttl: 5m
     max_credentials: 10
+    attestation_preference: none
+    allowed_attestation_formats: []
+    allowed_aaguid: []
 ```
 
 `rp_id` 不含 scheme 或 port；`origins` 必须是浏览器看到的完整 HTTPS origin，且同时列入 `authn.web.allowed_origins`。本地 HTTP 只用于浏览器认可的 `localhost`/开发域，生产必须使用 TLS。更换域名会使原 RP ID 下的凭据不可用，升级前必须规划重新注册窗口。

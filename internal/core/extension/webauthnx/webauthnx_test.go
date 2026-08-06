@@ -48,6 +48,47 @@ func TestConfigurationRequiresTrustedOrigins(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestAttestationConveyancePreference(t *testing.T) {
+	for _, tc := range []struct {
+		preference AttestationPreference
+		want       string
+	}{
+		{AttestationNone, `"attestation":"none"`},
+		{AttestationIndirect, `"attestation":"indirect"`},
+		{AttestationDirect, `"attestation":"direct"`},
+		{AttestationEnterprise, `"attestation":"enterprise"`},
+	} {
+		adapter, err := New(Config{RPID: "example.com", DisplayName: "Chaosplus", Origins: []string{"https://example.com"}, AttestationPreference: tc.preference})
+		require.NoError(t, err)
+		user, err := NewUser([]byte("opaque-user-handle"), "alice", "Alice", nil)
+		require.NoError(t, err)
+		creation, _, err := adapter.BeginRegistration(user, time.Now().Add(5*time.Minute).UTC())
+		require.NoError(t, err)
+		assert.Contains(t, string(creation), tc.want)
+	}
+
+	_, err := New(Config{RPID: "example.com", DisplayName: "Chaosplus", Origins: []string{"https://example.com"}, AttestationPreference: "unsupported"})
+	assert.Error(t, err)
+}
+
+func TestCredentialSurfacesAttestation(t *testing.T) {
+	stored := webauthn.Credential{
+		ID: []byte{1, 2, 3, 4}, PublicKey: []byte{5, 6, 7},
+		AttestationFormat: "packed", AttestationType: "basic_full",
+		Flags:         webauthn.NewCredentialFlags(protocol.FlagUserPresent | protocol.FlagUserVerified),
+		Authenticator: webauthn.Authenticator{AAGUID: []byte{9, 9, 9}, SignCount: 7},
+	}
+	encoded, err := encodeCredential(&stored)
+	require.NoError(t, err)
+	assert.Equal(t, "packed", encoded.AttestationFormat)
+	assert.Equal(t, "basic_full", encoded.AttestationType)
+	assert.Equal(t, []byte{9, 9, 9}, encoded.AAGUID)
+	var roundTrip webauthn.Credential
+	require.NoError(t, json.Unmarshal(encoded.Data, &roundTrip))
+	assert.Equal(t, "packed", roundTrip.AttestationFormat)
+	assert.Equal(t, []byte{9, 9, 9}, roundTrip.Authenticator.AAGUID)
+}
+
 func TestStoredUserCredentialAndSessionEncoding(t *testing.T) {
 	stored := webauthn.Credential{
 		ID:        []byte{1, 2, 3, 4},

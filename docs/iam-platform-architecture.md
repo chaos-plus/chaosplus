@@ -561,7 +561,7 @@ SHA-256 索引，完整 Credential Record 使用按用途派生的 AES-256-GCM �
 作为 AAD。`iam_passkey_challenges` 只保存 challenge handle 的 hash，注册与登录 challenge 默认 5 分钟并在
 首次 finish 请求时原子消费，包括无效响应。注册要求有效 Cookie session 和当前密码；删除要求当前密码并撤销
 其他 session 与全部 refresh token。counter regression 不创建 session，而是记录 `passkey_counter_regression`
-安全事件。当前未接入 FIDO Metadata Service、企业 attestation 策略和风险驱动 step-up。
+安全事件。已实现可配置的 attestation conveyance（none/indirect/direct/enterprise）与格式/AAGUID 准入策略，注册响应返回 attestation 元数据；FIDO Metadata Service 在线校验尚未实现；风险驱动 step-up 已支持 TOTP/恢复码挑战，成功后提升会话 ACR 并刷新 auth_time。
 
 ### 9.3 TOTP 与恢复码
 
@@ -659,7 +659,7 @@ Secure; HttpOnly; SameSite=Lax; Path=/
 - mutation 校验 Origin；跨站集成另用 OAuth bearer，不关闭 CSRF 控制。
 - 会话记录 ACR、AMR、auth_time、credential_version 和风险摘要。
 - 支持查看并撤销其他设备会话。
-- 高风险操作要求 `auth_time` 足够新且 ACR 达标，否则返回 `step_up_required`。
+- 高风险操作要求 `auth_time` 足够新且 ACR 达标，否则返回 `step_up_required`；客户端通过 `POST /authn/step-up/options` 与 `POST /authn/step-up/verify` 完成复核后，会话 ACR 提升到 2、`auth_time` 刷新并轮换 session ID。
 
 ### 10.3 风险与限流
 
@@ -1069,12 +1069,10 @@ POST /authn/passkeys/registration/options
 POST /authn/passkeys/registration/verify
 PATCH /authn/passkeys/{id}
 DELETE /authn/passkeys/{id}
+POST /authn/step-up/options
+POST /authn/step-up/verify
 ```
 
-目标但尚未实现：
-
-```text
-POST /authn/step-up
 ```
 
 ### 15.2 Principal 与组织
@@ -1469,6 +1467,9 @@ authn:
     origins: [https://console.example.com]
     challenge_ttl: 5m
     max_credentials: 10
+    attestation_preference: none
+    allowed_attestation_formats: []
+    allowed_aaguid: []
   notification:
     url: https://notify.internal.example/v1/iam-events
     authorization_file: /run/secrets/notification_authorization
@@ -1617,7 +1618,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 新用户可由租户管理邀请或自助注册创建；自助注册只创建全局 Principal，完成邮箱验证后才能登录，租户准入仍只通过邀请。历史账号若需要导入，只允许预绑定或强制恢复密码，不能导入不可验证密码。
 - 已实现 Argon2id Password、失败锁定、密码历史、Principal 状态、会话管理、TOTP enrollment/login challenge、128 bit 一次性恢复码和完整安全中心工作流。
 - 已实现 Passkey/WebAuthn 注册、discoverable 无密码登录、凭据列表/重命名/删除、UV 强制、counter regression 拒绝和真实 Chromium CTAP2 流程。
-- 已实现普通账号主邮箱验证、邮箱快照绑定、加密通知 outbox、仅面向 verified primary email 的密码找回、单次消费、全会话撤销、凭证版本递增、恢复冷静期和链式审计；独立邮件供应商验收、FIDO Metadata/企业 attestation 和风险驱动 step-up 尚未实现。
+- 已实现普通账号主邮箱验证、邮箱快照绑定、加密通知 outbox、仅面向 verified primary email 的密码找回、单次消费、全会话撤销、凭证版本递增、恢复冷静期和链式审计；已实现可配置的 attestation conveyance 与格式/AAGUID 准入策略；独立邮件供应商验收、FIDO Metadata 在线校验尚未实现；风险驱动 step-up 已实现（POST /authn/step-up/options、POST /authn/step-up/verify）。
 - 已实现防枚举自助注册、验证前登录封锁、无隐式 Tenant Membership、三方言迁移、能力发现 API 和注册页面。
 - 已实现租户服务账号、一次性 client credential、scope allowlist、OAuth `client_credentials`、token version 即时撤销、最后管理员保护、三方言迁移、管理 API 和管理端工作流。
 

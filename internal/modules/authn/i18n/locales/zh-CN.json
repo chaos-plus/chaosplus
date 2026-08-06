@@ -30,5 +30,6 @@
   "mfa_not_enabled": "该账号尚未启用多因素认证，请先启用后再执行此操作。",
   "registration_request_rejected": "注册请求来源不在允许范围内，请使用已配置的应用地址或联系管理员。",
   "invalid_registration": "注册信息无效，请填写有效邮箱、至少 12 个字符的密码，以及不超过 128 个字符的显示名称。",
-  "registration_unavailable": "自助注册当前不可用，请联系管理员获取访问权限或稍后重试。"
+  "registration_unavailable": "自助注册当前不可用，请联系管理员获取访问权限或稍后重试。",
+  "passkey_attestation_rejected": "Passkey 证明未通过已配置的认证器策略校验。请使用受信任的安全密钥或联系管理员。"
 }

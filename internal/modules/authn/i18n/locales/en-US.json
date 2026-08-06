@@ -9,6 +9,7 @@
   "passkey_unavailable": "Passkey authentication could not complete the request. Retry later or use another configured sign-in method.",
   "invalid_passkey_challenge": "The passkey challenge is invalid or expired. Restart the passkey operation.",
   "invalid_passkey_credential": "The passkey credential could not be verified. Retry with a registered passkey or use another sign-in method.",
+  "passkey_attestation_rejected": "The passkey attestation was rejected by the configured authenticator policy. Use an approved security key or contact an administrator.",
   "passkey_limit_reached": "The account has reached the registered passkey limit. Remove an unused passkey before adding another.",
   "passkey_not_found": "The requested passkey was not found. Refresh the passkey list and choose an existing passkey.",
   "csrf_rejected": "The request failed cross-site request forgery protection. Refresh the page and try again.",

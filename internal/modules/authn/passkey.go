@@ -142,6 +142,10 @@ func (s *WebService) FinishPasskeyRegistration(ctx context.Context, authorizatio
 		s.audit(ctx, claims.Subject, "passkey_registration", "denied")
 		return authnext.Passkey{}, authnext.ErrPasskeyCredential
 	}
+	if err := s.checkPasskeyAttestation(credential); err != nil {
+		s.audit(ctx, claims.Subject, "passkey_registration", "denied")
+		return authnext.Passkey{}, err
+	}
 	view, err := s.storePasskeyCredential(ctx, claims.Subject, name, credential, now)
 	if err != nil {
 		return authnext.Passkey{}, err
@@ -175,7 +179,26 @@ func (s *WebService) storePasskeyCredential(ctx context.Context, principalID, na
 		}
 		return authnext.Passkey{}, fmt.Errorf("store passkey: %w", err)
 	}
-	return passkeyView(row), nil
+	view := passkeyView(row)
+	view.AttestationFormat = credential.AttestationFormat
+	view.AttestationType = credential.AttestationType
+	view.AAGUID = hex.EncodeToString(credential.AAGUID)
+	return view, nil
+}
+
+func (s *WebService) checkPasskeyAttestation(credential webauthnx.Credential) error {
+	if len(s.cfg.Passkey.AllowedAttestationFormats) > 0 && !slices.Contains(s.cfg.Passkey.AllowedAttestationFormats, credential.AttestationFormat) {
+		return authnext.ErrPasskeyAttestation
+	}
+	if len(s.cfg.Passkey.AllowedAAGUIDs) == 0 {
+		return nil
+	}
+	for _, allowed := range s.cfg.Passkey.AllowedAAGUIDs {
+		if strings.EqualFold(allowed, hex.EncodeToString(credential.AAGUID)) {
+			return nil
+		}
+	}
+	return authnext.ErrPasskeyAttestation
 }
 
 func (s *WebService) BeginPasskeyLogin(ctx context.Context, origin, returnURL string) (authnext.PasskeyOptions, error) {

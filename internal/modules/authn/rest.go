@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -14,12 +15,15 @@ import (
 )
 
 type meOutput struct {
-	Subject           string `json:"subject"`
-	Issuer            string `json:"issuer"`
-	PreferredUsername string `json:"preferred_username,omitempty"`
-	Email             string `json:"email,omitempty"`
-	EmailVerified     bool   `json:"email_verified"`
-	OrganizationID    string `json:"organization_id,omitempty"`
+	Subject           string     `json:"subject"`
+	Issuer            string     `json:"issuer"`
+	PreferredUsername string     `json:"preferred_username,omitempty"`
+	Email             string     `json:"email,omitempty"`
+	EmailVerified     bool       `json:"email_verified"`
+	OrganizationID    string     `json:"organization_id,omitempty"`
+	ACR               int        `json:"acr"`
+	AMR               []string   `json:"amr,omitempty"`
+	AuthTime          *time.Time `json:"auth_time,omitempty"`
 }
 
 type meInput struct {
@@ -146,6 +150,22 @@ type mfaVerificationInput struct {
 	}
 }
 
+type stepUpOptionsInput struct {
+	Authorization string `header:"Authorization"`
+	Cookie        string `header:"Cookie" hidden:"true"`
+	Origin        string `header:"Origin" hidden:"true"`
+}
+
+type stepUpVerifyInput struct {
+	Authorization string `header:"Authorization"`
+	Cookie        string `header:"Cookie" hidden:"true"`
+	Origin        string `header:"Origin" hidden:"true"`
+	Body          struct {
+		ChallengeID string `json:"challenge_id" minLength:"32" maxLength:"128"`
+		Code        string `json:"code" minLength:"6" maxLength:"64"`
+	}
+}
+
 type passkeyLoginBeginInput struct {
 	Origin string `header:"Origin" hidden:"true"`
 	Body   struct {
@@ -204,6 +224,11 @@ type logoutOutput struct {
 type loginOutput struct {
 	SetCookie string `header:"Set-Cookie"`
 	Body      respx.Envelope[authnext.LoginResult]
+}
+
+type stepUpOutput struct {
+	SetCookie string `header:"Set-Cookie"`
+	Body      respx.Envelope[authnext.StepUpResult]
 }
 
 func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
@@ -343,7 +368,12 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 		if err != nil {
 			return nil, huma.Error401Unauthorized("unauthorized")
 		}
-		return respx.OK(ctx, meOutput{Subject: claims.Subject, Issuer: claims.Issuer, PreferredUsername: claims.PreferredUsername, Email: claims.Email, EmailVerified: claims.EmailVerified, OrganizationID: claims.OrganizationID}), nil
+		output := meOutput{Subject: claims.Subject, Issuer: claims.Issuer, PreferredUsername: claims.PreferredUsername, Email: claims.Email, EmailVerified: claims.EmailVerified, OrganizationID: claims.OrganizationID, ACR: claims.ACR, AMR: claims.AMR}
+		if !claims.AuthTime.IsZero() {
+			authTime := claims.AuthTime.UTC()
+			output.AuthTime = &authTime
+		}
+		return respx.OK(ctx, output), nil
 	})
 	authz.RegisterPublic(a, huma.Operation{OperationID: "authn-logout", Method: http.MethodPost, Path: "/authn/logout", Summary: "Destroy the browser session", Tags: []string{"authn"}, Security: authz.UserSecurity()}, func(ctx context.Context, in *logoutInput) (*logoutOutput, error) {
 		if err := web.ValidateCSRF(http.MethodPost, in.Origin, in.Cookie, in.Authorization); err != nil {
@@ -518,6 +548,34 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 		return respx.OK(ctx, map[string]bool{"disabled": true}), nil
 	})
 	authz.RegisterPublic(a, huma.Operation{
+		OperationID: "authn-begin-step-up", Method: http.MethodPost, Path: "/authn/step-up/options",
+		Summary: "Begin a step-up MFA challenge for the current browser session", Tags: []string{"authn"}, Security: authz.UserSecurity(),
+		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError, http.StatusServiceUnavailable},
+	}, func(ctx context.Context, in *stepUpOptionsInput) (*respx.Body[authnext.StepUpOptions], error) {
+		if err := web.ValidateCSRF(http.MethodPost, in.Origin, in.Cookie, in.Authorization); err != nil {
+			return nil, huma.Error403Forbidden("csrf_rejected")
+		}
+		options, err := web.BeginStepUp(ctx, in.Authorization, in.Cookie)
+		if err != nil {
+			return nil, authenticationError(err)
+		}
+		return respx.OK(ctx, options), nil
+	})
+	authz.RegisterPublic(a, huma.Operation{
+		OperationID: "authn-finish-step-up", Method: http.MethodPost, Path: "/authn/step-up/verify",
+		Summary: "Verify a step-up factor and elevate the browser session", Tags: []string{"authn"}, Security: authz.UserSecurity(),
+		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError, http.StatusServiceUnavailable},
+	}, func(ctx context.Context, in *stepUpVerifyInput) (*stepUpOutput, error) {
+		if err := web.ValidateCSRF(http.MethodPost, in.Origin, in.Cookie, in.Authorization); err != nil {
+			return nil, huma.Error403Forbidden("csrf_rejected")
+		}
+		result, err := web.VerifyStepUp(ctx, in.Authorization, in.Cookie, in.Body.ChallengeID, in.Body.Code)
+		if err != nil {
+			return nil, authenticationError(err)
+		}
+		return &stepUpOutput{SetCookie: web.SessionCookie(result.SessionID), Body: respx.OK(ctx, result).Body}, nil
+	})
+	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-list-passkeys", Method: http.MethodGet, Path: "/authn/passkeys",
 		Summary: "List the current principal passkeys", Tags: []string{"authn"}, Security: authz.UserSecurity(), Errors: []int{http.StatusUnauthorized, http.StatusInternalServerError, http.StatusServiceUnavailable},
 	}, func(ctx context.Context, in *sessionListInput) (*respx.Body[[]authnext.Passkey], error) {
@@ -608,6 +666,8 @@ func authenticationError(err error) error {
 		return huma.Error422UnprocessableEntity("invalid_passkey_challenge")
 	case errors.Is(err, authnext.ErrPasskeyCredential):
 		return huma.Error422UnprocessableEntity("invalid_passkey_credential")
+	case errors.Is(err, authnext.ErrPasskeyAttestation):
+		return huma.Error422UnprocessableEntity("passkey_attestation_rejected")
 	case errors.Is(err, authnext.ErrPasskeyLimit):
 		return huma.Error409Conflict("passkey_limit_reached")
 	case errors.Is(err, authnext.ErrPasskeyNotFound):

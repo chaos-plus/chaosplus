@@ -528,6 +528,77 @@ func TestAuthenticationPasskeyHTTPContract(t *testing.T) {
 	}
 }
 
+func TestAuthenticationStepUpHTTPContract(t *testing.T) {
+	_, web, _ := newAuthenticationService(t)
+	_, api := humatest.New(t)
+	authnmod.RegisterREST(api, web, web)
+
+	login := api.Post("/authn/login", map[string]any{
+		"login_name": "alice", "password": "correct horse battery staple", "return_url": "https://app.example/",
+	}, "Origin: https://app.example")
+	require.Equal(t, http.StatusOK, login.Code, login.Body.String())
+	cookie := strings.Split(login.Header().Get("Set-Cookie"), ";")[0]
+
+	session := api.Get("/authn/session", "Cookie: "+cookie)
+	require.Equal(t, http.StatusOK, session.Code, session.Body.String())
+	assert.Contains(t, session.Body.String(), `"acr":1`)
+	assert.Contains(t, session.Body.String(), `"amr":["pwd"]`)
+
+	enroll := api.Post("/authn/mfa/totp/enroll", "Cookie: "+cookie, "Origin: https://app.example", map[string]any{"current_password": "correct horse battery staple"})
+	require.Equal(t, http.StatusOK, enroll.Code, enroll.Body.String())
+	var enrollment struct {
+		Data authn.MFAEnrollment `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(enroll.Body.Bytes(), &enrollment))
+	confirm := api.Post("/authn/mfa/totp/confirm", "Cookie: "+cookie, "Origin: https://app.example", map[string]any{"code": mustTOTPValue(t, enrollment.Data.Secret)})
+	require.Equal(t, http.StatusOK, confirm.Code, confirm.Body.String())
+	var confirmation struct {
+		Data authn.MFAConfirmation `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(confirm.Body.Bytes(), &confirmation))
+
+	assert.Equal(t, http.StatusForbidden, api.Post("/authn/step-up/options", "Cookie: "+cookie, "Origin: https://evil.example").Code)
+	options := api.Post("/authn/step-up/options", "Cookie: "+cookie, "Origin: https://app.example")
+	require.Equal(t, http.StatusOK, options.Code, options.Body.String())
+	var stepUp struct {
+		Data authn.StepUpOptions `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(options.Body.Bytes(), &stepUp))
+	assert.NotEmpty(t, stepUp.Data.ChallengeID)
+	assert.Contains(t, stepUp.Data.Methods, "totp")
+
+	wrong := api.Post("/authn/step-up/verify", "Cookie: "+cookie, "Origin: https://app.example", map[string]any{
+		"challenge_id": stepUp.Data.ChallengeID, "code": "000000",
+	})
+	assert.Equal(t, http.StatusUnprocessableEntity, wrong.Code, wrong.Body.String())
+
+	verify := api.Post("/authn/step-up/verify", "Cookie: "+cookie, "Origin: https://app.example", map[string]any{
+		"challenge_id": stepUp.Data.ChallengeID, "code": confirmation.Data.RecoveryCodes[0],
+	})
+	require.Equal(t, http.StatusOK, verify.Code, verify.Body.String())
+	upgradedCookie := strings.Split(verify.Header().Get("Set-Cookie"), ";")[0]
+	require.NotEmpty(t, upgradedCookie)
+
+	session = api.Get("/authn/session", "Cookie: "+upgradedCookie)
+	require.Equal(t, http.StatusOK, session.Code, session.Body.String())
+	assert.Contains(t, session.Body.String(), `"acr":2`)
+	assert.Contains(t, session.Body.String(), `"mfa"`)
+	assert.Equal(t, http.StatusUnauthorized, api.Get("/authn/session", "Cookie: "+cookie).Code)
+
+	assert.Contains(t, api.OpenAPI().Paths, "/authn/step-up/options")
+	assert.Contains(t, api.OpenAPI().Paths, "/authn/step-up/verify")
+	assert.Equal(t, "authn-begin-step-up", api.OpenAPI().Paths["/authn/step-up/options"].Post.OperationID)
+	assert.Equal(t, "authn-finish-step-up", api.OpenAPI().Paths["/authn/step-up/verify"].Post.OperationID)
+	assert.Contains(t, api.OpenAPI().Paths["/authn/step-up/verify"].Post.Responses, "500")
+}
+
+func mustTOTPValue(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := totp.GenerateCode(secret, time.Now())
+	require.NoError(t, err)
+	return code
+}
+
 func differentTOTP(code string) string {
 	if code[0] == '0' {
 		return "1" + code[1:]

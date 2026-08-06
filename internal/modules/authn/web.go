@@ -235,9 +235,15 @@ func NewWebService(cfg authnext.Config, db *bun.DB, options ...WebOption) (*WebS
 		var err error
 		s.passkeys, err = webauthnx.New(webauthnx.Config{
 			RPID: s.cfg.Passkey.RPID, DisplayName: s.cfg.Passkey.DisplayName, Origins: s.cfg.Passkey.Origins,
+			AttestationPreference: webauthnx.AttestationPreference(s.cfg.Passkey.AttestationPreference),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("configure passkeys: %w", err)
+		}
+		for _, allowed := range s.cfg.Passkey.AllowedAAGUIDs {
+			if _, err := hex.DecodeString(allowed); err != nil {
+				return nil, fmt.Errorf("authn passkey allowed_aaguid %q is not hex: %w", allowed, err)
+			}
 		}
 	}
 	if err := s.configureNotification(); err != nil {

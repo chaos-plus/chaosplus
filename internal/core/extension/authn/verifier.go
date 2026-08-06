@@ -105,12 +105,15 @@ type EmailVerificationConfig struct {
 // PasskeyConfig pins the WebAuthn relying party trust boundary. Values are
 // deployment configuration and are never inferred from browser headers.
 type PasskeyConfig struct {
-	Enabled        bool          `mapstructure:"enabled" description:"enable passkey registration and passwordless login" default:"false"`
-	RPID           string        `mapstructure:"rp_id" description:"WebAuthn relying party domain without scheme or port"`
-	DisplayName    string        `mapstructure:"display_name" description:"relying party name shown by authenticators" default:"Chaosplus"`
-	Origins        []string      `mapstructure:"origins" description:"exact trusted WebAuthn browser origins"`
-	ChallengeTTL   time.Duration `mapstructure:"challenge_ttl" description:"one-time registration and login challenge lifetime" default:"5m"`
-	MaxCredentials int           `mapstructure:"max_credentials" description:"maximum active passkeys per principal" default:"10"`
+	Enabled                   bool          `mapstructure:"enabled" description:"enable passkey registration and passwordless login" default:"false"`
+	RPID                      string        `mapstructure:"rp_id" description:"WebAuthn relying party domain without scheme or port"`
+	DisplayName               string        `mapstructure:"display_name" description:"relying party name shown by authenticators" default:"Chaosplus"`
+	Origins                   []string      `mapstructure:"origins" description:"exact trusted WebAuthn browser origins"`
+	ChallengeTTL              time.Duration `mapstructure:"challenge_ttl" description:"one-time registration and login challenge lifetime" default:"5m"`
+	MaxCredentials            int           `mapstructure:"max_credentials" description:"maximum active passkeys per principal" default:"10"`
+	AttestationPreference     string        `mapstructure:"attestation_preference" description:"WebAuthn attestation conveyance: none, indirect, direct, or enterprise" default:"none"`
+	AllowedAttestationFormats []string      `mapstructure:"allowed_attestation_formats" description:"accepted attestation statement formats; empty allows every format"`
+	AllowedAAGUIDs            []string      `mapstructure:"allowed_aaguid" description:"accepted authenticator AAGUID hex values; empty allows every authenticator"`
 }
 
 // WebConfig enables database-backed opaque browser sessions.

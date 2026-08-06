@@ -30,7 +30,7 @@ func MigrateDownTo(ctx context.Context, db *bun.DB, version int64) error {
 // AssertMigrated fails startup before serving traffic when migrations are
 // delegated to the production bootstrap job but its IAM schema is unavailable.
 func AssertMigrated(ctx context.Context, db *bun.DB) error {
-	for _, table := range []string{"iam_tenant_members", "iam_policy_revisions", "iam_platform_administrators", "iam_service_accounts", "iam_relationships", "iam_resource_relationships", "iam_temporary_role_grants", "iam_audit_retention_policies"} {
+	for _, table := range []string{"iam_tenant_members", "iam_policy_revisions", "iam_platform_administrators", "iam_service_accounts", "iam_relationships", "iam_resource_relationships", "iam_temporary_role_grants", "iam_audit_retention_policies", "iam_stepup_challenges"} {
 		if _, err := db.NewSelect().Table(table).ColumnExpr("1").Limit(1).Exec(ctx); err != nil {
 			return fmt.Errorf("IAM schema is not ready (%s): %w", table, err)
 		}
