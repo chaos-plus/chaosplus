@@ -1080,7 +1080,6 @@ DELETE /authn/passkeys/{id}
 目标但尚未实现：
 
 ```text
-POST /authn/register
 POST /authn/step-up
 ```
 
@@ -1233,7 +1232,7 @@ SP registry 和证书轮换，并运行专门的互操作与 signature-wrapping 
 
 ### 16.3 SCIM 2.0
 
-当前入站 Service Provider 已实现，完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](/iam/scim-provisioning/)。出站 SCIM client 和上游 federation/JIT 仍未实现。
+当前入站 Service Provider 已实现，完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](/iam/scim-provisioning/)。出站 SCIM client 仍未实现；上游 OIDC federation 与 JIT 预配已实现。
 
 支持 `/scim/v2/Users`、`/Groups`、ServiceProviderConfig、Schemas、ResourceTypes：
 
@@ -1275,7 +1274,7 @@ Identity 主体创建在一个事务内写入全局 Principal、Credential、当
 
 事件 detail 不记录邮箱、密码、Cookie、Token 或 client secret。登录、MFA、Passkey 和账号恢复事件统一进入可验证 hash chain。当前管理 API 支持 tenant 分区查询、详情、完整性验证和固定 head 的流式 NDJSON 导出；导出请求本身进入同一 tenant 链，管理端可按当前筛选下载且会拒绝缺失完成记录的响应。
 
-真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。WORM root anchoring 已通过真实 MinIO object-lock 测试闭环（compliance 保留、write-once、篡改/回滚检测、锚链校验）。尚未完成：分区 root 签名、归档/保留策略与完整治理管理面，因此当前实现是可验证审计、外部 WORM 锚定与可移交证据基线，不是完整合规治理交付。
+真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。WORM root anchoring 已通过真实 MinIO object-lock 测试闭环（compliance 保留、write-once、篡改/回滚检测、锚链校验）；WORM 治理管理面已实现（Ed25519 分区 root 签名、按租户保留/归档策略、`/iam/audit/governance`、`/iam/audit/retention`、`/iam/audit/roots/sign` 与管理端审计治理页），并经真实 MinIO 签名生命周期与真实 MySQL 8/PostgreSQL 17 迁移生命周期验收。分区 root 签名、归档/保留策略与完整治理管理面已实现；`audit.anchor.signing_key` 配置 Ed25519 种子后，新锚点携带 `root_signature`/`root_public_key`/`signing_key_id` 与内嵌公钥，锚点可离线自验证。`iam_audit_retention_policies` 按租户保存 `min_days`/`archive_after_days`，归档阈值不得早于最短保留期。治理接口 `GET /iam/audit/governance`、`PUT /iam/audit/retention`、`POST /iam/audit/roots/sign` 提供保留策略、链完整性、锚链与归档统计。签名 root 生命周期（篡改/换钥/未签名 fail-closed）经真实 MinIO 用例闭环，00022 迁移经真实 MySQL 8/PostgreSQL 17 生命周期验证。
 
 ### 17.2 审批
 
@@ -1506,7 +1505,7 @@ authz:
   enabled: true
 ```
 
-`audit.anchor` 同样由 `internal/app/config.go` 加载：`endpoint` 是 S3/MinIO 兼容端点，`bucket` 不存在时以 object-lock 创建，`retention_days` 为 COMPLIANCE 保留天数，默认关闭；未配置时锚定接口返回 `audit_anchor_not_enabled`，不得把普通对象存储桶或数据库 hash chain 当作 WORM 存证。
+`audit.anchor` 同样由 `internal/app/config.go` 加载：`endpoint` 是 S3/MinIO 兼容端点，`bucket` 不存在时以 object-lock 创建，`retention_days` 为 COMPLIANCE 保留天数，默认关闭；未配置时锚定接口返回 `audit_anchor_not_enabled`，不得把普通对象存储桶或数据库 hash chain 当作 WORM 存证。 可选 `signing_key` 为 base64 编码的 32 字节 Ed25519 种子：配置后新锚点自动携带 root 签名与内嵌公钥（锚点可离线自验证）；未配置或锚点先于签名启用时，`POST /iam/audit/roots/sign` 返回 `audit_root_signing_not_enabled`，已提交的未签名锚点不允许事后补签。
 
 以上字段是当前 `internal/app/config.go` 与 `authn.Config` 可加载的契约。`rest.trusted_proxies` 必须是实际反向代理的精确 CIDR；为空时忽略转发 IP 头，只有来源地址可信时才解析 `X-Forwarded-For`。Passkey RP ID 与 origin 必须显式配置，且每个 Passkey origin 同时属于 `authn.web.allowed_origins`；服务端不会从 Host、Origin 或其他 Forwarded header 推导信任边界。可调 Argon2 policy、KMS key ring 和 authorization decision cache 尚未进入生产配置，不能提前把目标字段写入部署 YAML。生产配置校验必须拒绝 HTTP issuer、非 Secure Cookie、默认/缺失 secret、过长 access token 和不受信任的 return URL/origin。
 

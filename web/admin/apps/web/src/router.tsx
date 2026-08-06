@@ -150,6 +150,13 @@ export const router = createBrowserRouter([
                 }),
               },
               {
+                path: "/iam/audit-governance",
+                lazy: async () => ({
+                  Component: (await import("./app/audit-governance/page"))
+                    .default,
+                }),
+              },
+              {
                 path: "/security",
                 lazy: async () => ({
                   Component: (await import("./app/security/page")).default,

@@ -146,6 +146,7 @@ type Service struct {
 	now     func() time.Time
 	nextID  func() (string, error)
 	anchor  *AnchorStore
+	signer  *RootSigner
 }
 
 func NewService(db *bun.DB) *Service {
@@ -158,6 +159,14 @@ func NewServiceWithAnchor(db *bun.DB, anchor *AnchorStore) *Service {
 	}
 	dialect := db.Dialect().Name().String()
 	return &Service{db: db, dialect: dialect, now: time.Now, nextID: secureID, anchor: anchor}
+}
+
+// NewServiceWithAnchorAndSigner builds an anchored service that signs every
+// committed head with the configured Ed25519 root key.
+func NewServiceWithAnchorAndSigner(db *bun.DB, anchor *AnchorStore, signer *RootSigner) *Service {
+	service := NewServiceWithAnchor(db, anchor)
+	service.signer = signer
+	return service
 }
 
 func (s *Service) Append(ctx context.Context, input EventInput) (Event, error) {
@@ -321,6 +330,11 @@ func (s *Service) Anchor(ctx context.Context, tenantID string) (Anchor, error) {
 		anchor.PreviousAnchorHash = latest.AnchorHash
 	}
 	anchor.AnchorHash = computeAnchorHash(anchor)
+	if s.signer != nil {
+		if err := s.signer.Sign(&anchor); err != nil {
+			return Anchor{}, fmt.Errorf("sign audit root: %w", err)
+		}
+	}
 	if err := s.anchor.Put(ctx, anchor); err != nil {
 		putErr := err
 		if errors.Is(putErr, ErrAnchorAlreadyExists) {
@@ -334,6 +348,20 @@ func (s *Service) Anchor(ctx context.Context, tenantID string) (Anchor, error) {
 			}
 		}
 		return Anchor{}, anchorStoreError(putErr)
+	}
+	return anchor, nil
+}
+
+// SignRoot commits the current verified head and requires a root signature.
+// An anchor already committed before signing was enabled cannot be
+// retrofitted, so it fails closed instead of returning an unsigned root.
+func (s *Service) SignRoot(ctx context.Context, tenantID string) (Anchor, error) {
+	anchor, err := s.Anchor(ctx, tenantID)
+	if err != nil {
+		return Anchor{}, err
+	}
+	if anchor.RootSignature == "" {
+		return Anchor{}, ErrRootSigningDisabled
 	}
 	return anchor, nil
 }
@@ -352,6 +380,14 @@ func (s *Service) verifyAnchors(ctx context.Context, tenantID string) (AnchorSta
 		if anchor.PreviousAnchorHash != previous || anchor.AnchorHash != computeAnchorHash(anchor) {
 			status.Valid = false
 			return status, nil
+		}
+		if anchor.RootSignature != "" {
+			status.Signed = true
+			if !VerifyRootSignature(anchor) {
+				status.Valid = false
+				return status, nil
+			}
+			status.SignatureValid = true
 		}
 		previous = anchor.AnchorHash
 	}

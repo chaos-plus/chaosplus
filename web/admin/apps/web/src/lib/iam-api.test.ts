@@ -1648,4 +1648,96 @@ describe("Chaosplus IAM API client", () => {
       message: "The audit export is incomplete.",
     })
   })
+
+  it("uses real HTTP for WORM audit governance contracts", async () => {
+    const requests: RecordedRequest[] = []
+    const governance = {
+      code: 0,
+      message: "ok",
+      data: {
+        policy: {
+          tenant_id: "tenant-audit",
+          min_days: 365,
+          archive_after_days: 730,
+        },
+        integrity: {
+          tenant_id: "tenant-audit",
+          valid: true,
+          verified_events: 7,
+          head_sequence: 7,
+          anchor: { enabled: true, sequence: 7, signed: true, valid: true },
+        },
+        anchors: [
+          {
+            schema: "chaosplus.audit-anchor.v1",
+            tenant_id: "tenant-audit",
+            head_sequence: 7,
+            head_hash: "abcd",
+            anchored_at: "2026-08-06T00:00:00Z",
+            anchor_hash: "ef01",
+            signing_key_id: "key-1",
+            root_public_key: "pub",
+            root_signature: "sig",
+          },
+        ],
+        total_events: 42,
+        archive_ready_events: 3,
+        anchored_events: 7,
+      },
+    }
+    const retention = {
+      code: 0,
+      message: "ok",
+      data: {
+        tenant_id: "tenant-audit",
+        min_days: 180,
+        archive_after_days: 360,
+      },
+    }
+    const anchor = {
+      code: 0,
+      message: "ok",
+      data: governance.data.anchors[0],
+    }
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push({
+          method: request.method,
+          path: new URL(request.url).pathname,
+          headers: request.headers,
+          body: await request.text(),
+        })
+        if (request.method === "GET") return Response.json(governance)
+        if (request.method === "PUT") return Response.json(retention)
+        return Response.json(anchor)
+      },
+    })
+    const client = createIamApi(
+      `http://127.0.0.1:${server.port}`,
+      () => "tenant-audit"
+    )
+    const report = await client.auditGovernance()
+    expect(report.policy.min_days).toBe(365)
+    expect(report.integrity.anchor?.signed).toBe(true)
+    expect(report.anchors[0]?.root_signature).toBe("sig")
+    const updated = await client.setAuditRetention({
+      min_days: 180,
+      archive_after_days: 360,
+    })
+    expect(updated.archive_after_days).toBe(360)
+    const signed = await client.auditSignRoot()
+    expect(signed.signing_key_id).toBe("key-1")
+    expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      "GET /iam/audit/governance",
+      "PUT /iam/audit/retention",
+      "POST /iam/audit/roots/sign",
+    ])
+    expect(JSON.parse(requests[1]?.body ?? "{}")).toEqual({
+      min_days: 180,
+      archive_after_days: 360,
+    })
+    for (const request of requests)
+      expect(request.headers.get("x-tenant-id")).toBe("tenant-audit")
+  })
 })

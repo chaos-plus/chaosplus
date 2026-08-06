@@ -16,6 +16,7 @@ type AnchorConfig struct {
 	AccessKey     string `mapstructure:"access_key" description:"S3 access key" default:""`
 	SecretKey     string `mapstructure:"secret_key" description:"S3 secret key" default:""`
 	RetentionDays int    `mapstructure:"retention_days" description:"object lock retention in days (COMPLIANCE mode)" default:"365"`
+	SigningKey    string `mapstructure:"signing_key" description:"base64-encoded 32-byte Ed25519 seed signing anchored audit roots; anchors embed the public key so signatures verify without further configuration" default:""`
 }
 
 func (c AnchorConfig) valid() bool {

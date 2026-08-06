@@ -677,11 +677,51 @@ export interface AuditIntegrity {
   verified_events: number
   head_sequence: number
   head_hash?: string
+  anchor?: AuditAnchorStatus
 }
 
 export interface AuditExportDownload {
   blob: Blob
   filename: string
+}
+
+export interface AuditAnchor {
+  schema: string
+  tenant_id: string
+  head_sequence: number
+  head_hash: string
+  anchored_at: string
+  previous_anchor_hash?: string
+  anchor_hash: string
+  signing_key_id?: string
+  root_public_key?: string
+  root_signature?: string
+}
+
+export interface AuditAnchorStatus {
+  enabled: boolean
+  sequence?: number
+  hash?: string
+  anchored_at?: string
+  signed: boolean
+  signature_valid?: boolean
+  valid: boolean
+}
+
+export interface AuditRetentionPolicy {
+  tenant_id: string
+  min_days: number
+  archive_after_days: number
+  updated_at?: string
+}
+
+export interface AuditGovernance {
+  policy: AuditRetentionPolicy
+  integrity: AuditIntegrity
+  anchors: AuditAnchor[]
+  total_events: number
+  archive_ready_events: number
+  anchored_events: number
 }
 
 const tenantKey = "chaosplus.tenant"
@@ -1653,6 +1693,17 @@ export function createIamApi(
     auditIntegrity: () => request<AuditIntegrity>("/iam/audit-integrity"),
     auditExport: (query = "") =>
       requestAuditExportWithBase(apiBase, tenantID, query),
+    auditGovernance: () =>
+      request<AuditGovernance>("/iam/audit/governance"),
+    setAuditRetention: (
+      body: Pick<AuditRetentionPolicy, "min_days" | "archive_after_days">
+    ) =>
+      request<AuditRetentionPolicy>("/iam/audit/retention", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    auditSignRoot: () =>
+      request<AuditAnchor>("/iam/audit/roots/sign", { method: "POST" }),
   }
 }
 

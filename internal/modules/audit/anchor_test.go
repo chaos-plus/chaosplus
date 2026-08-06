@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -29,6 +31,43 @@ const (
 	minioTestUser     = "chaosplus-minio"        //nolint:gosec // local-only MinIO root used inside tests
 	minioTestPassword = "chaosplus-minio-secret" //nolint:gosec // local-only MinIO root used inside tests
 )
+
+func TestRootSignerRoundTrip(t *testing.T) {
+	signer, err := NewRootSigner(base64.StdEncoding.EncodeToString(make([]byte, ed25519.SeedSize)))
+	require.NoError(t, err)
+	assert.Len(t, signer.keyID, 16)
+
+	anchor := Anchor{Schema: anchorSchema, TenantID: "tenant", HeadSequence: 1, HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC()}
+	anchor.AnchorHash = computeAnchorHash(anchor)
+	require.NoError(t, signer.Sign(&anchor))
+	assert.True(t, VerifyRootSignature(anchor))
+
+	changed := anchor
+	changed.AnchorHash = strings.Repeat("0", 64)
+	assert.False(t, VerifyRootSignature(changed), "the signature must commit the anchor hash")
+
+	unsigned := Anchor{Schema: anchorSchema, TenantID: "tenant", HeadSequence: 1, HeadHash: strings.Repeat("c", 64)}
+	unsigned.AnchorHash = computeAnchorHash(unsigned)
+	assert.False(t, VerifyRootSignature(unsigned), "unsigned anchors must not verify as signed")
+
+	other, err := NewRootSigner(testSignerSeed(t))
+	require.NoError(t, err)
+	rekeyed := anchor
+	rekeyed.RootPublicKey = base64.StdEncoding.EncodeToString(other.privateKey.Public().(ed25519.PublicKey))
+	rekeyed.SigningKeyID = other.keyID
+	assert.False(t, VerifyRootSignature(rekeyed), "a replaced public key without a matching signature must fail")
+
+	corrupted := anchor
+	corrupted.RootSignature = anchor.RootSignature[:len(anchor.RootSignature)-4] + "AAAA"
+	assert.False(t, VerifyRootSignature(corrupted))
+
+	_, err = NewRootSigner("not-base64")
+	assert.ErrorIs(t, err, ErrInvalidSigningKey)
+	_, err = NewRootSigner(base64.StdEncoding.EncodeToString([]byte("short")))
+	assert.ErrorIs(t, err, ErrInvalidSigningKey)
+	_, err = NewRootSigner("")
+	assert.ErrorIs(t, err, ErrInvalidSigningKey)
+}
 
 func TestAnchorHashIsCanonical(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)

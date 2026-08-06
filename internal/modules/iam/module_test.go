@@ -72,7 +72,7 @@ func TestServiceReadModels(t *testing.T) {
 
 	menus := svc.MenuCatalog(ctx)
 	require.Len(t, menus, 1)
-	require.Len(t, menus[0].Children, 14)
+	require.Len(t, menus[0].Children, 15)
 	assert.Equal(t, "/iam/users", menus[0].Children[0].Path)
 	assert.Equal(t, "/iam/invitations", menus[0].Children[1].Path)
 	assert.Equal(t, "/iam/service-accounts", menus[0].Children[2].Path)
@@ -84,5 +84,5 @@ func TestServiceReadModels(t *testing.T) {
 	assert.Equal(t, "/iam/access-reviews", menus[0].Children[9].Path)
 	assert.Equal(t, "/iam/scim-directories", menus[0].Children[12].Path)
 	assert.Equal(t, "audit_event_view", menus[0].Children[13].PermissionCode)
-	assert.Len(t, DefaultMenus(), 14)
+	assert.Len(t, DefaultMenus(), 15)
 }

@@ -3,7 +3,9 @@ package audit
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,6 +34,8 @@ var (
 	ErrAnchorMisconfigured = errors.New("audit anchoring requires endpoint, bucket, access key, secret key, and retention days")
 	ErrAnchorAlreadyExists = errors.New("audit anchor already exists")
 	ErrAnchorUnavailable   = errors.New("audit anchor store unavailable")
+	ErrRootSigningDisabled = errors.New("audit root signing is not enabled")
+	ErrInvalidSigningKey   = errors.New("audit root signing key must be a base64-encoded 32-byte Ed25519 seed")
 )
 
 // Anchor is a WORM commitment of one verified per-tenant audit head. The
@@ -45,16 +49,21 @@ type Anchor struct {
 	AnchoredAt         time.Time `json:"anchored_at"`
 	PreviousAnchorHash string    `json:"previous_anchor_hash,omitempty"`
 	AnchorHash         string    `json:"anchor_hash"`
+	SigningKeyID       string    `json:"signing_key_id,omitempty"`
+	RootPublicKey      string    `json:"root_public_key,omitempty"`
+	RootSignature      string    `json:"root_signature,omitempty"`
 }
 
 // AnchorStatus reports whether the external anchor chain exists and still
 // matches the local audit chain.
 type AnchorStatus struct {
-	Enabled    bool      `json:"enabled"`
-	Sequence   int64     `json:"sequence,omitempty"`
-	Hash       string    `json:"hash,omitempty"`
-	AnchoredAt time.Time `json:"anchored_at,omitempty"`
-	Valid      bool      `json:"valid"`
+	Enabled        bool      `json:"enabled"`
+	Sequence       int64     `json:"sequence,omitempty"`
+	Hash           string    `json:"hash,omitempty"`
+	AnchoredAt     time.Time `json:"anchored_at,omitempty"`
+	Signed         bool      `json:"signed"`
+	SignatureValid bool      `json:"signature_valid,omitempty"`
+	Valid          bool      `json:"valid"`
 }
 
 // AnchorStore writes and reads anchors on an S3-compatible endpoint using
@@ -251,4 +260,59 @@ func computeAnchorHash(anchor Anchor) string {
 	}{anchor.Schema, anchor.TenantID, anchor.HeadHash, anchor.PreviousAnchorHash, anchor.HeadSequence, anchor.AnchoredAt.UTC()})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+// RootSigner signs audit anchor roots with Ed25519 so every committed head
+// carries an offline-verifiable root commitment. The public key is embedded in
+// the anchor itself, so anchors remain verifiable without key distribution.
+type RootSigner struct {
+	privateKey ed25519.PrivateKey
+	keyID      string
+}
+
+// NewRootSigner builds a signer from a base64-encoded 32-byte Ed25519 seed.
+// The key ID is the first 8 bytes of the SHA-256 of the public key.
+func NewRootSigner(seedBase64 string) (*RootSigner, error) {
+	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(seedBase64))
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, ErrInvalidSigningKey
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	digest := sha256.Sum256(publicKey)
+	return &RootSigner{privateKey: privateKey, keyID: hex.EncodeToString(digest[:8])}, nil
+}
+
+// Sign commits the anchor's hash. The signature is stored alongside the public
+// key inside the anchor object, making each anchor self-verifying.
+func (s *RootSigner) Sign(anchor *Anchor) error {
+	digest, err := hex.DecodeString(anchor.AnchorHash)
+	if err != nil || len(digest) != sha256.Size {
+		return errors.New("audit anchor hash is not a valid SHA-256 digest")
+	}
+	anchor.SigningKeyID = s.keyID
+	anchor.RootPublicKey = base64.StdEncoding.EncodeToString(s.privateKey.Public().(ed25519.PublicKey))
+	anchor.RootSignature = base64.StdEncoding.EncodeToString(ed25519.Sign(s.privateKey, digest))
+	return nil
+}
+
+// VerifyRootSignature validates the embedded Ed25519 signature over the
+// anchor hash. Unsigned anchors (no signature present) are not valid signatures.
+func VerifyRootSignature(anchor Anchor) bool {
+	if anchor.RootSignature == "" || anchor.RootPublicKey == "" {
+		return false
+	}
+	signature, err := base64.StdEncoding.DecodeString(anchor.RootSignature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return false
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(anchor.RootPublicKey)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+	digest, err := hex.DecodeString(anchor.AnchorHash)
+	if err != nil || len(digest) != sha256.Size {
+		return false
+	}
+	return ed25519.Verify(publicKey, digest, signature)
 }

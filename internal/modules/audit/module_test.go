@@ -47,4 +47,20 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 	}})
 	require.NotNil(t, module.service)
 	require.NotNil(t, module.service.anchor)
+	require.Nil(t, module.service.signer)
+
+	signed := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{
+		Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
+		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
+		SigningKey: testSignerSeed(t),
+	}})
+	require.NotNil(t, signed.service.anchor)
+	require.NotNil(t, signed.service.signer)
+	assert.Panics(t, func() {
+		NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{
+			Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
+			AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
+			SigningKey: "not-a-seed",
+		}})
+	})
 }

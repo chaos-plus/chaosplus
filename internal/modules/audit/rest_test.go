@@ -84,6 +84,85 @@ func TestAuditExportUsesRealHTTPListener(t *testing.T) {
 	assert.Contains(t, string(body), `"type":"complete"`)
 }
 
+func TestAuditGovernanceHTTPEndpoints(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(t.Context(), db))
+	service := NewService(db)
+	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant", EventType: "created", Outcome: "success"})
+	require.NoError(t, err)
+	_, api := humatest.New(t)
+	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	header := authz.TenantHeader + ": tenant"
+
+	response := api.Get("/iam/audit/governance", header)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"min_days":365`)
+	assert.Contains(t, response.Body.String(), `"total_events":1`)
+	assert.Contains(t, response.Body.String(), `"anchored_events":0`)
+
+	put := api.Put("/iam/audit/retention", header, map[string]any{"min_days": 90, "archive_after_days": 180})
+	require.Equal(t, http.StatusOK, put.Code, put.Body.String())
+	assert.Contains(t, put.Body.String(), `"min_days":90`)
+	assert.Contains(t, put.Body.String(), `"archive_after_days":180`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/audit/retention", header, map[string]any{"min_days": 365, "archive_after_days": 30}).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/audit/retention", header, map[string]any{"min_days": 0, "archive_after_days": 10}).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/audit/retention", header, map[string]any{"min_days": 90, "archive_after_days": 89}).Code)
+
+	response = api.Get("/iam/audit/governance", header)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"min_days":90`)
+
+	assert.Equal(t, http.StatusServiceUnavailable, api.Post("/iam/audit/roots/sign", header).Code, "root signing without anchoring must fail closed")
+}
+
+func TestAuditRootSigningHTTPWithRealMinIO(t *testing.T) {
+	endpoint, _ := startTestMinIO(t)
+	store, err := NewAnchorStore(AnchorConfig{
+		Enabled: true, Endpoint: endpoint, Bucket: "audit-http-signed",
+		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
+	})
+	require.NoError(t, err)
+	signer, err := NewRootSigner(testSignerSeed(t))
+	require.NoError(t, err)
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(t.Context(), db))
+	service := NewServiceWithAnchorAndSigner(db, store, signer)
+	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant", EventType: "created", Outcome: "success"})
+	require.NoError(t, err)
+	_, api := humatest.New(t)
+	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	header := authz.TenantHeader + ": tenant"
+
+	response := api.Post("/iam/audit/roots/sign", header)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var body struct {
+		Data Anchor `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	assert.NotEmpty(t, body.Data.RootSignature)
+	assert.NotEmpty(t, body.Data.RootPublicKey)
+	assert.NotEmpty(t, body.Data.SigningKeyID)
+	assert.True(t, VerifyRootSignature(body.Data))
+	require.Equal(t, http.StatusOK, api.Post("/iam/audit/roots/sign", header).Code, "re-signing an already signed root is idempotent")
+
+	unsignedStore, err := NewAnchorStore(AnchorConfig{
+		Enabled: true, Endpoint: endpoint, Bucket: "audit-http-unsigned",
+		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
+	})
+	require.NoError(t, err)
+	unsignedService := NewServiceWithAnchor(db, unsignedStore)
+	_, unsignedAPI := humatest.New(t)
+	RegisterREST(unsignedAPI, unsignedService, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	unsignedResponse := unsignedAPI.Post("/iam/audit/roots/sign", header)
+	assert.Equal(t, http.StatusUnprocessableEntity, unsignedResponse.Code, unsignedResponse.Body.String())
+	assert.Contains(t, unsignedResponse.Body.String(), "audit_root_signing_not_enabled")
+}
+
 func TestAuditExportRejectsInvalidRangeAndBrokenChain(t *testing.T) {
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)

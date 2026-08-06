@@ -7,5 +7,7 @@
   "audit_anchor_not_enabled": "External audit anchoring is not enabled on this deployment. Enable audit.anchor in the server configuration, then retry.",
   "audit_anchor_empty": "There are no audit events to anchor for this tenant yet.",
   "audit_anchor_already_exists": "An audit anchor already exists for this head sequence. Anchors are write-once and cannot be replaced.",
-  "audit_anchor_unavailable": "The external audit anchor store could not be reached. Verify the S3-compatible endpoint and credentials, then retry."
+  "audit_anchor_unavailable": "The external audit anchor store could not be reached. Verify the S3-compatible endpoint and credentials, then retry.",
+  "audit_retention_invalid": "The audit retention policy is invalid. Minimum retention must be at least 1 day and the archive threshold must not be earlier than it.",
+  "audit_root_signing_not_enabled": "Audit root signing is not enabled. Configure audit.anchor.signing_key with a base64-encoded 32-byte Ed25519 seed, then retry."
 }

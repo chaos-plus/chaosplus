@@ -92,6 +92,7 @@ func DefaultMenus() []Menu {
 		{ID: "iam-oauth-clients", Label: "OAuth clients", Route: "/iam/oauth-clients", Icon: "app-window", SortOrder: 40, PermissionCode: "oauth_client_view", Status: MenuActive},
 		{ID: "iam-scim-directories", Label: "SCIM directories", Route: "/iam/scim-directories", Icon: "folder-sync", SortOrder: 45, PermissionCode: "tenant_administer", Status: MenuActive},
 		{ID: "iam-audit-events", Label: "Audit events", Route: "/iam/audit-events", Icon: "file-clock", SortOrder: 50, PermissionCode: "audit_event_view", Status: MenuActive},
+		{ID: "iam-audit-governance", Label: "Audit governance", Route: "/iam/audit-governance", Icon: "shield-check", SortOrder: 51, PermissionCode: "audit_event_view", Status: MenuActive},
 	}
 }
 

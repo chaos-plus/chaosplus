@@ -82,6 +82,26 @@ func TestTemporaryRoleGrantMigrationLifecycle(t *testing.T) {
 	require.NoError(t, Migrate(t.Context(), db))
 }
 
+func TestAuditRetentionPolicyMigrationLifecycle(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, Migrate(t.Context(), db))
+
+	count, err := db.NewSelect().Table("sqlite_master").Where("type = 'table' AND name = 'iam_audit_retention_policies'").Count(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_audit_retention_policies (tenant_id, min_days, archive_after_days, updated_at) VALUES ('tenant-a', 30, 90, 1)`)
+	require.NoError(t, err)
+
+	require.NoError(t, MigrateDownTo(t.Context(), db, 21))
+	count, err = db.NewSelect().Table("sqlite_master").Where("type = 'table' AND name = 'iam_audit_retention_policies'").Count(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	require.NoError(t, Migrate(t.Context(), db))
+	assert.NoError(t, AssertMigrated(t.Context(), db))
+}
+
 func TestRolePermissionConditionMigrationLifecycle(t *testing.T) {
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)

@@ -48,6 +48,14 @@ type exportInput struct {
 	To          string `query:"to" maxLength:"40" doc:"exclusive RFC3339 timestamp"`
 }
 
+type retentionInput struct {
+	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
+	Body     struct {
+		MinDays          int `json:"min_days" minimum:"1" maximum:"36500" example:"365" doc:"minimum days audit events must be retained"`
+		ArchiveAfterDays int `json:"archive_after_days" minimum:"1" maximum:"36500" example:"730" doc:"days after which events become archive-eligible; must not be earlier than min_days"`
+	}
+}
+
 func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-list-events", Method: http.MethodGet, Path: "/iam/audit-events", Summary: "List tenant audit events", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *listInput) (*respx.Body[[]Event], error) {
 		filter := Filter{TenantID: in.TenantID, PrincipalID: in.PrincipalID, EventType: in.EventType, Outcome: in.Outcome, TargetType: in.TargetType, TargetID: in.TargetID, Offset: in.Offset, Limit: in.Limit}
@@ -114,6 +122,27 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		}
 		return respx.OK(ctx, anchor), nil
 	})
+	authz.Register(registrar, api, huma.Operation{OperationID: "audit-get-governance", Method: http.MethodGet, Path: "/iam/audit/governance", Summary: "Get WORM governance status: retention policy, chain integrity and anchor chain", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Governance], error) {
+		report, err := service.Governance(ctx, in.TenantID)
+		if err != nil {
+			return nil, auditAPIError(err)
+		}
+		return respx.OK(ctx, report), nil
+	})
+	authz.Register(registrar, api, huma.Operation{OperationID: "audit-set-retention", Method: http.MethodPut, Path: "/iam/audit/retention", Summary: "Configure the tenant audit retention policy", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "manage"}, func(ctx context.Context, in *retentionInput) (*respx.Body[RetentionPolicy], error) {
+		policy, err := service.SetRetentionPolicy(ctx, in.TenantID, in.Body.MinDays, in.Body.ArchiveAfterDays)
+		if err != nil {
+			return nil, auditAPIError(err)
+		}
+		return respx.OK(ctx, policy), nil
+	})
+	authz.Register(registrar, api, huma.Operation{OperationID: "audit-sign-root", Method: http.MethodPost, Path: "/iam/audit/roots/sign", Summary: "Anchor and sign the current verified audit head as a WORM root commitment", Tags: []string{"audit"}, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "manage"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Anchor], error) {
+		anchor, err := service.SignRoot(ctx, in.TenantID)
+		if err != nil {
+			return nil, auditAPIError(err)
+		}
+		return respx.OK(ctx, anchor), nil
+	})
 }
 
 func exportOperation() huma.Operation {
@@ -169,6 +198,10 @@ func auditAPIError(err error) error {
 		return huma.Error409Conflict("audit_anchor_already_exists")
 	case errors.Is(err, ErrAnchorUnavailable):
 		return huma.Error503ServiceUnavailable("audit_anchor_unavailable")
+	case errors.Is(err, ErrRetentionInvalid):
+		return huma.Error422UnprocessableEntity("audit_retention_invalid")
+	case errors.Is(err, ErrRootSigningDisabled):
+		return huma.Error422UnprocessableEntity("audit_root_signing_not_enabled")
 	default:
 		return huma.Error500InternalServerError("audit_unavailable")
 	}

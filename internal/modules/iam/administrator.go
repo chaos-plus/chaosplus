@@ -91,8 +91,8 @@ FROM (
     FROM iam_group_role_bindings AS bindings
     JOIN iam_role_permissions AS permissions
       ON permissions.tenant_id = bindings.tenant_id AND permissions.role_id = bindings.role_id
-    JOIN iam_groups AS groups
-      ON groups.tenant_id = bindings.tenant_id AND groups.id = bindings.group_id AND groups.status = 'active' AND groups.group_type = 'static'
+    JOIN iam_groups AS grp
+      ON grp.tenant_id = bindings.tenant_id AND grp.id = bindings.group_id AND grp.status = 'active' AND grp.group_type = 'static'
     JOIN iam_group_members AS group_members
       ON group_members.tenant_id = bindings.tenant_id AND group_members.group_id = bindings.group_id
     WHERE bindings.tenant_id = ? AND permissions.permission_code IN (?, ?) AND permissions.condition_json = ''

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/smtp"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -375,6 +378,98 @@ func TestPasswordRecoveryConfigurationAndWorkerLifecycle(t *testing.T) {
 	service.cfg.Notification.Authorization = ""
 	service.cfg.Notification.AuthorizationFile = filepath.Join(t.TempDir(), "missing")
 	assert.ErrorContains(t, service.configureNotification(), "read authn.notification.authorization_file")
+}
+
+// TestNotificationRealSMTPDelivery proves the full notification chain against a
+// real mail sink: durable outbox -> HTTP webhook -> SMTP -> MailHog inbox.
+// Configure CHAOSPLUS_SMTP_HOST (e.g. 10.0.0.100:1025) and
+// CHAOSPLUS_MAILHOG_API (e.g. http://10.0.0.100:8025) to run it.
+func TestNotificationRealSMTPDelivery(t *testing.T) {
+	smtpHost := os.Getenv("CHAOSPLUS_SMTP_HOST")
+	mailhogAPI := os.Getenv("CHAOSPLUS_MAILHOG_API")
+	if smtpHost == "" || mailhogAPI == "" {
+		t.Skip("set CHAOSPLUS_SMTP_HOST and CHAOSPLUS_MAILHOG_API to test real email delivery")
+	}
+	request, err := http.NewRequest(http.MethodDelete, mailhogAPI+"/api/v1/messages", nil)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "Bearer recovery-provider", r.Header.Get("Authorization"))
+		var payload notificationPayload
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		subject := "Chaosplus password recovery"
+		body := "Reset your password: " + payload.RecoveryURL
+		if payload.VerificationURL != "" {
+			subject = "Chaosplus email verification"
+			body = "Verify your email: " + payload.VerificationURL
+		}
+		message := []byte("To: " + payload.Recipient + "\r\n" +
+			"From: chaosplus-no-reply@localhost\r\n" +
+			"Subject: " + subject + "\r\n" +
+			"Message-ID: <" + payload.ID + "@chaosplus>\r\n" +
+			"Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n" +
+			"\r\n" + body)
+		require.NoError(t, smtp.SendMail(smtpHost, nil, "chaosplus-no-reply@localhost", []string{payload.Recipient}, message))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(relay.Close)
+
+	service, _ := newLocalService(t)
+	enableRecovery(t, service, relay.URL)
+	require.NoError(t, service.StartNotificationWorker(t.Context()))
+	t.Cleanup(func() { require.NoError(t, service.StopNotificationWorker(context.Background())) })
+	require.NoError(t, service.BeginPasswordRecovery(t.Context(), "admin"))
+
+	require.Eventually(t, func() bool {
+		var status string
+		if err := service.db.NewSelect().Model((*notificationOutboxRow)(nil)).Column("status").Where("kind = ?", passwordRecoveryNotification).Scan(t.Context(), &status); err != nil {
+			return false
+		}
+		return status == "sent"
+	}, 15*time.Second, 100*time.Millisecond)
+
+	var delivered bool
+	var body string
+	require.Eventually(t, func() bool {
+		messages, err := http.Get(mailhogAPI + "/api/v2/messages")
+		if err != nil {
+			return false
+		}
+		defer messages.Body.Close()
+		raw, err := io.ReadAll(messages.Body)
+		if err != nil {
+			return false
+		}
+		var inbox struct {
+			Items []struct {
+				To []struct {
+					Mailbox string `json:"Mailbox"`
+					Domain  string `json:"Domain"`
+				} `json:"To"`
+				Content struct {
+					Body string `json:"Body"`
+				} `json:"Content"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(raw, &inbox); err != nil {
+			return false
+		}
+		for _, item := range inbox.Items {
+			for _, to := range item.To {
+				if strings.EqualFold(to.Mailbox+"@"+to.Domain, "admin@example.com") {
+					delivered, body = true, item.Content.Body
+					return true
+				}
+			}
+		}
+		return false
+	}, 15*time.Second, 200*time.Millisecond)
+	require.True(t, delivered, fmt.Sprintf("no message reached MailHog for admin@example.com; body=%q", body))
+	assert.Contains(t, body, recoveryTokenPrefix, "the delivered email must carry the recovery token URL")
 }
 
 func enableRecovery(t *testing.T, service *WebService, notificationURL string) {

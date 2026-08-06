@@ -22,6 +22,13 @@ func NewModule(db *bun.DB, registrar *authz.Registrar, cfg Config) *Module {
 			panic("audit module: invalid anchor configuration: " + err.Error())
 		}
 		service = NewServiceWithAnchor(db, store)
+		if cfg.Anchor.SigningKey != "" {
+			signer, err := NewRootSigner(cfg.Anchor.SigningKey)
+			if err != nil {
+				panic("audit module: invalid anchor signing key: " + err.Error())
+			}
+			service = NewServiceWithAnchorAndSigner(db, store, signer)
+		}
 	}
 	return &Module{service: service, registrar: registrar}
 }
