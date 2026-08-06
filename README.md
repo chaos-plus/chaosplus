@@ -195,3 +195,28 @@ pkg/                        # reusable libraries
 ```bash
 go test -race ./...
 ```
+
+The repository gate is the authoritative quality check. On Windows PowerShell:
+
+```powershell
+$env:GOSUMDB='sum.golang.org'
+.\.agents\skills\chaosplus-quality-gate\scripts\check-gates.ps1 -Scope all -Full
+```
+
+It enforces Go race tests with a repository-wide **90% statement coverage
+threshold**, `golangci-lint`, `govulncheck`, `go vet`, formatting, module i18n
+parity (`en-US` / `zh-CN` / `ms-MY`), mock-free tests (real dependencies only),
+test/production file pairing, and frontend lint/typecheck/tests/build plus the
+documentation build and link check. The same checks run in CI
+(`.github/workflows/quality.yml`), including real MySQL 8.4 and PostgreSQL 17.5
+migration, constraint, and SCIM filter comparisons.
+
+## Contributing
+
+See `CONTRIBUTING.md` at the repository root for the layout, enforced
+rules, and how to run the full gate before opening a pull request.
+
+## Security
+
+Report vulnerabilities through GitHub private vulnerability reporting. See
+`SECURITY.md` at the repository root for what to include and how reports are handled.
