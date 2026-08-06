@@ -270,6 +270,14 @@ bun run build
 bun run audit:tenants -- 9333 http://127.0.0.1:8091
 bun run audit:invitations -- 9333 http://127.0.0.1:8091
 bun run audit:passkey -- 9333 http://localhost:8091
+
+# 真实 MySQL / PostgreSQL 方言验收（一次性数据库，跑完全部方言测试）
+$env:IAM_DB_LIFECYCLE_TYPE='mysql'
+$env:IAM_DB_LIFECYCLE_ADMIN_DSN='root@tcp(127.0.0.1:3308)/'
+go test ./internal/modules/iam ./internal/modules/provisioning ./internal/modules/federation ./internal/deployment -run 'DialectLifecycle|ProvisionAndLoginRealDialect|SCIMFilterDialectComparison' -count=1
+$env:IAM_DB_LIFECYCLE_TYPE='postgres'
+$env:IAM_DB_LIFECYCLE_ADMIN_DSN='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+go test ./internal/modules/iam ./internal/modules/provisioning ./internal/modules/federation ./internal/deployment -run 'DialectLifecycle|ProvisionAndLoginRealDialect|SCIMFilterDialectComparison' -count=1
 ```
 
 > 通行密钥审计必须使用与 `authn.passkey.rp_id` 匹配的浏览器来源（本机验收配置为 `localhost`，因此 baseURL 用 `http://localhost:8091`）；其余审计使用 `127.0.0.1` 不受影响。
