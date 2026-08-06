@@ -61,6 +61,20 @@ function Assert-Structure {
         }
     }
 
+
+    $externalIamFiles = @((Join-Path $repoRoot 'go.mod'), (Join-Path $repoRoot 'go.sum')) +
+        @(Get-ChildItem (Join-Path $repoRoot 'deploy') -Recurse -File |
+            Where-Object { $_.Name -notlike '*.env' -and $_.FullName -notmatch '[\\/](secrets|\.local)[\\/]' }) +
+        @(Get-ChildItem (Join-Path $repoRoot 'cmd'), (Join-Path $repoRoot 'internal'), (Join-Path $repoRoot 'pkg') -Recurse -File -Filter '*.go' |
+            Where-Object Name -notlike '*_test.go')
+    $forbiddenIam = '(?i)\b(zitadel|spicedb|authzed|ory)\b'
+    foreach ($file in $externalIamFiles) {
+        $target = if ($file -is [System.IO.FileInfo]) { $file.FullName } else { [string]$file }
+        $hits = @(Select-String -LiteralPath $target -Pattern $forbiddenIam)
+        foreach ($hit in $hits) {
+            $script:failures.Add("Forbidden external IAM/PDP dependency in ${target}:$($hit.LineNumber)")
+        }
+    }
     $supportedLocales = @('en-US', 'zh-CN', 'ms-MY')
     $baseCatalog = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repoRoot 'pkg\i18n\locales\en-US.json') | ConvertFrom-Json
     $baseErrorKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
