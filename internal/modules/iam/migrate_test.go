@@ -255,6 +255,19 @@ func TestMigrationDialectLifecycle(t *testing.T) {
 	require.NoError(t, AssertMigrated(t.Context(), db))
 }
 
+func TestAuditAppendOnlyDialectLifecycle(t *testing.T) {
+	db := newLifecycleDatabase(t)
+	require.NoError(t, Migrate(t.Context(), db))
+	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_audit_events
+		(id, tenant_id, event_type, outcome, detail, created_at, sequence, previous_hash, event_hash)
+		VALUES ('evt-1', 'tenant', 'created', 'success', '{}', 1, 1, '', 'hash-1')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `UPDATE iam_audit_events SET outcome = 'denied' WHERE id = 'evt-1'`)
+	require.ErrorContains(t, err, "append-only")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM iam_audit_events WHERE id = 'evt-1'`)
+	require.ErrorContains(t, err, "append-only")
+}
+
 func newLifecycleDatabase(t *testing.T) *bun.DB {
 	t.Helper()
 	dialect := strings.ToLower(strings.TrimSpace(os.Getenv("IAM_DB_LIFECYCLE_TYPE")))

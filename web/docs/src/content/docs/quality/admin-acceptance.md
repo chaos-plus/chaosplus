@@ -292,7 +292,7 @@ bun run audit:passkey -- 9333 http://localhost:8091
 | 1.3 自助注册 | 真实浏览器 + Webhook 通知 + 直接查库 | `audit:registration`：验证 token 一次性消费、`activation_required` 清除、tenant 成员数 0、注册后登录成功 |
 | 1.4/1.5 邮箱验证与密码找回 | 真实后端测试 + 注册审计的验证链 | `internal/modules/authn`：`TestEmailVerification*` 与 `TestPasswordRecovery*`（生命周期、过期、一次性、回滚、并发） |
 | 2-6 主体/角色/实体/OAuth/SCIM | 真实浏览器审计 + 后端测试 | 13 个 audit 全部通过：租户生命周期、邀请、角色+数据范围、部门/岗位/用户组、实体关系、访问申请/复核、服务账号、SCIM 预配；截图见 `.local/screenshots/` |
-| 7 审计日志 | 运行实例 API + 三方言测试 | `GET /iam/audit-integrity` valid=true（639 条事件链，head_sequence=639 且 head_hash 一致）；UPDATE/DELETE 拒绝由三方言测试覆盖 |
+| 7 审计日志 | 运行实例 API + 三方言测试 | `GET /iam/audit-integrity` valid=true（639 条事件链，head_sequence=639 且 head_hash 一致）；UPDATE/DELETE 拒绝由三方言实测覆盖（SQLite 见 audit_test.go；MySQL 8.0.42 与 PostgreSQL 17.5 实库跑 TestAuditAppendOnlyDialectLifecycle，UPDATE/DELETE 均被触发器拒绝） |
 | 8 Web 安全 | 真实请求 + 配置校验 | 坏 Origin 写请求返回 403；`cp_session` 实测 `HttpOnly; SameSite=Lax`；生产 TLS overlay（`compose.tls.yaml`）设 `AUTHN_WEB_COOKIE_SECURE=true`；`config validate` 输出无密码/DSN/密钥 |
 | 9 数据库兼容性 | 真实 MySQL 8.0.42 / PostgreSQL 17.5 一次性数据库 | IAM/Provisioning/Federation `Test*MigrationDialectLifecycle` 全部 PASS（create→migrate→down→re-migrate）；SQLite 由全量门禁覆盖 |
 | 10 结构约束 | 门禁扫描 | `check-gates.ps1 -Scope all -Full` 通过：Go race 测试、90.0% 覆盖率、govulncheck 0 漏洞、vet、前端 lint/typecheck/真实测试/构建、文档构建/链接/Mermaid |
