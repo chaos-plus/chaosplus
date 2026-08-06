@@ -21,6 +21,9 @@ func TestFederationModuleDeclaresManagementAndBrowserOperations(t *testing.T) {
 	for _, path := range []string{
 		"/iam/identity-providers", "/iam/identity-providers/{provider_id}",
 		"/federation/{provider_id}/start", "/federation/{provider_id}/callback",
+		"/iam/saml/service-providers", "/iam/saml/service-providers/{sp_id}",
+		"/iam/saml/signing-key/rotate",
+		"/federation/saml/{tenant_id}/metadata", "/federation/saml/{tenant_id}/sso", "/federation/saml/{tenant_id}/slo",
 	} {
 		assert.Contains(t, api.OpenAPI().Paths, path)
 	}
@@ -33,6 +36,14 @@ func TestFederationModuleDeclaresManagementAndBrowserOperations(t *testing.T) {
 	callback := api.OpenAPI().Paths["/federation/{provider_id}/callback"].Get
 	assert.Equal(t, true, callback.Metadata["authz.public"])
 	assert.Contains(t, callback.Responses, "302")
+	sso := api.OpenAPI().Paths["/federation/saml/{tenant_id}/sso"].Get
+	assert.Equal(t, true, sso.Metadata["authz.public"])
+	metadata := api.OpenAPI().Paths["/federation/saml/{tenant_id}/metadata"].Get
+	assert.Equal(t, true, metadata.Metadata["authz.public"])
+	samlCreate := api.OpenAPI().Paths["/iam/saml/service-providers"].Post
+	assert.Equal(t, "identity_provider_create", samlCreate.Extensions[authz.GuardExtensionKey])
+	samlList := api.OpenAPI().Paths["/iam/saml/service-providers"].Get
+	assert.Equal(t, "identity_provider_view", samlList.Extensions[authz.GuardExtensionKey])
 	require.NoError(t, module.Migrate(t.Context()))
 }
 

@@ -1213,15 +1213,15 @@ GET /iam/audit-integrity
 
 ### 16.2 SAML 2.0
 
-- Chaosplus 首先作为 SP 接入企业 IdP；完整目标还包括 SAML IdP，供只能使用 SAML 的下游企业应用接入。
+- Chaosplus 同时支持作为 SP 接入企业 IdP，并内置 SAML 2.0 IdP，供只能使用 SAML 的下游企业应用接入。
 - metadata、entity ID、ACS、certificate 明确版本化。
 - 强制签名响应或 assertion，验证 destination、audience、recipient、InResponseTo 和时间窗口。
 - XML 解析禁用外部实体，限制文档大小和元素深度。
 - certificate rotation 支持新旧证书重叠。
 
-SAML IdP 必须在 OAuth/OIDC Provider 稳定后独立交付，包含 metadata、SSO/SLO、签名 assertion、NameID/attribute mapping、
-SP registry 和证书轮换，并运行专门的互操作与 signature-wrapping 安全测试。不能复用 SP 代码路径假装已实现 IdP。
-
+SAML IdP 已交付：tenant-scoped SP registry（metadata/entityID/ACS 校验，含 XXE 防护）、HTTP-Redirect/POST 两种 binding 的 SSO、
+SP 发起的 SLO、RSA-SHA256 签名 assertion、NameID/attribute mapping、文件或数据库托管的签名密钥与轮换 API。IdP 与 SP 使用独立代码路径（`internal/modules/federation/saml.go`），
+并配套 signature-wrapping、XXE、destination/audience/InResponseTo、ACS 严格校验和 clock skew 测试。
 ### 16.3 SCIM 2.0
 
 当前入站 Service Provider 与出站 SCIM client 均已实现：完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](scim-provisioning.md)。出站目标（`/iam/scim/targets`）支持创建/替换/删除、AES-GCM 加密的 Bearer token、`PUT` 推送用户与组（组内只包含已推送成员）及 `DELETE` 反预配（映射软删除、可重新推送恢复）；上游 OIDC federation 与 JIT 预配已实现。
@@ -1576,7 +1576,7 @@ principal、email、tenant、resource ID 不得作为高基数 metric label。
 - PKCE downgrade、redirect URI mix-up、state/nonce replay、code replay 必测。
 - JWT 测试 `alg=none`、错误 alg/key type、未知 kid、过期、错误 issuer/audience。
 - WebAuthn 测试 origin/RP ID/challenge/UV/counter。
-- SAML 测试 signature wrapping、XXE、audience/destination/InResponseTo 和 clock skew。
+- SAML 测试 signature wrapping、XXE、audience/destination/InResponseTo、ACS 严格校验和 clock skew，已覆盖并接入真实 SP 对端校验签名与属性。
 - SCIM filter/PATCH/Bulk 使用 RFC contract tests 和 fuzz。
 
 ### 22.4 E2E 场景
@@ -1664,7 +1664,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 已实现租户成员邀请创建、列表、重发轮换、撤销和公开幂等接受；一次性 HMAC 凭据、默认部门/角色、事务 revision/audit、三方言迁移、三语错误、OpenAPI 和管理端桌面/移动工作流已闭环。邮件投递仍属于后续 notification 边界。
 - 已实现访问申请、四眼审批、临时角色授权、申请人放弃、审批人撤销、在线到期失效，以及直接/临时授权复核、最后管理员保护、三方言迁移、三语错误、OpenAPI、管理端与真实桌面/移动端流程；详见 [访问治理设计](access-governance.md)。
 - 套餐、资源属性 ABAC 和派生授权复核尚未实现。
-- 企业 SAML 2.0 IdP、归档保留和完整治理管理面。
+- 归档保留和完整治理管理面。企业 SAML 2.0 IdP 已实现：SP registry、SSO/SLO、签名密钥轮换。
 
 ### Phase 5：删除外部依赖（已完成）
 
@@ -1704,7 +1704,7 @@ web/admin                                   -> 完整 IAM 管理台
 | M1 Local Auth | Password、Passkey、TOTP、session、安全中心 | auth E2E + 安全评审 |
 | M2 OAuth/OIDC | AS/OP、client、token、consent、keys | conformance + 渗透测试 |
 | M3 Authorization | RBAC、scope、ReBAC、ABAC、constraint | shadow 无差异 + SLO |
-| M4 Enterprise | OIDC/SAML federation、SCIM、JIT | contract + deprovision E2E |
+| M4 Enterprise | OIDC federation、SAML 2.0 IdP、SCIM、JIT | contract + deprovision E2E |
 | M5 Governance | approval、temporary grant、review、audit verify | 合规验收 |
 | M6 Cutover | 删除 Zitadel/SpiceDB | 备份、回滚、故障演练 |
 

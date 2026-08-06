@@ -8,5 +8,12 @@
   "federation_identity_unavailable": "Akaun atau keahlian penyewa yang dipautkan telah dinyahdayakan. Hubungi pentadbir untuk memulihkan akses.",
   "federation_email_unverified": "Penyediaan akaun automatik memerlukan e-mel yang disahkan daripada pembekal identiti. Minta pentadbir menyemak tuntutan pembekal atau menyediakan akaun secara manual.",
   "federation_oidc_failed": "Pembekal identiti menolak atau tidak dapat melengkapkan log masuk. Mulakan semula log masuk dan cuba lagi; hubungi pentadbir jika masalah berterusan.",
-  "federation_unavailable": "Perkhidmatan gabungan tidak dapat melengkapkan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan."
+  "federation_unavailable": "Perkhidmatan gabungan tidak dapat melengkapkan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan.",
+  "federation_saml_invalid_request": "Permintaan SAML tidak sah, telah tamat tempoh, atau dihantar ke destinasi yang salah. Mulakan semula aliran log masuk atau log keluar daripada aplikasi.",
+  "federation_saml_invalid_sp": "Metadata penyedia perkhidmatan SAML tidak sah. Semak XML, ID entiti, dan pengikatan pengguna asertion, kemudian daftarkannya semula.",
+  "federation_saml_sp_not_found": "Penyedia perkhidmatan SAML tidak wujud. Muat semula pendaftaran dan pilih penyedia yang sedia ada.",
+  "federation_saml_sp_entity_id_exists": "Penyedia perkhidmatan SAML dengan ID entiti ini sudah didaftarkan. Pilih ID entiti lain atau kemas kini penyedia sedia ada.",
+  "federation_saml_sp_disabled": "Penyedia perkhidmatan SAML ini dilumpuhkan. Pentadbir mesti membolehkannya sebelum ia boleh menggunakan pembekal identiti.",
+  "federation_saml_unavailable": "Pembekal identiti SAML tidak tersedia. Dayakan konfigurasi kesatuan SAML dan cuba semula.",
+  "federation_saml_key_managed_externally": "Kunci tandatangan SAML diuruskan melalui fail konfigurasi. Pusingkannya dengan menggantikan fail kunci dan sijil."
 }

@@ -24,6 +24,9 @@ var (
 	ErrOIDCToken              = errors.New("OIDC token exchange failed")
 	ErrOIDCState              = errors.New("invalid OIDC state")
 	ErrOIDCTokenInvalid       = errors.New("invalid OIDC ID token")
+	ErrInvalidSAMLSP          = errors.New("invalid SAML service provider")
+	ErrSAMLSPNotFound         = errors.New("SAML service provider not found")
+	ErrSAMLSPEntityIDExists   = errors.New("SAML service provider entity ID exists")
 	ErrProvisioningDisabled   = errors.New("identity provisioning is disabled for this provider")
 	ErrProvisioningUnverified = errors.New("identity provisioning requires a verified email")
 	ErrPrincipalInactive      = errors.New("linked principal is not active")
@@ -74,4 +77,28 @@ type IdentityLink struct {
 	LastLoginAt     time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+// SAMLServiceProvider is a tenant-registered downstream application that
+// consumes SAML assertions from the Chaosplus identity provider. Its metadata
+// document is the source of truth for entity ID, assertion consumer, and
+// single-logout endpoints.
+type SAMLServiceProvider struct {
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	Name        string    `json:"name"`
+	EntityID    string    `json:"entity_id"`
+	MetadataXML string    `json:"metadata_xml"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// SAMLServiceProviderInput carries the validated fields accepted by the
+// management API.
+type SAMLServiceProviderInput struct {
+	Name        string
+	EntityID    string
+	MetadataXML string
+	Status      string
 }

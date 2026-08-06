@@ -3,6 +3,8 @@ module github.com/chaos-plus/chaosplus
 go 1.26.5
 
 require (
+	github.com/beevik/etree v1.6.0
+	github.com/crewjam/saml v0.5.1
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/go-chi/chi/v5 v5.3.1
@@ -11,11 +13,13 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/go-webauthn/webauthn v0.17.4
+	github.com/mattermost/xml-roundtrip-validator v0.1.0
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/redis/go-redis/v9 v9.21.0
+	github.com/russellhaering/goxmldsig v1.6.0
 	github.com/scim2/filter-parser/v2 v2.3.1
 	github.com/sony/sonyflake v1.3.0
 	github.com/spf13/cast v1.10.0
@@ -56,6 +60,7 @@ require (
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect

@@ -239,6 +239,25 @@ bootstrap:
 MySQL 使用标准 DSN，例如 `user:password@tcp(mysql:3306)/chaosplus?parseTime=true`。PostgreSQL 使用 URL DSN。
 变更 datasource 时必须同时修改 runtime 和 bootstrap DSN，并先在目标数据库执行 migration smoke。
 
+## SAML 2.0 IdP
+
+SAML IdP 默认关闭；启用后按租户注册服务提供商（SP）并发布 metadata、SSO 与 SLO 端点。
+
+```yaml
+federation:
+  saml:
+    enabled: true
+    login_path: /login
+    valid_duration: 5m
+    max_issue_delay: 5m
+    # signing_key_file / certificate_file 同时配置则使用文件密钥；
+    # 留空时首次启动生成 RSA-2048 密钥，用 federation 加密密钥密封后存入数据库。
+```
+
+- 管理 API：`POST/GET/PUT/DELETE /iam/saml/service-providers`，轮换 `POST /iam/saml/signing-key/rotate`（文件模式拒绝轮换）。
+- 公开端点：`GET /federation/saml/{tenant_id}/metadata`、`GET/POST /federation/saml/{tenant_id}/sso`、`GET/POST /federation/saml/{tenant_id}/slo`。
+- 未配置 federation 加密密钥时，数据库托管密钥的启动和轮换会失败，属预期安全行为。
+
 ## 升级与回滚
 
 普通升级：备份数据库、固定镜像版本，然后执行：

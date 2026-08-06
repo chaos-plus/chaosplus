@@ -567,7 +567,7 @@ SHA-256 索引，完整 Credential Record 使用按用途派生的 AES-256-GCM �
 作为 AAD。`iam_passkey_challenges` 只保存 challenge handle 的 hash，注册与登录 challenge 默认 5 分钟并在
 首次 finish 请求时原子消费，包括无效响应。注册要求有效 Cookie session 和当前密码；删除要求当前密码并撤销
 其他 session 与全部 refresh token。counter regression 不创建 session，而是记录 `passkey_counter_regression`
-安全事件。当前未接入 FIDO Metadata Service、企业 attestation 策略和风险驱动 step-up。
+安全事件。已实现可配置的 attestation conveyance（none/indirect/direct/enterprise）与格式/AAGUID 准入策略，注册响应返回 attestation 元数据；FIDO Metadata Service 在线校验尚未实现；风险驱动 step-up 已支持 TOTP/恢复码挑战，成功后提升会话 ACR 并刷新 auth_time。
 
 ### 9.3 TOTP 与恢复码
 
@@ -665,7 +665,7 @@ Secure; HttpOnly; SameSite=Lax; Path=/
 - mutation 校验 Origin；跨站集成另用 OAuth bearer，不关闭 CSRF 控制。
 - 会话记录 ACR、AMR、auth_time、credential_version 和风险摘要。
 - 支持查看并撤销其他设备会话。
-- 高风险操作要求 `auth_time` 足够新且 ACR 达标，否则返回 `step_up_required`。
+- 高风险操作要求 `auth_time` 足够新且 ACR 达标，否则返回 `step_up_required`；客户端通过 `POST /authn/step-up/options` 与 `POST /authn/step-up/verify` 完成复核后，会话 ACR 提升到 2、`auth_time` 刷新并轮换 session ID。
 
 ### 10.3 风险与限流
 
@@ -1075,12 +1075,10 @@ POST /authn/passkeys/registration/options
 POST /authn/passkeys/registration/verify
 PATCH /authn/passkeys/{id}
 DELETE /authn/passkeys/{id}
+POST /authn/step-up/options
+POST /authn/step-up/verify
 ```
 
-目标但尚未实现：
-
-```text
-POST /authn/step-up
 ```
 
 ### 15.2 Principal 与组织
@@ -1221,18 +1219,18 @@ GET /iam/audit-integrity
 
 ### 16.2 SAML 2.0
 
-- Chaosplus 首先作为 SP 接入企业 IdP；完整目标还包括 SAML IdP，供只能使用 SAML 的下游企业应用接入。
+- Chaosplus 同时支持作为 SP 接入企业 IdP，并内置 SAML 2.0 IdP，供只能使用 SAML 的下游企业应用接入。
 - metadata、entity ID、ACS、certificate 明确版本化。
 - 强制签名响应或 assertion，验证 destination、audience、recipient、InResponseTo 和时间窗口。
 - XML 解析禁用外部实体，限制文档大小和元素深度。
 - certificate rotation 支持新旧证书重叠。
 
-SAML IdP 必须在 OAuth/OIDC Provider 稳定后独立交付，包含 metadata、SSO/SLO、签名 assertion、NameID/attribute mapping、
-SP registry 和证书轮换，并运行专门的互操作与 signature-wrapping 安全测试。不能复用 SP 代码路径假装已实现 IdP。
-
+SAML IdP 已交付：tenant-scoped SP registry（metadata/entityID/ACS 校验，含 XXE 防护）、HTTP-Redirect/POST 两种 binding 的 SSO、
+SP 发起的 SLO、RSA-SHA256 签名 assertion、NameID/attribute mapping、文件或数据库托管的签名密钥与轮换 API。IdP 与 SP 使用独立代码路径（`internal/modules/federation/saml.go`），
+并配套 signature-wrapping、XXE、destination/audience/InResponseTo、ACS 严格校验和 clock skew 测试。
 ### 16.3 SCIM 2.0
 
-当前入站 Service Provider 已实现，完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](/iam/scim-provisioning/)。出站 SCIM client 仍未实现；上游 OIDC federation 与 JIT 预配已实现。
+当前入站 Service Provider 与出站 SCIM client 均已实现：完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](/iam/scim-provisioning/)。出站目标（`/iam/scim/targets`）支持创建/替换/删除、AES-GCM 加密的 Bearer token、`PUT` 推送用户与组（组内只包含已推送成员）及 `DELETE` 反预配（映射软删除、可重新推送恢复）；上游 OIDC federation 与 JIT 预配已实现。
 
 支持 `/scim/v2/Users`、`/Groups`、ServiceProviderConfig、Schemas、ResourceTypes：
 
@@ -1475,6 +1473,9 @@ authn:
     origins: [https://console.example.com]
     challenge_ttl: 5m
     max_credentials: 10
+    attestation_preference: none
+    allowed_attestation_formats: []
+    allowed_aaguid: []
   notification:
     url: https://notify.internal.example/v1/iam-events
     authorization_file: /run/secrets/notification_authorization
@@ -1581,7 +1582,7 @@ principal、email、tenant、resource ID 不得作为高基数 metric label。
 - PKCE downgrade、redirect URI mix-up、state/nonce replay、code replay 必测。
 - JWT 测试 `alg=none`、错误 alg/key type、未知 kid、过期、错误 issuer/audience。
 - WebAuthn 测试 origin/RP ID/challenge/UV/counter。
-- SAML 测试 signature wrapping、XXE、audience/destination/InResponseTo 和 clock skew。
+- SAML 测试 signature wrapping、XXE、audience/destination/InResponseTo、ACS 严格校验和 clock skew，已覆盖并接入真实 SP 对端校验签名与属性。
 - SCIM filter/PATCH/Bulk 使用 RFC contract tests 和 fuzz。
 
 ### 22.4 E2E 场景
@@ -1623,7 +1624,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 新用户可由租户管理邀请或自助注册创建；自助注册只创建全局 Principal，完成邮箱验证后才能登录，租户准入仍只通过邀请。历史账号若需要导入，只允许预绑定或强制恢复密码，不能导入不可验证密码。
 - 已实现 Argon2id Password、失败锁定、密码历史、Principal 状态、会话管理、TOTP enrollment/login challenge、128 bit 一次性恢复码和完整安全中心工作流。
 - 已实现 Passkey/WebAuthn 注册、discoverable 无密码登录、凭据列表/重命名/删除、UV 强制、counter regression 拒绝和真实 Chromium CTAP2 流程。
-- 已实现普通账号主邮箱验证、邮箱快照绑定、加密通知 outbox、仅面向 verified primary email 的密码找回、单次消费、全会话撤销、凭证版本递增、恢复冷静期和链式审计；独立邮件供应商验收、FIDO Metadata/企业 attestation 和风险驱动 step-up 尚未实现。
+- 已实现普通账号主邮箱验证、邮箱快照绑定、加密通知 outbox、仅面向 verified primary email 的密码找回、单次消费、全会话撤销、凭证版本递增、恢复冷静期和链式审计；已实现可配置的 attestation conveyance 与格式/AAGUID 准入策略；独立邮件供应商验收、FIDO Metadata 在线校验尚未实现；风险驱动 step-up 已实现（POST /authn/step-up/options、POST /authn/step-up/verify）。
 - 已实现防枚举自助注册、验证前登录封锁、无隐式 Tenant Membership、三方言迁移、能力发现 API 和注册页面。
 - 已实现租户服务账号、一次性 client credential、scope allowlist、OAuth `client_credentials`、token version 即时撤销、最后管理员保护、三方言迁移、管理 API 和管理端工作流。
 
@@ -1669,7 +1670,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 已实现租户成员邀请创建、列表、重发轮换、撤销和公开幂等接受；一次性 HMAC 凭据、默认部门/角色、事务 revision/audit、三方言迁移、三语错误、OpenAPI 和管理端桌面/移动工作流已闭环。邮件投递仍属于后续 notification 边界。
 - 已实现访问申请、四眼审批、临时角色授权、申请人放弃、审批人撤销、在线到期失效，以及直接/临时授权复核、最后管理员保护、三方言迁移、三语错误、OpenAPI、管理端与真实桌面/移动端流程；详见 [访问治理设计](/iam/access-governance/)。
 - 套餐、资源属性 ABAC 和派生授权复核尚未实现。
-- 企业 OIDC/SAML federation、出站 SCIM client，以及归档保留和完整治理管理面。
+- 归档保留和完整治理管理面。企业 SAML 2.0 IdP 已实现：SP registry、SSO/SLO、签名密钥轮换。
 
 ### Phase 5：删除外部依赖（已完成）
 
@@ -1709,7 +1710,7 @@ web/admin                                   -> 完整 IAM 管理台
 | M1 Local Auth | Password、Passkey、TOTP、session、安全中心 | auth E2E + 安全评审 |
 | M2 OAuth/OIDC | AS/OP、client、token、consent、keys | conformance + 渗透测试 |
 | M3 Authorization | RBAC、scope、ReBAC、ABAC、constraint | shadow 无差异 + SLO |
-| M4 Enterprise | OIDC/SAML federation、SCIM、JIT | contract + deprovision E2E |
+| M4 Enterprise | OIDC federation、SAML 2.0 IdP、SCIM、JIT | contract + deprovision E2E |
 | M5 Governance | approval、temporary grant、review、audit verify | 合规验收 |
 | M6 Cutover | 删除 Zitadel/SpiceDB | 备份、回滚、故障演练 |
 

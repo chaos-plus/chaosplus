@@ -13,7 +13,7 @@ editUrl: false
 
 ## 1. 目标与边界
 
-Chaosplus 作为 SCIM Service Provider 接收企业身份源的用户和组预配。每个 SCIM directory 固定属于一个 tenant；Bearer 凭据、资源映射、查询和写入都不能越过该 tenant。当前实现覆盖 Users、Groups、PATCH、Bulk、过滤、分页、发现资源、弱 ETag 和停用预配，不包含出站 SCIM client、定时拉取或企业 OIDC/SAML federation。
+Chaosplus 作为 SCIM Service Provider 接收企业身份源的用户和组预配。每个 SCIM directory 固定属于一个 tenant；Bearer 凭据、资源映射、查询和写入都不能越过该 tenant。当前实现覆盖 Users、Groups、PATCH、Bulk、过滤、分页、发现资源、弱 ETag 和停用预配，另提供出站 SCIM client（见 [出站 SCIM 目标](/operations/deployment/#出站-scim-目标可选)），不包含定时拉取或企业 OIDC/SAML federation。
 
 SCIM User 映射到全局 Principal 与该 tenant 的 Membership，SCIM Group 映射到 organization 静态用户组。未来 `tenant -> entity -> business resources` 层级不改变该边界：SCIM 只负责 tenant 身份目录，不直接创建 entity 或业务对象。
 

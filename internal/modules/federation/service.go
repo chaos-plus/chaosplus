@@ -6,7 +6,9 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
@@ -34,6 +37,7 @@ type Config struct {
 	HTTPTimeout       time.Duration `mapstructure:"http_timeout" description:"upstream discovery, JWKS, and token endpoint timeout" default:"10s"`
 	ClockSkew         time.Duration `mapstructure:"clock_skew" description:"allowed ID token clock skew" default:"30s"`
 	StateTTL          time.Duration `mapstructure:"state_ttl" description:"login state cookie lifetime" default:"10m"`
+	SAML              SAMLConfig    `mapstructure:"saml" group:"saml"`
 }
 
 const federationCipherVersion = "v1"
@@ -99,6 +103,11 @@ type Service struct {
 	oidc       *oidcClient
 	stateTTL   time.Duration
 	now        func() time.Time
+	samlMu     sync.Mutex
+	samlCfg    SAMLConfig
+	samlKey    *rsa.PrivateKey
+	samlCert   *x509.Certificate
+	samlSPs    sync.Map
 }
 
 // ParseEncryptionKey decodes the federation encryption key from the accepted

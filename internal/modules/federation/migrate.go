@@ -37,7 +37,7 @@ func AssertMigrated(ctx context.Context, db *bun.DB) error {
 	if db == nil {
 		return fmt.Errorf("federation schema is not ready: missing database")
 	}
-	for _, table := range []string{"iam_identity_providers", "iam_identity_links"} {
+	for _, table := range []string{"iam_identity_providers", "iam_identity_links", "iam_saml_service_providers", "iam_saml_idp_keys"} {
 		if _, err := db.NewSelect().Table(table).ColumnExpr("1").Limit(1).Exec(ctx); err != nil {
 			return fmt.Errorf("federation schema is not ready (%s): %w", table, err)
 		}

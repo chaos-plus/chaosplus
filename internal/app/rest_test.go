@@ -41,6 +41,11 @@ func TestRESTOperationsDeclareAuthorization(t *testing.T) {
 	require.Equal(t, []string{
 		"authn-me",
 		"federation-callback-login",
+		"federation-saml-metadata",
+		"federation-saml-slo",
+		"federation-saml-slo-post",
+		"federation-saml-sso",
+		"federation-saml-sso-post",
 		"federation-start-login",
 		"lookup-geoip",
 		"lookup-geoip-self",
