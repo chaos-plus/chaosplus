@@ -42,5 +42,12 @@ func AssertMigrated(ctx context.Context, db *bun.DB) error {
 			return fmt.Errorf("governance schema is not ready (%s): %w", table, err)
 		}
 	}
+	upToDate, err := goosex.UpToDate(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_governance")
+	if err != nil {
+		return fmt.Errorf("governance schema is not ready (migration state): %w", err)
+	}
+	if !upToDate {
+		return fmt.Errorf("governance schema is not ready: migrations are pending")
+	}
 	return nil
 }

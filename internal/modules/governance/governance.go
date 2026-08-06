@@ -71,9 +71,12 @@ type CreateAccessRequest struct {
 }
 
 type RoleGrantStore struct {
-	Grant           func(context.Context, bun.IDB, string, string, string, string, string, time.Time, time.Time) error
-	Revoke          func(context.Context, bun.IDB, string, string) (bool, error)
-	RemovePermanent func(context.Context, bun.IDB, string, string, string, int64) (bool, error)
+	Grant                    func(context.Context, bun.IDB, string, string, string, string, string, time.Time, time.Time) error
+	Revoke                   func(context.Context, bun.IDB, string, string) (bool, error)
+	RemovePermanent          func(context.Context, bun.IDB, string, string, string, int64) (bool, error)
+	RemoveGroupMembership    func(context.Context, bun.IDB, string, string, string) (bool, error)
+	RemovePositionMembership func(context.Context, bun.IDB, string, string, string) (bool, error)
+	RemoveEntityRoleBinding  func(context.Context, bun.IDB, string, string, string, string) (bool, error)
 }
 
 type IDGenerator func() (string, error)
@@ -118,7 +121,9 @@ type requestSnapshot struct {
 }
 
 func NewService(db *bun.DB, audit auditx.Appender, grants RoleGrantStore, nextID IDGenerator) *Service {
-	if db == nil || audit == nil || grants.Grant == nil || grants.Revoke == nil || grants.RemovePermanent == nil || nextID == nil {
+	if db == nil || audit == nil || nextID == nil || grants.Grant == nil || grants.Revoke == nil ||
+		grants.RemovePermanent == nil || grants.RemoveGroupMembership == nil || grants.RemovePositionMembership == nil ||
+		grants.RemoveEntityRoleBinding == nil {
 		panic("governance service requires database, audit appender, role grant store, and id generator")
 	}
 	dialect := db.Dialect().Name().String()

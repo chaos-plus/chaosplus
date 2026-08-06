@@ -232,6 +232,9 @@ func governanceRoleGrantStore() RoleGrantStore {
 			}
 			return changed, err
 		},
+		RemoveGroupMembership:    iam.RemoveGroupMembership,
+		RemovePositionMembership: iam.RemovePositionMembership,
+		RemoveEntityRoleBinding:  iam.RemoveEntityRoleBinding,
 	}
 }
 

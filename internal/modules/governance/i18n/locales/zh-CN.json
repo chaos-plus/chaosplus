@@ -18,5 +18,6 @@
   "access_review_incomplete": "所有访问复核项都必须选择保留或撤销后才能完成复核。",
   "access_review_self_decision": "复核人不能确认自己的访问权限，必须由另一名具备权限的复核人处理。",
   "access_review_last_administrator": "该决定会移除租户最后一名长期管理员。请先分配另一名管理员，再撤销此权限。",
-  "invalid_access_review": "访问复核无效。请填写明确名称、设置未来 365 天内的截止时间，并选择有效的保留或撤销决定。"
+  "invalid_access_review": "访问复核无效。请填写明确名称、设置未来 365 天内的截止时间，并选择有效的保留或撤销决定。",
+  "access_review_derived_not_revocable": "规则派生的组访问无法按用户单独撤销。请修改组的成员规则或移除该组的角色绑定，然后重新发起复核。"
 }

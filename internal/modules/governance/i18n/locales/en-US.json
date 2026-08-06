@@ -18,5 +18,6 @@
   "access_review_incomplete": "Every access review item must be kept or revoked before the review can be completed.",
   "access_review_self_decision": "Reviewers cannot certify their own access. Another authorized reviewer must decide this item.",
   "access_review_last_administrator": "This decision would remove the tenant's last durable administrator. Assign another administrator before revoking this access.",
-  "invalid_access_review": "The access review is invalid. Provide a clear name, a deadline within 365 days, and a valid keep or revoke decision."
+  "invalid_access_review": "The access review is invalid. Provide a clear name, a deadline within 365 days, and a valid keep or revoke decision.",
+  "access_review_derived_not_revocable": "Rule-derived group access cannot be revoked per user. Change the group rule or remove the role binding from the group, then re-run the review."
 }

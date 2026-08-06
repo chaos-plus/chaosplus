@@ -71,6 +71,28 @@ func TestDownAndDownTo(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestUpToDate(t *testing.T) {
+	ctx := context.Background()
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	root := migrationsRoot(t)
+
+	upToDate, err := UpToDate(ctx, db.DB, root, "sqlite", "goose_widgets_uptodate_test")
+	require.NoError(t, err)
+	assert.False(t, upToDate, "fresh database must not be up to date")
+
+	require.NoError(t, Run(ctx, db.DB, root, "sqlite", "goose_widgets_uptodate_test"))
+	upToDate, err = UpToDate(ctx, db.DB, root, "sqlite", "goose_widgets_uptodate_test")
+	require.NoError(t, err)
+	assert.True(t, upToDate, "fully migrated database must be up to date")
+
+	require.NoError(t, Down(ctx, db.DB, root, "sqlite", "goose_widgets_uptodate_test"))
+	upToDate, err = UpToDate(ctx, db.DB, root, "sqlite", "goose_widgets_uptodate_test")
+	require.NoError(t, err)
+	assert.False(t, upToDate, "database with a rolled-back migration must not be up to date")
+}
+
 func TestRun_UnsupportedDialect(t *testing.T) {
 	ctx := context.Background()
 

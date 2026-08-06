@@ -290,6 +290,93 @@ func TestAccessReviewRejectsInvalidStateAndRealStorageFailures(t *testing.T) {
 	})
 }
 
+func TestAccessReviewCoversDerivedGrants(t *testing.T) {
+	fixture := newGovernanceFixture(t)
+	now := governanceNow.UnixMilli()
+
+	_, err := fixture.db.ExecContext(t.Context(), `INSERT INTO iam_groups
+		(tenant_id,id,name,name_key,group_type,description,status,sort_order,version,created_at,updated_at)
+		VALUES ('tenant-a','group-a','Group A','group a','static','','active',0,1,?,?)`, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_group_members
+		(tenant_id,group_id,principal_id,starts_at,ends_at,created_at,updated_at)
+		VALUES ('tenant-a','group-a','requester',0,0,?,?)`, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_group_role_bindings
+		(tenant_id,role_id,group_id,created_at) VALUES ('tenant-a','role-a','group-a',?)`, now)
+	require.NoError(t, err)
+
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_positions
+		(tenant_id,id,code,name,status,sort_order,version,created_at,updated_at)
+		VALUES ('tenant-a','position-a','pa','Position A','active',0,1,?,?)`, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_position_members
+		(tenant_id,position_id,principal_id,starts_at,ends_at,created_at,updated_at)
+		VALUES ('tenant-a','position-a','other',0,0,?,?)`, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_position_role_bindings
+		(tenant_id,role_id,position_id,created_at) VALUES ('tenant-a','role-a','position-a',?)`, now)
+	require.NoError(t, err)
+
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_entities
+		(tenant_id,id,parent_id,type,name,status,metadata,created_at,updated_at)
+		VALUES ('tenant-a','entity-a',NULL,'store','Store A','active','{}',?,?)`, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_role_bindings
+		(tenant_id,role_id,principal_id,scope_type,scope_id,effect,expires_at,created_at)
+		VALUES ('tenant-a','role-a','requester','entity','entity-a','allow',0,?)`, now)
+	require.NoError(t, err)
+
+	rule := `{"version":1,"match":"all","conditions":[{"field":"member.subject","operator":"in","values":["requester"]}]}`
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_groups
+		(tenant_id,id,name,name_key,group_type,rule_json,description,status,sort_order,version,created_at,updated_at)
+		VALUES ('tenant-a','dynamic-a','Dynamic A','dynamic a','dynamic',?,'','active',0,1,?,?)`, rule, now, now)
+	require.NoError(t, err)
+	_, err = fixture.db.ExecContext(t.Context(), `INSERT INTO iam_group_role_bindings
+		(tenant_id,role_id,group_id,created_at) VALUES ('tenant-a','role-a','dynamic-a',?)`, now)
+	require.NoError(t, err)
+
+	review, err := fixture.service.CreateReview(t.Context(), "tenant-a", "approver", CreateAccessReview{
+		Name: "Derived access review", DueAt: governanceNow.Add(24 * time.Hour),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, review.Total)
+	groupItem := reviewItemByType(t, review, ReviewGrantGroup)
+	positionItem := reviewItemByType(t, review, ReviewGrantPosition)
+	entityItem := reviewItemByType(t, review, ReviewGrantEntity)
+	dynamicItem := reviewItemByType(t, review, ReviewGrantDynamicGroup)
+	assert.Equal(t, "group-a", groupItem.GrantID)
+	assert.Equal(t, "position-a", positionItem.GrantID)
+	assert.Equal(t, "entity-a", entityItem.GrantID)
+	assert.Equal(t, "dynamic-a", dynamicItem.GrantID)
+
+	_, err = fixture.service.DecideReviewItem(t.Context(), "tenant-a", review.ID, groupItem.ID, "approver", ReviewDecisionRevoke, "not needed")
+	require.NoError(t, err)
+	assertReviewRowCount(t, fixture, "iam_group_members", 0)
+	_, err = fixture.service.DecideReviewItem(t.Context(), "tenant-a", review.ID, positionItem.ID, "approver", ReviewDecisionRevoke, "role change")
+	require.NoError(t, err)
+	assertReviewRowCount(t, fixture, "iam_position_members", 0)
+	_, err = fixture.service.DecideReviewItem(t.Context(), "tenant-a", review.ID, entityItem.ID, "approver", ReviewDecisionRevoke, "scoped access ended")
+	require.NoError(t, err)
+	assertReviewRowCount(t, fixture, "iam_role_bindings", 0)
+	_, err = fixture.service.DecideReviewItem(t.Context(), "tenant-a", review.ID, dynamicItem.ID, "approver", ReviewDecisionRevoke, "not revocable")
+	assert.ErrorIs(t, err, ErrReviewDynamicDerived)
+
+	allowed, err := iam.NewAuthorizer(fixture.db).Check(t.Context(), "tenant-a", "store_view", "other")
+	require.NoError(t, err)
+	assert.False(t, allowed, "position-derived access is severed by the review")
+	allowed, err = iam.NewAuthorizer(fixture.db).Check(t.Context(), "tenant-a", "store_view", "requester")
+	require.NoError(t, err)
+	assert.True(t, allowed, "rule-derived access persists until the group rule or binding changes")
+}
+
+func assertReviewRowCount(t *testing.T, fixture governanceFixture, table string, expected int) {
+	t.Helper()
+	count, err := fixture.db.NewSelect().Table(table).Where("tenant_id = 'tenant-a'").Count(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, expected, count)
+}
+
 func addDirectReviewGrant(t *testing.T, fixture governanceFixture, principalID string, createdAt time.Time) time.Time {
 	t.Helper()
 	_, err := fixture.db.ExecContext(t.Context(), `INSERT INTO iam_role_members (tenant_id,role_id,user_subject,created_at)

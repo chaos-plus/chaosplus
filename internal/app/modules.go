@@ -94,6 +94,9 @@ func (app *App) buildModules() []any {
 					}
 					return changed, err
 				},
+				RemoveGroupMembership:    iam.RemoveGroupMembership,
+				RemovePositionMembership: iam.RemovePositionMembership,
+				RemoveEntityRoleBinding:  iam.RemoveEntityRoleBinding,
 			}, nextID))
 			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar, app.cfg.Audit))
 			if app.cfg.Federation.Enabled && app.authnWeb != nil {

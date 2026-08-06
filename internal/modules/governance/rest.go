@@ -207,6 +207,8 @@ func governanceError(err error) error {
 		return huma.Error409Conflict("access_review_self_decision")
 	case errors.Is(err, ErrReviewLastAdministrator):
 		return huma.Error409Conflict("access_review_last_administrator")
+	case errors.Is(err, ErrReviewDynamicDerived):
+		return huma.Error422UnprocessableEntity("access_review_derived_not_revocable")
 	case errors.Is(err, ErrInvalidReview):
 		return huma.Error422UnprocessableEntity("invalid_access_review")
 	case errors.Is(err, ErrInvalid):

@@ -64,6 +64,20 @@ func DownTo(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName stri
 	return nil
 }
 
+// UpToDate reports whether every migration in fsys has been applied to the
+// database. A database with no applied migrations reports false.
+func UpToDate(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string) (bool, error) {
+	provider, err := newProvider(db, fsys, dialect, tableName)
+	if err != nil {
+		return false, err
+	}
+	pending, err := provider.HasPending(ctx)
+	if err != nil {
+		return false, fmt.Errorf("goose: check migrations: %w", err)
+	}
+	return !pending, nil
+}
+
 func newProvider(db *sql.DB, fsys fs.FS, dialect, tableName string) (*goosev3.Provider, error) {
 	d, subdir, err := ResolveDialect(dialect)
 	if err != nil {
