@@ -209,3 +209,11 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Root cause: deployment.migrate/Rollback/assertRuntimeAccess 的模块列表漏掉了 federation 模块
 - Prevention: 新模块必须同时接入部署迁移列表、运行时 schema 断言和 CLI 迁移入口，三者缺一不可
 - Evidence: TestMigrateSQLite、TestRollbackRealSQLiteModules、TestMigrationStageFailures/federation 全部通过
+
+
+## L-fa992af12e4e
+
+- Symptom: govulncheck reported GO-2026-4753: goxmldsig < v1.6.0 has a loop-variable-capture flaw that lets an attacker bypass SAML signature validation
+- Root cause: crewjam/saml indirect dependency pinned goxmldsig v1.4.0 via go.mod
+- Prevention: For SAML signing in crewjam/saml, require goxmldsig >= v1.6.0 and go.sum pinning; run govulncheck in the full gate
+- Evidence: go.mod upgraded goxmldsig@v1.6.0; go build, federation tests, and check-gates.ps1 -Scope all -Full all pass; govulncheck reports No vulnerabilities found
