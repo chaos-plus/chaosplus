@@ -45,6 +45,9 @@ HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over
   tenant-bound directories, hashed Bearer credentials, Users, Groups, PATCH, Bulk,
   filtering, discovery, ETags, deprovisioning, and transactional audit; see
   [docs/scim-provisioning.md](docs/scim-provisioning.md).
+- **Signed WebAssembly claim plugins** — capability-limited WASM modules can enrich
+  issued JWT claims under an Ed25519-signed manifest; see
+  [docs/plugin-system.md](docs/plugin-system.md).
 - **Feature modules** — the composition root (`internal/app/modules.go`) wires
   identity, authn, OAuth, IAM, organization, provisioning, governance, audit, GUID and GeoIP modules.
   Supporting infrastructure includes WUID worker leases and distributed
