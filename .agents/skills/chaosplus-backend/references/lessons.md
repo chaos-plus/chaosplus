@@ -201,3 +201,11 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Root cause: role_id/subject_id widths diverged across tables (VARCHAR(32) vs 64/255) and MySQL tables lacked a uniform COLLATE, so implicit collation mismatches broke FK creation and utf8mb4 index bytes exceeded 3072
 - Prevention: Keep referenced id columns byte-identical in width and collation across all dialect migrations; cap indexed varchar columns at 128 for utf8mb4; declare ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci on every MySQL table
 - Evidence: IAM and provisioning Test*MigrationDialectLifecycle pass on real MySQL 8.0.42 (go test -race, count=1) after collation normalization
+
+
+## L-13fc9a7d95cd
+
+- Symptom: 开启 federation 的服务启动时报 federation schema is not ready
+- Root cause: deployment.migrate/Rollback/assertRuntimeAccess 的模块列表漏掉了 federation 模块
+- Prevention: 新模块必须同时接入部署迁移列表、运行时 schema 断言和 CLI 迁移入口，三者缺一不可
+- Evidence: TestMigrateSQLite、TestRollbackRealSQLiteModules、TestMigrationStageFailures/federation 全部通过

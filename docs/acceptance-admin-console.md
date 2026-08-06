@@ -269,4 +269,7 @@ bun run test
 bun run build
 bun run audit:tenants -- 9333 http://127.0.0.1:8091
 bun run audit:invitations -- 9333 http://127.0.0.1:8091
+bun run audit:passkey -- 9333 http://localhost:8091
 ```
+
+> 通行密钥审计必须使用与 `authn.passkey.rp_id` 匹配的浏览器来源（本机验收配置为 `localhost`，因此 baseURL 用 `http://localhost:8091`）；其余审计使用 `127.0.0.1` 不受影响。

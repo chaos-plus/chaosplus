@@ -320,6 +320,7 @@ await waitFor(
   `[...document.querySelectorAll("h2")].some((item) => item.textContent.trim() === ${JSON.stringify(roleName)})`
 )
 
+await waitFor(`document.querySelector("#role-data-scope")`)
 await click("#role-data-scope")
 const selectedDepartmentsOption = `[...document.querySelectorAll('[role="option"]')].find((item) => item.textContent.trim() === "指定部门")`
 await waitFor(selectedDepartmentsOption)
