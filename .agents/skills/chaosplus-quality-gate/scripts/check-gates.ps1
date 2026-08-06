@@ -182,6 +182,15 @@ if ($selected.backend) {
     if ($LASTEXITCODE -ne 0) { $failures.Add('gofmt failed.') }
     foreach ($file in $unformatted) { $failures.Add("Go file is not formatted: $file") }
     Invoke-NativeStep 'Go vet' $repoRoot 'go' @('vet', './...')
+    $golangciLint = Get-Command golangci-lint -ErrorAction SilentlyContinue
+    $lintCommand = if ($golangciLint) { $golangciLint.Source } else { '' }
+    if (-not $lintCommand) {
+        $goPath = (& go env GOPATH).Trim()
+        $candidate = Join-Path $goPath 'bin\golangci-lint.exe'
+        if (Test-Path $candidate) { $lintCommand = $candidate }
+    }
+    if ($lintCommand) { Invoke-NativeStep 'Go static analysis (golangci-lint)' $repoRoot $lintCommand @('run', './...') }
+    else { $failures.Add('golangci-lint is required for the backend gate.') }
     if ($Full) {
         $coverageDir = Join-Path $repoRoot '.local'
         New-Item -ItemType Directory -Force -Path $coverageDir | Out-Null

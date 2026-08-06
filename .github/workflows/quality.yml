@@ -48,6 +48,8 @@ jobs:
           ! rg -n --glob '*_test.go' --glob '*.test.ts' --glob '*.test.tsx' '(?i)\b(mock|fake|stub)\b|miniredis' .
       - name: Vet
         run: go vet ./...
+      - name: Static analysis (golangci-lint)
+        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8 run ./...
       - name: Race test and enforce coverage
         shell: bash
         run: |
