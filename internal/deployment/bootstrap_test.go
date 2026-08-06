@@ -359,6 +359,27 @@ func TestProvisionAndLoginRealDialect(t *testing.T) {
 	assert.Equal(t, "admin", claims.PreferredUsername)
 	assert.Equal(t, "admin@example.com", claims.Email)
 	assert.True(t, claims.EmailVerified)
+
+	// Token rotation: reconciling with a new password bumps the credential
+	// version and revokes the previous session and access token.
+	cookie := service.SessionCookie(token)
+	oldAccess, _, err := service.IssueAccessToken(context.Background(), principalID, "api", "openid profile")
+	require.NoError(t, err)
+	_, err = service.Authenticate(context.Background(), "Bearer "+oldAccess, "")
+	require.NoError(t, err)
+	_, err = authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{
+		LoginName: "admin", Password: "rotated horse battery staple", DisplayName: "System Admin", Email: "admin@example.com",
+	})
+	require.NoError(t, err)
+	_, err = service.Authenticate(context.Background(), "", cookie)
+	assert.ErrorIs(t, err, authnext.ErrInvalidSession)
+	_, err = service.Authenticate(context.Background(), "Bearer "+oldAccess, "")
+	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
+	rotated, _, err := service.Login(context.Background(), "admin", "rotated horse battery staple", "")
+	require.NoError(t, err)
+	claims, err = service.Authenticate(context.Background(), "", service.SessionCookie(rotated))
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.Subject)
 }
 
 func newDeploymentLifecycleDatabase(t *testing.T, dialect, adminDSN string) string {
