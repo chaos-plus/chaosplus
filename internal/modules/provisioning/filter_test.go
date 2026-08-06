@@ -115,7 +115,7 @@ func TestSCIMFilterDialectComparison(t *testing.T) {
 	if dialect == "" {
 		t.Skip("set IAM_DB_LIFECYCLE_TYPE and IAM_DB_LIFECYCLE_ADMIN_DSN to compare SCIM filtering on a real database")
 	}
-	env := newProvisioningEnvironmentWithDB(t, newProvisioningLifecycleDatabase(t, dialect, os.Getenv("IAM_DB_LIFECYCLE_ADMIN_DSN")))
+	env := newProvisioningEnvironmentWithDB(t, newProvisioningLifecycleDatabase(t, dialect, os.Getenv("IAM_DB_LIFECYCLE_ADMIN_DSN")), testProvisioningKey())
 	alice, err := env.service.CreateUser(t.Context(), env.auth, activeUserInput("ext-alice", "Alice", "alice@example.test"))
 	require.NoError(t, err)
 	_, err = env.service.CreateUser(t.Context(), env.auth, activeUserInput("ext-bob", "bob", "bob@example.test"))

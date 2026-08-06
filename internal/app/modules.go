@@ -84,7 +84,7 @@ func (app *App) buildModules() []any {
 			}
 			organizationModule := organization.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, iam.NewMembershipChecker(app.dbr.Write()), administratorGuard, nextID, app.authnWeb, createInvitedPrincipal)
 			mods = append(mods, organizationModule)
-			mods = append(mods, provisioning.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, nextID, identityService, organizationModule.ProvisioningGroups()))
+			mods = append(mods, provisioning.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, nextID, identityService, organizationModule.ProvisioningGroups(), app.cfg.Provisioning, app.provisioningKey))
 			mods = append(mods, governance.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, governance.RoleGrantStore{
 				Grant: iam.GrantTemporaryRole, Revoke: iam.RevokeTemporaryRole,
 				RemovePermanent: func(ctx context.Context, db bun.IDB, tenantID, roleID, principalID string, createdAt int64) (bool, error) {

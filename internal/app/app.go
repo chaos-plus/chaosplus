@@ -46,13 +46,14 @@ type App struct {
 	// phases (migrate/start/register/stop) are driven by the phase runners.
 	mods []any
 
-	authnRequest   authz.TokenVerifier
-	authnWeb       *authnmod.WebService
-	authzRegistrar *authz.Registrar
-	claimPlugins   *plugin.Claims
-	federationKey  []byte
-	rest           *http.Server
-	grpc           *grpc.Server
+	authnRequest    authz.TokenVerifier
+	authnWeb        *authnmod.WebService
+	authzRegistrar  *authz.Registrar
+	claimPlugins    *plugin.Claims
+	federationKey   []byte
+	provisioningKey []byte
+	rest            *http.Server
+	grpc            *grpc.Server
 
 	// ctx is the application's root context; cancel tears down background workers
 	// (e.g. geoip database refresh) during shutdown. Set in Run.

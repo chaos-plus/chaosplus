@@ -9,30 +9,32 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 	"github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
+	"github.com/chaos-plus/chaosplus/internal/modules/provisioning"
 )
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
 type Config struct {
-	Name        string                     `mapstructure:"name" description:"app name" default:""`
-	Debug       bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
-	Timezone    string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
-	WorkerLease int                        `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"3600"`
-	Log         Log                        `mapstructure:"log" group:"log"`
-	RestServer  RestServer                 `mapstructure:"rest" group:"rest"`
-	GrpcServer  GrpcServer                 `mapstructure:"grpc" group:"grpc"`
-	Redis       Redis                      `mapstructure:"redis" group:"redis"`
-	RateLimit   RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
-	Cors        Cors                       `mapstructure:"cors" group:"cors"`
-	Security    Security                   `mapstructure:"security" group:"security"`
-	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
-	Audit       audit.Config               `mapstructure:"audit" group:"audit"`
-	Federation  federation.Config          `mapstructure:"federation" group:"federation"`
-	Authz       Authz                      `mapstructure:"authz" group:"authz"`
-	Plugins     plugin.Config              `mapstructure:"plugins" group:"plugins"`
-	Migrations  Migrations                 `mapstructure:"migrations" group:"migrations"`
-	Bootstrap   BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
-	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
-	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+	Name         string                     `mapstructure:"name" description:"app name" default:""`
+	Debug        bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
+	Timezone     string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
+	WorkerLease  int                        `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"3600"`
+	Log          Log                        `mapstructure:"log" group:"log"`
+	RestServer   RestServer                 `mapstructure:"rest" group:"rest"`
+	GrpcServer   GrpcServer                 `mapstructure:"grpc" group:"grpc"`
+	Redis        Redis                      `mapstructure:"redis" group:"redis"`
+	RateLimit    RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
+	Cors         Cors                       `mapstructure:"cors" group:"cors"`
+	Security     Security                   `mapstructure:"security" group:"security"`
+	Authn        authn.Config               `mapstructure:"authn" group:"authn"`
+	Audit        audit.Config               `mapstructure:"audit" group:"audit"`
+	Federation   federation.Config          `mapstructure:"federation" group:"federation"`
+	Provisioning provisioning.Config        `mapstructure:"provisioning" group:"provisioning"`
+	Authz        Authz                      `mapstructure:"authz" group:"authz"`
+	Plugins      plugin.Config              `mapstructure:"plugins" group:"plugins"`
+	Migrations   Migrations                 `mapstructure:"migrations" group:"migrations"`
+	Bootstrap    BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
+	Database     map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
+	GeoIP        geoip.Config               `mapstructure:"geoip" group:"geoip"`
 }
 
 type Migrations struct {

@@ -1224,7 +1224,7 @@ SP registry 和证书轮换，并运行专门的互操作与 signature-wrapping 
 
 ### 16.3 SCIM 2.0
 
-当前入站 Service Provider 已实现，完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](scim-provisioning.md)。出站 SCIM client 仍未实现；上游 OIDC federation 与 JIT 预配已实现。
+当前入站 Service Provider 与出站 SCIM client 均已实现：完整接口、映射、事务和运维契约见 [SCIM 2.0 预配](scim-provisioning.md)。出站目标（`/iam/scim/targets`）支持创建/替换/删除、AES-GCM 加密的 Bearer token、`PUT` 推送用户与组（组内只包含已推送成员）及 `DELETE` 反预配（映射软删除、可重新推送恢复）；上游 OIDC federation 与 JIT 预配已实现。
 
 支持 `/scim/v2/Users`、`/Groups`、ServiceProviderConfig、Schemas、ResourceTypes：
 
@@ -1664,7 +1664,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 已实现租户成员邀请创建、列表、重发轮换、撤销和公开幂等接受；一次性 HMAC 凭据、默认部门/角色、事务 revision/audit、三方言迁移、三语错误、OpenAPI 和管理端桌面/移动工作流已闭环。邮件投递仍属于后续 notification 边界。
 - 已实现访问申请、四眼审批、临时角色授权、申请人放弃、审批人撤销、在线到期失效，以及直接/临时授权复核、最后管理员保护、三方言迁移、三语错误、OpenAPI、管理端与真实桌面/移动端流程；详见 [访问治理设计](access-governance.md)。
 - 套餐、资源属性 ABAC 和派生授权复核尚未实现。
-- 企业 OIDC/SAML federation、出站 SCIM client，以及归档保留和完整治理管理面。
+- 企业 SAML 2.0 IdP、归档保留和完整治理管理面。
 
 ### Phase 5：删除外部依赖（已完成）
 

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -23,12 +24,15 @@ type IDGenerator func() (string, error)
 type IdentityProvisioner interface {
 	CreateProvisionedTo(context.Context, bun.IDB, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
 	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
+	Get(context.Context, string, string) (identity.Principal, error)
 }
 
 type GroupProvisioner interface {
 	CreateProvisionedTo(context.Context, bun.IDB, string, organization.ProvisionedGroupInput) (organization.Group, error)
 	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, organization.ProvisionedGroupInput) (organization.Group, error)
 	DisableProvisionedTo(context.Context, bun.IDB, string, string) (organization.Group, error)
+	Get(context.Context, string, string) (organization.Group, error)
+	ListMembers(context.Context, string, string) ([]organization.GroupMember, error)
 }
 
 type Service struct {
@@ -38,14 +42,20 @@ type Service struct {
 	nextID   IDGenerator
 	identity IdentityProvisioner
 	groups   GroupProvisioner
+	key      []byte
+	http     *http.Client
 	now      func() time.Time
 }
 
-func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner) *Service {
+func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner, cfg Config, key []byte) *Service {
 	if db == nil || audit == nil || nextID == nil || identities == nil || groups == nil {
 		panic("provisioning service requires database, audit appender, id generator, identity provisioner, and group provisioner")
 	}
-	return &Service{db: db, repo: NewRepository(db), audit: audit, nextID: nextID, identity: identities, groups: groups, now: time.Now}
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return &Service{db: db, repo: NewRepository(db), audit: audit, nextID: nextID, identity: identities, groups: groups, key: key, http: &http.Client{Timeout: timeout}, now: time.Now}
 }
 
 func (s *Service) ListDirectories(ctx context.Context, tenantID string) ([]Directory, error) {
@@ -288,7 +298,7 @@ func firstError(err, fallback error) error {
 }
 
 func serviceErrorKind(err error) error {
-	for _, known := range []error{ErrInvalidDirectory, ErrDirectoryMissing, ErrDirectoryName, ErrDirectoryVersion, ErrCredentialMissing, ErrCredentialLimit, ErrUnauthorized, ErrResourceMissing, ErrResourceConflict, ErrResourceVersion, ErrInvalidSCIM, ErrInvalidFilter, ErrInvalidPath, ErrTooMany} {
+	for _, known := range []error{ErrInvalidDirectory, ErrDirectoryMissing, ErrDirectoryName, ErrDirectoryVersion, ErrCredentialMissing, ErrCredentialLimit, ErrUnauthorized, ErrResourceMissing, ErrResourceConflict, ErrResourceVersion, ErrInvalidSCIM, ErrInvalidFilter, ErrInvalidPath, ErrTooMany, ErrInvalidTarget, ErrTargetMissing, ErrTargetName, ErrTargetVersion, ErrTargetKeyMissing, ErrTargetDisabled, ErrDeprovisionMissing, ErrRemoteUnavailable, ErrRemoteResponse} {
 		if errors.Is(err, known) {
 			return known
 		}

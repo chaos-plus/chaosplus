@@ -31,10 +31,10 @@ func newProvisioningEnvironment(t *testing.T) provisioningEnvironment {
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	return newProvisioningEnvironmentWithDB(t, db)
+	return newProvisioningEnvironmentWithDB(t, db, testProvisioningKey())
 }
 
-func newProvisioningEnvironmentWithDB(t *testing.T, db *bun.DB) provisioningEnvironment {
+func newProvisioningEnvironmentWithDB(t *testing.T, db *bun.DB, key []byte) provisioningEnvironment {
 	t.Helper()
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	require.NoError(t, organization.Migrate(t.Context(), db))
@@ -52,7 +52,7 @@ func newProvisioningEnvironmentWithDB(t *testing.T, db *bun.DB) provisioningEnvi
 	guard := iam.NewAdministratorGuard()
 	identities := identity.NewService(db, appendAudit, guard)
 	groups := organization.NewGroupService(db, appendAudit, iam.NewMembershipChecker(db), guard, secureTestID)
-	service := NewService(db, appendAudit, secureTestID, identities, groups)
+	service := NewService(db, appendAudit, secureTestID, identities, groups, Config{}, key)
 	directory, err := service.CreateDirectory(t.Context(), "tenant-a", "Primary IdP")
 	require.NoError(t, err)
 	credential, err := service.CreateCredential(t.Context(), "tenant-a", directory.ID, "acceptance", nil)
@@ -60,6 +60,10 @@ func newProvisioningEnvironmentWithDB(t *testing.T, db *bun.DB) provisioningEnvi
 	auth, err := service.Authenticate(t.Context(), "Bearer "+credential.Token)
 	require.NoError(t, err)
 	return provisioningEnvironment{db: db, service: service, auth: auth, token: credential.Token}
+}
+
+func testProvisioningKey() []byte {
+	return []byte("0123456789abcdef0123456789abcdef")
 }
 
 func secureTestID() (string, error) {

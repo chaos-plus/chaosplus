@@ -37,7 +37,7 @@ func AssertMigrated(ctx context.Context, db *bun.DB) error {
 	if db == nil {
 		return fmt.Errorf("provisioning schema is not ready: missing database")
 	}
-	for _, table := range []string{"iam_scim_directories", "iam_scim_credentials", "iam_scim_resources"} {
+	for _, table := range []string{"iam_scim_directories", "iam_scim_credentials", "iam_scim_resources", "iam_scim_targets", "iam_scim_target_resources"} {
 		if _, err := db.NewSelect().Table(table).ColumnExpr("1").Limit(1).Exec(ctx); err != nil {
 			return fmt.Errorf("provisioning schema is not ready (%s): %w", table, err)
 		}

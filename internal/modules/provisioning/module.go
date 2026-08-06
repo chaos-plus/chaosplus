@@ -16,11 +16,11 @@ type Module struct {
 	declarationOnly bool
 }
 
-func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner) *Module {
+func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner, cfg Config, key []byte) *Module {
 	if db == nil || registrar == nil {
 		panic("provisioning module requires database and authorization registrar")
 	}
-	return &Module{service: NewService(db, audit, nextID, identities, groups), registrar: registrar, db: db}
+	return &Module{service: NewService(db, audit, nextID, identities, groups, cfg, key), registrar: registrar, db: db}
 }
 
 func NewDeclarationOnlyModule(registrar *authz.Registrar) *Module {
@@ -39,5 +39,6 @@ func (m *Module) Migrate(ctx context.Context) error {
 
 func (m *Module) RegisterREST(api huma.API) {
 	RegisterAdminREST(api, m.service, m.registrar)
+	RegisterTargetREST(api, m.service, m.registrar)
 	RegisterSCIMREST(api, m.service)
 }

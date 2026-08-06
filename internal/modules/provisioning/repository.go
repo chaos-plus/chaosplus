@@ -55,6 +55,32 @@ type resourceRow struct {
 	DeletedAt     int64
 }
 
+type targetRow struct {
+	bun.BaseModel         `bun:"table:iam_scim_targets,alias:target"`
+	ID                    string `bun:"id,pk"`
+	TenantID              string
+	Name                  string
+	NameKey               string
+	BaseURL               string
+	BearerTokenCiphertext string
+	Status                string
+	Version               int64
+	CreatedAt             int64
+	UpdatedAt             int64
+}
+
+type targetResourceRow struct {
+	bun.BaseModel `bun:"table:iam_scim_target_resources,alias:target_resource"`
+	TargetID      string `bun:"target_id,pk"`
+	ResourceType  string `bun:"resource_type,pk"`
+	ResourceID    string `bun:"resource_id,pk"`
+	ExternalID    string
+	Version       int64
+	CreatedAt     int64
+	UpdatedAt     int64
+	DeletedAt     int64
+}
+
 type userRecord struct {
 	resourceRow      `bun:",embed"`
 	LoginName        string `bun:"login_name"`
@@ -83,6 +109,99 @@ func NewRepository(db *bun.DB) *Repository {
 }
 
 func (r *Repository) withExecutor(db bun.IDB) *Repository { return &Repository{db: r.db, executor: db} }
+
+func (r *Repository) listTargets(ctx context.Context, tenantID string) ([]targetRow, error) {
+	rows := make([]targetRow, 0)
+	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name_key ASC", "id ASC").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("list SCIM targets: %w", err)
+	}
+	return rows, nil
+}
+
+func (r *Repository) getTarget(ctx context.Context, tenantID, id string) (targetRow, error) {
+	var row targetRow
+	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return row, ErrTargetMissing
+		}
+		return row, fmt.Errorf("get SCIM target: %w", err)
+	}
+	return row, nil
+}
+
+func (r *Repository) insertTarget(ctx context.Context, row *targetRow) error {
+	if _, err := r.executor.NewInsert().Model(row).Exec(ctx); err != nil {
+		if isUniqueViolation(err) {
+			return ErrTargetName
+		}
+		return fmt.Errorf("insert SCIM target: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) replaceTarget(ctx context.Context, row *targetRow, expectedVersion int64) error {
+	result, err := r.executor.NewUpdate().Model(row).Where("id = ? AND version = ?", row.ID, expectedVersion).Exec(ctx)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrTargetName
+		}
+		return fmt.Errorf("replace SCIM target: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("replace SCIM target: %w", err)
+	}
+	if affected == 0 {
+		return ErrTargetVersion
+	}
+	return nil
+}
+
+func (r *Repository) deleteTarget(ctx context.Context, id string) error {
+	if _, err := r.executor.NewDelete().Table("iam_scim_targets").Where("id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("delete SCIM target: %w", err)
+	}
+	return nil
+}
+
+// getTargetResource returns sql.ErrNoRows when no mapping exists yet; a
+// missing mapping is the normal first-push condition, not an error.
+func (r *Repository) getTargetResource(ctx context.Context, targetID, resourceType, resourceID string) (targetResourceRow, error) {
+	var row targetResourceRow
+	if err := r.executor.NewSelect().Model(&row).Where("target_id = ? AND resource_type = ? AND resource_id = ?", targetID, resourceType, resourceID).Scan(ctx); err != nil {
+		return row, err
+	}
+	return row, nil
+}
+
+func (r *Repository) upsertTargetResource(ctx context.Context, row *targetResourceRow) error {
+	existing, err := r.getTargetResource(ctx, row.TargetID, row.ResourceType, row.ResourceID)
+	switch {
+	case err == nil:
+		existing.ExternalID = row.ExternalID
+		existing.DeletedAt = 0
+		existing.Version++
+		existing.UpdatedAt = row.UpdatedAt
+		if _, err := r.executor.NewUpdate().Model(&existing).Where("target_id = ? AND resource_type = ? AND resource_id = ?", existing.TargetID, existing.ResourceType, existing.ResourceID).Exec(ctx); err != nil {
+			return fmt.Errorf("update SCIM target resource: %w", err)
+		}
+		*row = existing
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err := r.executor.NewInsert().Model(row).Exec(ctx); err != nil {
+			return fmt.Errorf("insert SCIM target resource: %w", err)
+		}
+	default:
+		return err
+	}
+	return nil
+}
+
+func (r *Repository) markTargetResourceDeleted(ctx context.Context, targetID, resourceType, resourceID string, at int64) error {
+	if _, err := r.executor.NewUpdate().Table("iam_scim_target_resources").Set("deleted_at = ?", at).Set("updated_at = ?", at).Where("target_id = ? AND resource_type = ? AND resource_id = ?", targetID, resourceType, resourceID).Exec(ctx); err != nil {
+		return fmt.Errorf("mark SCIM target resource deleted: %w", err)
+	}
+	return nil
+}
 
 func (r *Repository) listDirectories(ctx context.Context, tenantID string) ([]directoryRow, error) {
 	rows := make([]directoryRow, 0)

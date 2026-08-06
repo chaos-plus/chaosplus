@@ -112,6 +112,11 @@ func (app *App) Bootstrap() error {
 		}
 		app.federationKey = key
 	}
+	provisioningKey, err := provisioning.ResolveEncryptionKey(app.cfg.Provisioning)
+	if err != nil {
+		return fmt.Errorf("init provisioning: %w", err)
+	}
+	app.provisioningKey = provisioningKey
 
 	// build modules, then run the migrate and start phases in order.
 	app.mods = app.buildModules()

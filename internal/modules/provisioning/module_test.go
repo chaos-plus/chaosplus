@@ -19,6 +19,7 @@ func TestProvisioningModuleDeclaresManagementAndProtocolOperations(t *testing.T)
 
 	for _, path := range []string{
 		"/iam/scim/directories", "/iam/scim/directories/{directory_id}/credentials",
+		"/iam/scim/targets", "/iam/scim/targets/{target_id}", "/iam/scim/targets/{target_id}/push", "/iam/scim/targets/{target_id}/deprovision",
 		"/scim/v2/Users", "/scim/v2/Users/{id}", "/scim/v2/Groups", "/scim/v2/Groups/{id}",
 		"/scim/v2/Bulk", "/scim/v2/ServiceProviderConfig", "/scim/v2/Schemas", "/scim/v2/ResourceTypes",
 	} {
@@ -35,13 +36,13 @@ func TestProvisioningModuleDeclaresManagementAndProtocolOperations(t *testing.T)
 func TestProvisioningRuntimeModuleUsesRealServices(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	registrar := authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())
-	module := NewModule(env.db, registrar, env.service.audit, env.service.nextID, env.service.identity, env.service.groups)
+	module := NewModule(env.db, registrar, env.service.audit, env.service.nextID, env.service.identity, env.service.groups, Config{}, testProvisioningKey())
 	require.NoError(t, module.Migrate(t.Context()))
 	_, api := humatest.New(t)
 	module.RegisterREST(api)
 	assert.Contains(t, api.OpenAPI().Paths, "/scim/v2/Users")
 	assert.Panics(t, func() {
-		NewModule(nil, registrar, env.service.audit, env.service.nextID, env.service.identity, env.service.groups)
+		NewModule(nil, registrar, env.service.audit, env.service.nextID, env.service.identity, env.service.groups, Config{}, testProvisioningKey())
 	})
 	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
 }

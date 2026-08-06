@@ -111,6 +111,24 @@ func provisioningError(err error) error {
 		return huma.Error404NotFound("scim_credential_not_found")
 	case errors.Is(err, ErrCredentialLimit):
 		return huma.Error409Conflict("scim_credential_limit")
+	case errors.Is(err, ErrInvalidTarget):
+		return huma.Error422UnprocessableEntity("invalid_scim_target")
+	case errors.Is(err, ErrTargetMissing):
+		return huma.Error404NotFound("scim_target_not_found")
+	case errors.Is(err, ErrTargetName):
+		return huma.Error409Conflict("scim_target_name_exists")
+	case errors.Is(err, ErrTargetVersion):
+		return huma.Error409Conflict("scim_target_version_conflict")
+	case errors.Is(err, ErrTargetKeyMissing):
+		return huma.Error422UnprocessableEntity("scim_target_key_missing")
+	case errors.Is(err, ErrTargetDisabled):
+		return huma.Error409Conflict("scim_target_disabled")
+	case errors.Is(err, ErrDeprovisionMissing):
+		return huma.Error404NotFound("scim_target_resource_not_mapped")
+	case errors.Is(err, ErrResourceMissing):
+		return huma.Error404NotFound("scim_resource_not_found")
+	case errors.Is(err, ErrRemoteUnavailable), errors.Is(err, ErrRemoteResponse):
+		return huma.Error502BadGateway("scim_target_remote_failed")
 	default:
 		return huma.Error500InternalServerError("provisioning_unavailable")
 	}

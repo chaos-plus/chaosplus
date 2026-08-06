@@ -16,5 +16,13 @@
   "scim_last_tenant_administrator": "Perubahan SCIM ini akan membuang atau menyahdayakan pentadbir penyewa aktif yang terakhir. Tetapkan pentadbir aktif lain terlebih dahulu.",
   "scim_too_many": "Permintaan SCIM melebihi had item, hasil, operasi atau saiz badan yang disokong.",
   "scim_bulk_failed": "Permintaan Bulk SCIM mencapai ambang kegagalan yang ditetapkan; operasi selebihnya tidak dilaksanakan.",
-  "scim_operation_failed": "Perubahan peruntukan tidak dapat diselesaikan tanpa melanggar invarian IAM."
+  "scim_operation_failed": "Perubahan peruntukan tidak dapat diselesaikan tanpa melanggar invarian IAM.",
+  "invalid_scim_target": "Data sasaran SCIM tidak sah. Semak nama, URL, token pembawa, status dan versi.",
+  "scim_target_not_found": "Sasaran SCIM keluar tidak dijumpai dalam penyewa ini. Muat semula senarai sasaran dan pilih sasaran sedia ada.",
+  "scim_target_name_exists": "Sasaran SCIM keluar dengan nama ini sudah wujud dalam penyewa. Pilih nama lain.",
+  "scim_target_version_conflict": "Sasaran SCIM telah diubah oleh permintaan lain. Muat semula dan cuba lagi.",
+  "scim_target_key_missing": "Peruntukan SCIM keluar belum dikonfigurasi: tetapkan kunci penyulitan peruntukan (provisioning.encryption_key) dahulu.",
+  "scim_target_disabled": "Sasaran SCIM dilumpuhkan. Dayakan dahulu sebelum menolak atau mengeluarkan sumber.",
+  "scim_target_resource_not_mapped": "Sumber ini tiada pemetaan aktif pada sasaran SCIM. Tolak dahulu sebelum mengeluarkannya.",
+  "scim_target_remote_failed": "Pembekal SCIM jauh tidak dapat melengkapkan permintaan. Semak URL sasaran, token pembawa dan status pembekal."
 }

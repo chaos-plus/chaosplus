@@ -16,5 +16,13 @@
   "scim_last_tenant_administrator": "This SCIM change would remove or disable the last active tenant administrator. Assign another active administrator first.",
   "scim_too_many": "The SCIM request exceeds the supported item, result, operation, or body-size limit.",
   "scim_bulk_failed": "The SCIM Bulk request reached its requested failure threshold; remaining operations were not executed.",
-  "scim_operation_failed": "The provisioning change could not be completed without violating an IAM invariant."
+  "scim_operation_failed": "The provisioning change could not be completed without violating an IAM invariant.",
+  "invalid_scim_target": "The SCIM target data is invalid. Check its name, URL, bearer token, status, and version.",
+  "scim_target_not_found": "The requested outbound SCIM target was not found in this tenant. Refresh the target list and choose an existing target.",
+  "scim_target_name_exists": "An outbound SCIM target with this name already exists in the tenant. Choose a different name.",
+  "scim_target_version_conflict": "The SCIM target was changed by another request. Reload it and try again.",
+  "scim_target_key_missing": "Outbound SCIM provisioning is not configured: set the provisioning encryption key (provisioning.encryption_key) first.",
+  "scim_target_disabled": "The SCIM target is disabled. Enable it before pushing or removing resources.",
+  "scim_target_resource_not_mapped": "This resource has no active mapping on the SCIM target. Push it first before removing it.",
+  "scim_target_remote_failed": "The remote SCIM provider could not complete the request. Check the target URL, bearer token, and provider status."
 }

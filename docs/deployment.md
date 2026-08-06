@@ -59,6 +59,17 @@ curl -H 'Authorization: Bearer scim_example.replace-with-one-time-secret' \
 
 生产代理必须原样转发 `Authorization`、`Content-Type`、`Accept-Language`、`If-Match` 和 `ETag`，并允许 `application/scim+json`。定期检查凭据 `last_used_at`，先创建并切换新凭据，再撤销旧凭据；停用目录会一次性拒绝其全部凭据。完整协议和回滚边界见 [SCIM 2.0 预配](scim-provisioning.md)。
 
+### 出站 SCIM 目标（可选）
+
+出站预配把本地用户/组同步到下游 SCIM 服务商，需要先配置 `provisioning.encryption_key`（base64 编码的 32 字节密钥，可用 `openssl rand -base64 32` 生成，或通过 `provisioning.encryption_key_file` 指向密钥文件）。未配置密钥时创建目标会直接失败，不影响其他功能。
+
+```yaml
+provisioning:
+  encryption_key_file: /run/secrets/provisioning_key
+```
+
+管理员在 `/iam/scim-targets` 创建目标（名称、Base URL、Bearer token），token 仅创建时展示一次并以 AES-GCM 加密存储。通过 `POST /iam/scim/targets/{id}/push` 推送用户/组（首次 PUT 使用本地资源 id，远端返回的 id 会记入映射供后续复用），通过 `POST /iam/scim/targets/{id}/deprovision` 删除远端资源并软删除映射；重新推送会恢复映射。推送到组的成员只包含已推送到同一目标的用户。
+
 ### 服务账号凭据
 
 服务账号凭据不写入配置文件。管理员在 `/iam/service-accounts` 创建凭据后，必须在一次性对话框关闭前把 client ID
