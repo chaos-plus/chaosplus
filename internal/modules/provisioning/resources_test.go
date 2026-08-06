@@ -31,6 +31,11 @@ func newProvisioningEnvironment(t *testing.T) provisioningEnvironment {
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return newProvisioningEnvironmentWithDB(t, db)
+}
+
+func newProvisioningEnvironmentWithDB(t *testing.T, db *bun.DB) provisioningEnvironment {
+	t.Helper()
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	require.NoError(t, organization.Migrate(t.Context(), db))
 	require.NoError(t, Migrate(t.Context(), db))

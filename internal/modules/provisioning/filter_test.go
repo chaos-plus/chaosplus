@@ -1,6 +1,7 @@
 package provisioning
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -108,4 +109,35 @@ func TestSCIMComparisonUsesDialectAndTimestamp(t *testing.T) {
 	assert.Equal(t, []any{"principal-1"}, args)
 	_, _, err = compileMemberFilter(scimfilter.EQ, true)
 	assert.ErrorIs(t, err, ErrInvalidFilter)
+}
+func TestSCIMFilterDialectComparison(t *testing.T) {
+	dialect := os.Getenv("IAM_DB_LIFECYCLE_TYPE")
+	if dialect == "" {
+		t.Skip("set IAM_DB_LIFECYCLE_TYPE and IAM_DB_LIFECYCLE_ADMIN_DSN to compare SCIM filtering on a real database")
+	}
+	env := newProvisioningEnvironmentWithDB(t, newProvisioningLifecycleDatabase(t, dialect, os.Getenv("IAM_DB_LIFECYCLE_ADMIN_DSN")))
+	alice, err := env.service.CreateUser(t.Context(), env.auth, activeUserInput("ext-alice", "Alice", "alice@example.test"))
+	require.NoError(t, err)
+	_, err = env.service.CreateUser(t.Context(), env.auth, activeUserInput("ext-bob", "bob", "bob@example.test"))
+	require.NoError(t, err)
+
+	startswith, err := normalizeListRequest(`userName sw "ali" and active eq true`, 1, 20)
+	require.NoError(t, err)
+	users, err := env.service.ListUsers(t.Context(), env.auth, startswith)
+	require.NoError(t, err)
+	require.Len(t, users.Resources, 1)
+	assert.Equal(t, alice.ID, users.Resources[0].ID)
+
+	contains, err := normalizeListRequest(`emails[value co "@example.test"]`, 1, 20)
+	require.NoError(t, err)
+	users, err = env.service.ListUsers(t.Context(), env.auth, contains)
+	require.NoError(t, err)
+	require.Len(t, users.Resources, 2)
+
+	exact, err := normalizeListRequest(`userName eq "bob"`, 1, 20)
+	require.NoError(t, err)
+	users, err = env.service.ListUsers(t.Context(), env.auth, exact)
+	require.NoError(t, err)
+	require.Len(t, users.Resources, 1)
+	assert.Equal(t, "bob", users.Resources[0].UserName)
 }
