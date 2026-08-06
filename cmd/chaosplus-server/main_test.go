@@ -108,3 +108,8 @@ func TestMigrationCommandsWithRealSQLite(t *testing.T) {
 	require.NoError(t, iam.AssertMigrated(t.Context(), db))
 	require.NoError(t, organization.AssertMigrated(t.Context(), db))
 }
+
+func TestExecuteSurfacesParseAndCommandErrors(t *testing.T) {
+	assert.Error(t, Execute("--definitely-not-a-flag"))
+	assert.Error(t, Execute("config", "validate", "--config", filepath.Join(t.TempDir(), "missing.yaml")))
+}

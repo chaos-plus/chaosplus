@@ -193,3 +193,11 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Root cause: The archive entry was copied directly to its final database path without an extracted-size limit or cleanup after failure.
 - Prevention: Bound extraction by policy, write private files, close writers explicitly, and remove partial outputs on copy, close, or size failure.
 - Evidence: The real ZIP regression test rejected an oversized database and verified no partial file remained; pkg/geoip/providers race tests and the full repository quality gate passed.
+
+
+## L-7d555a7dcce6
+
+- Symptom: MySQL migration fails on fresh DB with FK errno 3780 and index errno 1071
+- Root cause: role_id/subject_id widths diverged across tables (VARCHAR(32) vs 64/255) and MySQL tables lacked a uniform COLLATE, so implicit collation mismatches broke FK creation and utf8mb4 index bytes exceeded 3072
+- Prevention: Keep referenced id columns byte-identical in width and collation across all dialect migrations; cap indexed varchar columns at 128 for utf8mb4; declare ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci on every MySQL table
+- Evidence: IAM and provisioning Test*MigrationDialectLifecycle pass on real MySQL 8.0.42 (go test -race, count=1) after collation normalization

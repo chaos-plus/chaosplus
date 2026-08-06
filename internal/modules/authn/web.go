@@ -289,10 +289,10 @@ func (s *WebService) Authenticate(ctx context.Context, authorization, cookieHead
 	}
 	now := s.now().UTC()
 	var session sessionRow
-	err = s.db.NewSelect().Model(&session).
+		err = s.db.NewSelect().Model(&session).
 		Where("id_hash = ? AND revoked_at = 0 AND expires_at > ? AND absolute_expires_at > ?", tokenHash(token), now.UnixMilli(), now.UnixMilli()).
 		Scan(ctx)
-	if err != nil {
+if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: load session: %v", authnext.ErrUnavailable, err)
 		}
@@ -606,6 +606,36 @@ func (s *WebService) ClearCookie() string {
 	return (&http.Cookie{Name: s.web.CookieName, Path: "/", HttpOnly: true, Secure: s.web.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: -1}).String()
 }
 
+// CreateSession issues a new opaque browser session for a principal after an
+// authentication event outside the password flow (for example federation). The
+// assurance record becomes the session's ACR/AMR and authentication time.
+func (s *WebService) CreateSession(ctx context.Context, principalID string, now time.Time, assurance authnext.Assurance) (string, error) {
+	if !s.Enabled() || s.db == nil {
+		return "", authnext.ErrDisabled
+	}
+	return s.insertSession(ctx, s.db, principalID, now, assurance)
+}
+
+// ResolveReturnURL validates a browser return URL against the configured
+// allowlist, defaulting to the post-login URL when the caller does not supply
+// one.
+func (s *WebService) ResolveReturnURL(returnURL string) (string, error) {
+	if !s.Enabled() {
+		return "", authnext.ErrDisabled
+	}
+	returnURL = strings.TrimSpace(returnURL)
+	if returnURL == "" {
+		returnURL = s.web.PostLoginURL
+	}
+	if !slices.Contains(s.web.AllowedReturnURLs, returnURL) {
+		return "", authnext.ErrReturnURL
+	}
+	return returnURL, nil
+}
+
+// CookieSecure reports whether browser cookies must carry the Secure attribute.
+func (s *WebService) CookieSecure() bool { return s.web.CookieSecure }
+
 func (s *WebService) PostLogoutURL() string { return s.web.PostLogoutURL }
 
 func (s *WebService) IssueAccessToken(ctx context.Context, principalID, audience, scope string) (string, int64, error) {
@@ -842,8 +872,8 @@ func (s *WebService) verifySubjectState(ctx context.Context, claims *authnext.Cl
 			CredentialVersion int64  `bun:"credential_version"`
 		}
 		err := s.db.NewSelect().TableExpr("iam_principals AS principal").
-			ColumnExpr("principal.status AS status, credential.credential_version AS credential_version").
-			Join("JOIN iam_credentials AS credential ON credential.principal_id = principal.id").
+			ColumnExpr("principal.status AS status, COALESCE(credential.credential_version, 0) AS credential_version").
+			Join("LEFT JOIN iam_credentials AS credential ON credential.principal_id = principal.id").
 			Where("principal.id = ?", claims.Subject).Scan(ctx, &state)
 		if errors.Is(err, sql.ErrNoRows) || err == nil && (state.Status != "active" || state.CredentialVersion != claims.CredentialVersion) {
 			return authnext.ErrInvalidToken
@@ -918,7 +948,8 @@ func (s *WebService) claims(ctx context.Context, principalID string) (*authnext.
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: load credential version: %v", authnext.ErrUnavailable, err)
 		}
-		return nil, ErrInvalidSession
+		// External principals (federation, directory provisioning) have no
+		// local credential; their sessions still carry credential version zero.
 	}
 	return &authnext.Claims{Issuer: s.cfg.Issuer, Subject: principal.ID, SubjectType: authnext.SubjectTypePrincipal, PreferredUsername: principal.LoginName, Email: principal.Email, EmailVerified: principal.EmailVerified, CredentialVersion: credentialVersion}, nil
 }

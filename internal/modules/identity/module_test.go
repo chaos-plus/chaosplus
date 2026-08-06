@@ -25,4 +25,5 @@ func TestModuleRegistersIdentityOperations(t *testing.T) {
 	assert.Panics(t, func() { NewModule(db, nil, newIdentityAuditAppender(db), iam.NewAdministratorGuard()) })
 	assert.Panics(t, func() { NewModule(db, registrar, nil, iam.NewAdministratorGuard()) })
 	assert.Panics(t, func() { NewModule(db, registrar, newIdentityAuditAppender(db), nil) })
+	assert.Panics(t, func() { NewModuleWithService(nil, nil) })
 }

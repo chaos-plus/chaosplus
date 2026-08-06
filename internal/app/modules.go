@@ -15,6 +15,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/audit"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/governance"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
@@ -25,7 +26,7 @@ import (
 
 // buildModules is the composition root: the single place that constructs the
 // application's modules and their dependencies, in registration order. Adding a
-// feature means adding a module here — nothing else in the app changes.
+// feature means adding a module here - nothing else in the app changes.
 func (app *App) buildModules() []any {
 	mods := make([]any, 0, 9)
 
@@ -54,6 +55,7 @@ func (app *App) buildModules() []any {
 			mods = append(mods, organization.NewDeclarationOnlyModule(app.authzRegistrar))
 			mods = append(mods, provisioning.NewDeclarationOnlyModule(app.authzRegistrar))
 			mods = append(mods, governance.NewDeclarationOnlyModule(app.authzRegistrar))
+			mods = append(mods, federation.NewDeclarationOnlyModule(app.authzRegistrar))
 		} else {
 			auditTrail := audit.NewService(app.dbr.Write())
 			appendAudit := auditAppender(auditTrail)
@@ -94,6 +96,9 @@ func (app *App) buildModules() []any {
 				},
 			}, nextID))
 			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar))
+			if app.cfg.Federation.Enabled && app.authnWeb != nil {
+				mods = append(mods, federation.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, identityService, app.authnWeb, app.cfg.Federation, app.federationKey))
+			}
 		}
 	} else {
 		slog.Warn("authorization stack disabled; skipping iam management API")

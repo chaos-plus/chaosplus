@@ -7,6 +7,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 )
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
@@ -23,6 +24,7 @@ type Config struct {
 	Cors        Cors                       `mapstructure:"cors" group:"cors"`
 	Security    Security                   `mapstructure:"security" group:"security"`
 	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
+	Federation  federation.Config          `mapstructure:"federation" group:"federation"`
 	Authz       Authz                      `mapstructure:"authz" group:"authz"`
 	Plugins     plugin.Config              `mapstructure:"plugins" group:"plugins"`
 	Migrations  Migrations                 `mapstructure:"migrations" group:"migrations"`
@@ -76,9 +78,9 @@ type Security struct {
 
 // Redis configures the shared Redis client, supporting standalone, sentinel, and
 // cluster deployments via go-redis's universal client:
-//   - one Addrs entry, no MasterName     → standalone
-//   - MasterName set (Addrs = sentinels) → sentinel / failover
-//   - multiple Addrs, no MasterName      → cluster
+//   - one Addrs entry, no MasterName     -> standalone
+//   - MasterName set (Addrs = sentinels) -> sentinel / failover
+//   - multiple Addrs, no MasterName      -> cluster
 //
 // Empty Addrs disables Redis (and therefore rate limiting).
 type Redis struct {

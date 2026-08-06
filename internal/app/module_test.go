@@ -12,6 +12,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/governance"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
@@ -52,7 +53,7 @@ func TestBuildModules(t *testing.T) {
 
 	application = &App{authzRegistrar: authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())}
 	modules = application.buildModules()
-	require.Len(t, modules, 6)
+	require.Len(t, modules, 7)
 	_, isAudit := modules[0].(*audit.Module)
 	assert.True(t, isAudit)
 	_, isIAM := modules[1].(*iam.Module)
@@ -63,6 +64,8 @@ func TestBuildModules(t *testing.T) {
 	assert.True(t, isProvisioning)
 	_, isGovernance := modules[4].(*governance.Module)
 	assert.True(t, isGovernance)
+	_, isFederation := modules[5].(*federation.Module)
+	assert.True(t, isFederation)
 
 	claims := &plugin.Claims{}
 	application = &App{claimPlugins: claims}

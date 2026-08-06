@@ -223,6 +223,10 @@ func DefaultActions() []Action {
 		{Resource: "oauth_client", Verb: "view", Scope: "tenant", Summary: "view OAuth clients", Menu: true},
 		{Resource: "oauth_client", Verb: "update", Scope: "tenant", Summary: "rotate OAuth client credentials"},
 		{Resource: "oauth_client", Verb: "delete", Scope: "tenant", Summary: "delete OAuth clients"},
+		{Resource: "identity_provider", Verb: "create", Scope: "tenant", Summary: "create identity providers"},
+		{Resource: "identity_provider", Verb: "view", Scope: "tenant", Summary: "view identity providers", Menu: true},
+		{Resource: "identity_provider", Verb: "update", Scope: "tenant", Summary: "update identity providers"},
+		{Resource: "identity_provider", Verb: "delete", Scope: "tenant", Summary: "delete identity providers"},
 
 		{Resource: "access_request", Verb: "view", Scope: "tenant", Summary: "view tenant access requests", Menu: true},
 		{Resource: "access_request", Verb: "approve", Scope: "tenant", Summary: "approve, reject, and revoke temporary access"},

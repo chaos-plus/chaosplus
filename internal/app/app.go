@@ -49,6 +49,7 @@ type App struct {
 	authnWeb       *authnmod.WebService
 	authzRegistrar *authz.Registrar
 	claimPlugins   *plugin.Claims
+	federationKey  []byte
 	rest           *http.Server
 	grpc           *grpc.Server
 

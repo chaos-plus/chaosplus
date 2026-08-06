@@ -18,9 +18,10 @@ import (
 )
 
 var (
-	ErrInvalid       = errors.New("invalid principal")
-	ErrNotFound      = errors.New("principal not found")
-	ErrLoginConflict = errors.New("login name already exists")
+	ErrInvalid           = errors.New("invalid principal")
+	ErrNotFound          = errors.New("principal not found")
+	ErrLoginConflict     = errors.New("login name already exists")
+	ErrPrincipalInactive = errors.New("principal or tenant membership is not active")
 )
 
 type AdministratorGuard interface {
@@ -229,6 +230,112 @@ func CreatePendingPrincipal(ctx context.Context, db bun.IDB, email, passwordHash
 		return "", fmt.Errorf("insert pending credential: %w", err)
 	}
 	return id, nil
+}
+
+// EnsureExternalPrincipal returns the global principal for an externally
+// verified identity, creating it (plus tenant membership) when missing. The
+// write runs inside a caller-owned transaction; no audit event is emitted so
+// the caller can describe the triggering flow. External principals never get
+// local credentials and always start with a verified email.
+func (s *Service) EnsureExternalPrincipal(ctx context.Context, db bun.IDB, tenantID, email, displayName string, now time.Time) (string, bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	email = strings.ToLower(strings.TrimSpace(email))
+	displayName = strings.TrimSpace(displayName)
+	parsed, err := mail.ParseAddress(email)
+	if db == nil || tenantID == "" || len(tenantID) > 128 || err != nil || !strings.EqualFold(parsed.Address, email) || len(email) > 320 || len(displayName) > 128 {
+		return "", false, ErrInvalid
+	}
+	if displayName == "" {
+		displayName = email
+	}
+	timestamp := now.UTC().UnixMilli()
+	row, err := principalByLoginOrEmail(ctx, db, email)
+	if err != nil {
+		return "", false, err
+	}
+	if row != nil {
+		if row.Status != "active" {
+			return "", false, ErrPrincipalInactive
+		}
+		if err := ensureTenantMember(ctx, db, s.dialect, tenantID, *row, timestamp); err != nil {
+			return "", false, err
+		}
+		return row.ID, false, nil
+	}
+	id, err := randomID()
+	if err != nil {
+		return "", false, err
+	}
+	principal := principalRow{ID: id, LoginName: email, Email: email, EmailVerified: true, DisplayName: displayName, Status: "active", CreatedAt: timestamp, UpdatedAt: timestamp}
+	if _, err := db.NewInsert().Model(&principal).Exec(ctx); err != nil {
+		if isUnique(err) {
+			// A concurrent login created the principal first; reuse it.
+			row, err := principalByLoginOrEmail(ctx, db, email)
+			if err != nil {
+				return "", false, err
+			}
+			if row == nil || row.Status != "active" {
+				return "", false, ErrPrincipalInactive
+			}
+			if err := ensureTenantMember(ctx, db, s.dialect, tenantID, *row, timestamp); err != nil {
+				return "", false, err
+			}
+			return row.ID, false, nil
+		}
+		return "", false, fmt.Errorf("insert external principal: %w", err)
+	}
+	member := tenantMemberRow{TenantID: tenantID, UserSubject: id, DisplayName: displayName, Email: email, Status: "active", CreatedAt: timestamp, UpdatedAt: timestamp}
+	if _, err := db.NewInsert().Model(&member).Exec(ctx); err != nil {
+		return "", false, fmt.Errorf("insert external membership: %w", err)
+	}
+	if err := policyx.Advance(ctx, db, s.dialect, tenantID, timestamp); err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+func principalByLoginOrEmail(ctx context.Context, db bun.IDB, email string) (*principalRow, error) {
+	var row principalRow
+	err := db.NewSelect().Model(&row).Where("login_name = ?", email).Scan(ctx)
+	if err == nil {
+		return &row, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("find external principal: %w", err)
+	}
+	err = db.NewSelect().Model(&row).Where("email = ?", email).Order("created_at ASC", "id ASC").Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find external principal: %w", err)
+	}
+	return &row, nil
+}
+
+func ensureTenantMember(ctx context.Context, db bun.IDB, dialect, tenantID string, principal principalRow, timestamp int64) error {
+	exists, err := db.NewSelect().Table("iam_tenant_members").Where("tenant_id = ? AND user_subject = ?", tenantID, principal.ID).Exists(ctx)
+	if err != nil {
+		return fmt.Errorf("check external membership: %w", err)
+	}
+	if exists {
+		var status string
+		if err := db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND user_subject = ?", tenantID, principal.ID).Scan(ctx, &status); err != nil {
+			return fmt.Errorf("read external membership: %w", err)
+		}
+		if status != "active" {
+			return ErrPrincipalInactive
+		}
+		return nil
+	}
+	member := tenantMemberRow{TenantID: tenantID, UserSubject: principal.ID, DisplayName: principal.DisplayName, Email: principal.Email, Status: "active", CreatedAt: timestamp, UpdatedAt: timestamp}
+	if _, err := db.NewInsert().Model(&member).Exec(ctx); err != nil {
+		return fmt.Errorf("insert external membership: %w", err)
+	}
+	if err := policyx.Advance(ctx, db, dialect, tenantID, timestamp); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) List(ctx context.Context, tenantID, search string, limit, offset int) ([]Principal, int64, error) {

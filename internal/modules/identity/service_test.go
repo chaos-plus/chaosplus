@@ -548,3 +548,114 @@ func newIdentityAuditAppender(db *bun.DB) auditx.Appender {
 		return err
 	}
 }
+
+func TestEnsureExternalPrincipalJIT(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	service := newIdentityService(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	id, created, err := service.EnsureExternalPrincipal(ctx, db, "tenant-a", "EXT@example.com", "External User", now)
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.NotEmpty(t, id)
+	count, err := db.NewSelect().Table("iam_principals").Where("id = ?", id).Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	count, err = db.NewSelect().Table("iam_tenant_members").Where("tenant_id = ? AND user_subject = ?", "tenant-a", id).Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	same, created, err := service.EnsureExternalPrincipal(ctx, db, "tenant-a", "ext@example.com", "External User", now)
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, id, same)
+
+	local, err := service.Create(ctx, "tenant-a", "local", "correct horse battery staple", "Local", "local@example.com")
+	require.NoError(t, err)
+	same, created, err = service.EnsureExternalPrincipal(ctx, db, "tenant-b", "local@example.com", "Local", now)
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, local.ID, same)
+	count, err = db.NewSelect().Table("iam_tenant_members").Where("tenant_id = ? AND user_subject = ?", "tenant-b", local.ID).Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	disabled, err := service.Create(ctx, "tenant-a", "ghost", "correct horse battery staple", "Ghost", "ghost@example.com")
+	require.NoError(t, err)
+	_, err = db.NewUpdate().Table("iam_principals").Set("status = ?", "disabled").Where("id = ?", disabled.ID).Exec(ctx)
+	require.NoError(t, err)
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "tenant-b", "ghost@example.com", "Ghost", now)
+	assert.ErrorIs(t, err, ErrPrincipalInactive)
+
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "", "ext@example.com", "X", now)
+	assert.ErrorIs(t, err, ErrInvalid)
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "tenant-a", "not-an-email", "X", now)
+	assert.ErrorIs(t, err, ErrInvalid)
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "tenant-a", "ext@example.com", strings.Repeat("x", 129), now)
+	assert.ErrorIs(t, err, ErrInvalid)
+}
+
+func TestCreateInvitedPrincipalValidation(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	service := newIdentityService(db)
+	ctx := context.Background()
+
+	_, err = service.CreateInvitedPrincipal(ctx, db, "tenant-a", "bob", "correct horse battery staple", "Bob", "not-an-email")
+	assert.ErrorIs(t, err, ErrInvalid)
+	_, err = service.CreateInvitedPrincipal(ctx, db, "tenant-a", "bob", "short", "Bob", "bob@example.com")
+	assert.ErrorIs(t, err, ErrInvalid)
+	id, err := service.CreateInvitedPrincipal(ctx, db, "tenant-a", "bob", "correct horse battery staple", "Bob", "bob@example.com")
+	require.NoError(t, err)
+	assert.NotEmpty(t, id)
+	_, err = service.CreateInvitedPrincipal(ctx, db, "tenant-a", "bob", "correct horse battery staple", "Bob", "bob@example.com")
+	assert.ErrorIs(t, err, ErrLoginConflict)
+}
+
+func TestEnsureExternalPrincipalBranches(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	service := newIdentityService(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// A principal whose login name equals the lookup email is matched directly.
+	direct, err := service.Create(ctx, "tenant-a", "loginmatch@example.com", "correct horse battery staple", "Login Match", "other@example.com")
+	require.NoError(t, err)
+	matched, created, err := service.EnsureExternalPrincipal(ctx, db, "tenant-b", "loginmatch@example.com", "Login Match", now)
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, direct.ID, matched)
+
+	// An existing but disabled tenant membership blocks reuse.
+	local, err := service.Create(ctx, "tenant-a", "local", "correct horse battery staple", "Local", "local@example.com")
+	require.NoError(t, err)
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "tenant-b", "local@example.com", "Local", now)
+	require.NoError(t, err)
+	_, err = db.NewUpdate().Table("iam_tenant_members").Set("status = ?", "disabled").Where("tenant_id = ? AND user_subject = ?", "tenant-b", local.ID).Exec(ctx)
+	require.NoError(t, err)
+	_, _, err = service.EnsureExternalPrincipal(ctx, db, "tenant-b", "local@example.com", "Local", now)
+	assert.ErrorIs(t, err, ErrPrincipalInactive)
+}
+
+func TestCreateInvitedPrincipalRejectsDisplayedEmail(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	service := newIdentityService(db)
+	_, err = service.CreateInvitedPrincipal(t.Context(), db, "tenant-a", "carol", "correct horse battery staple", "Carol", "Carol Example <carol@example.com>")
+	assert.ErrorIs(t, err, ErrInvalid)
+}

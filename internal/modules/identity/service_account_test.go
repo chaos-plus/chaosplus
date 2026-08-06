@@ -375,3 +375,27 @@ func exchangeServiceAccountTokenResponse(api humatest.TestAPI, id, secret, scope
 }
 
 func fmtInt(value int64) string { return strconv.FormatInt(value, 10) }
+
+func TestServiceAccountSurfacesDatabaseErrors(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, iam.Migrate(t.Context(), db))
+	require.NoError(t, organization.Migrate(t.Context(), db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), db, "tenant"))
+	service := newIdentityService(db)
+	require.NoError(t, db.Close())
+
+	_, err = service.CreateServiceAccount(t.Context(), "tenant", "worker", "Worker", "", nil)
+	assert.Error(t, err)
+	_, _, err = service.ListServiceAccounts(t.Context(), "tenant", "", 10, 0)
+	assert.Error(t, err)
+	_, err = service.ReplaceServiceAccount(t.Context(), "tenant", "id", "Worker", "", "active", nil, 1)
+	assert.Error(t, err)
+	assert.Error(t, service.DeleteServiceAccount(t.Context(), "tenant", "id", 1))
+	_, err = service.CreateServiceAccountCredential(t.Context(), "tenant", "id", "key", []string{"a"}, nil)
+	assert.Error(t, err)
+	_, err = service.ListServiceAccountCredentials(t.Context(), "tenant", "id")
+	assert.Error(t, err)
+	assert.Error(t, service.RevokeServiceAccountCredential(t.Context(), "tenant", "id", "cred"))
+}

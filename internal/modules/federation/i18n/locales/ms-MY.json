@@ -1,0 +1,12 @@
+{
+  "federation_invalid_request": "Permintaan gabungan tidak sah atau keadaan log masuk hilang, tamat tempoh, atau diulang semula. Mulakan semula log masuk dan lengkapkannya dalam sesi penyemak imbas yang sama.",
+  "federation_provider_not_found": "Pembekal identiti yang diminta tidak wujud. Muat semula senarai pembekal dan pilih pembekal yang wujud.",
+  "federation_provider_issuer_exists": "Pembekal identiti untuk penerbit ini sudah wujud dalam penyewa. Gunakan penerbit lain atau kemas kini pembekal sedia ada.",
+  "federation_provider_role_missing": "Peranan lalai pembekal tidak wujud dalam penyewa ini. Pilih peranan yang wujud atau kosongkan peranan lalai.",
+  "federation_provider_disabled": "Pembekal identiti ini dinyahdayakan. Pentadbir mesti menghidupkannya sebelum anda boleh log masuk dengannya.",
+  "federation_provisioning_disabled": "Pembekal identiti ini tidak boleh menyediakan akaun baharu. Pentadbir mesti mencipta akaun anda dan memautkannya ke pembekal terlebih dahulu.",
+  "federation_identity_unavailable": "Akaun atau keahlian penyewa yang dipautkan telah dinyahdayakan. Hubungi pentadbir untuk memulihkan akses.",
+  "federation_email_unverified": "Penyediaan akaun automatik memerlukan e-mel yang disahkan daripada pembekal identiti. Minta pentadbir menyemak tuntutan pembekal atau menyediakan akaun secara manual.",
+  "federation_oidc_failed": "Pembekal identiti menolak atau tidak dapat melengkapkan log masuk. Mulakan semula log masuk dan cuba lagi; hubungi pentadbir jika masalah berterusan.",
+  "federation_unavailable": "Perkhidmatan gabungan tidak dapat melengkapkan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan."
+}

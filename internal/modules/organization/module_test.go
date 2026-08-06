@@ -24,6 +24,7 @@ func TestOrganizationModuleLifecycleAndRouteDeclarations(t *testing.T) {
 	principalService := identity.NewService(db, realOrganizationAuditAppender(db), iam.NewAdministratorGuard())
 	module := NewModule(db, registrar, realOrganizationAuditAppender(db), iam.NewMembershipChecker(db), iam.NewAdministratorGuard(), service.nextID, credentials, principalService.CreateInvitedPrincipal)
 	require.NoError(t, module.Migrate(t.Context()))
+	assert.NotNil(t, module.ProvisioningGroups())
 
 	_, api := humatest.New(t)
 	module.RegisterREST(api)
