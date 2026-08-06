@@ -444,6 +444,57 @@ func TestAuthorizerAppliesRoleConditionsToEveryAssignmentSource(t *testing.T) {
 	assert.Nil(t, allowed)
 }
 
+func TestAuthorizerResourceAttributeABAC(t *testing.T) {
+	repo := newIAMRepository(t)
+	ctx := t.Context()
+	putTestMember(t, repo, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	role := createTestRole(t, repo, "tenant", "Order Operators")
+	_, err := repo.GrantPermission(ctx, "tenant", role.ID, "order_view")
+	require.NoError(t, err)
+	condition, err := policyx.CanonicalCondition(json.RawMessage(`{"version":1,"all":[
+		{"eq":[{"context":"resource.type"},{"value":"order"}]},
+		{"eq":[{"context":"resource.owner"},{"value":"principal"}]},
+		{"in":[{"context":"resource.attr.region"},{"value":["cn-east"]}]}
+	]}`))
+	require.NoError(t, err)
+	_, changed, err := repo.SetPermissionCondition(ctx, "tenant", role.ID, "order_view", condition)
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	entity := entityTestRow("tenant", "store", "", "store")
+	_, err = repo.db.NewInsert().Model(&entity).Exec(ctx)
+	require.NoError(t, err)
+	now := time.Now().UTC().UnixMilli()
+	_, err = repo.db.NewInsert().Model(&roleBindingForTest{TenantID: "tenant", RoleID: role.ID, PrincipalID: "principal", ScopeType: "entity", ScopeID: "store", Effect: "allow", CreatedAt: now}).Exec(ctx)
+	require.NoError(t, err)
+
+	authorizer := NewAuthorizer(repo.db)
+	authorizer.now = repo.now
+
+	// Without server-provided resource facts the condition fails closed.
+	allowed, err := authorizer.CheckResource(ctx, "tenant", "store", "order", "order-1", "order_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+
+	// Type and id come from the check arguments; owner and attributes come
+	// from the server-side resource context.
+	resourceCtx := policyx.WithResourceContext(ctx, policyx.ResourceContext{Owner: "principal", Attrs: map[string]string{"region": "cn-east"}})
+	allowed, err = authorizer.CheckResource(resourceCtx, "tenant", "store", "order", "order-1", "order_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+
+	wrong := policyx.WithResourceContext(ctx, policyx.ResourceContext{Owner: "principal", Attrs: map[string]string{"region": "us-west"}})
+	allowed, err = authorizer.CheckResource(wrong, "tenant", "store", "order", "order-1", "order_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+
+	// The same condition never leaks to a different resource type.
+	other := policyx.WithResourceContext(ctx, policyx.ResourceContext{Owner: "principal", Attrs: map[string]string{"region": "cn-east"}})
+	allowed, err = authorizer.CheckResource(other, "tenant", "store", "invoice", "invoice-1", "order_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+}
+
 type entityRowForTest struct {
 	bun.BaseModel `bun:"table:iam_entities"`
 	TenantID      string  `bun:"tenant_id"`

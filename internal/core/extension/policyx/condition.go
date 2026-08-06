@@ -23,12 +23,25 @@ type TrustedContext struct {
 	AMR         []string
 	ClientID    string
 	NetworkZone string
+	Resource    ResourceContext
+}
+
+// ResourceContext carries server-side facts about the business resource being
+// authorized. Business layers provide Owner and Attributes from their own
+// resource store; the authorizer fills Type and ID from the request arguments.
+// Absent facts fail closed: a resource.* condition never matches on empty data.
+type ResourceContext struct {
+	Type  string
+	ID    string
+	Owner string
+	Attrs map[string]string
 }
 
 type trustedContextKey struct{}
 
 func WithTrustedContext(ctx context.Context, trusted TrustedContext) context.Context {
 	trusted.AMR = append([]string(nil), trusted.AMR...)
+	trusted.Resource.Attrs = cloneAttrs(trusted.Resource.Attrs)
 	return context.WithValue(ctx, trustedContextKey{}, trusted)
 }
 
@@ -36,7 +49,16 @@ func TrustedFromContext(ctx context.Context, now time.Time) TrustedContext {
 	trusted, _ := ctx.Value(trustedContextKey{}).(TrustedContext)
 	trusted.Time = now.UTC()
 	trusted.AMR = append([]string(nil), trusted.AMR...)
+	trusted.Resource.Attrs = cloneAttrs(trusted.Resource.Attrs)
 	return trusted
+}
+
+// WithResourceContext attaches resource facts to the trusted context while
+// preserving the authentication fields already present.
+func WithResourceContext(ctx context.Context, resource ResourceContext) context.Context {
+	trusted, _ := ctx.Value(trustedContextKey{}).(TrustedContext)
+	trusted.Resource = resource
+	return WithTrustedContext(ctx, trusted)
 }
 
 func CanonicalCondition(raw json.RawMessage) (json.RawMessage, error) {
@@ -152,8 +174,8 @@ func validateExpression(value any, depth int, nodes *int, root bool) error {
 		if err != nil {
 			return err
 		}
-		if field != "client.id" && field != "network.zone" {
-			return fmt.Errorf("authorization condition in only supports client.id or network.zone")
+		if !isContextListField(field) {
+			return fmt.Errorf("authorization condition in only supports client.id, network.zone, or resource.* fields")
 		}
 		if err := validateStringList(literal); err != nil {
 			return err
@@ -228,10 +250,88 @@ func validateScalar(field string, value any) error {
 		if text, ok := value.(string); !ok || strings.TrimSpace(text) == "" || len(text) > 128 {
 			return fmt.Errorf("authorization condition %s value must be a non-empty string of at most 128 characters", field)
 		}
+	case "resource.type", "resource.id", "resource.owner":
+		if text, ok := value.(string); !ok || strings.TrimSpace(text) == "" || len(text) > 128 {
+			return fmt.Errorf("authorization condition %s value must be a non-empty string of at most 128 characters", field)
+		}
 	default:
+		if attr, ok := resourceAttrName(field); ok {
+			if text, ok := value.(string); !ok || strings.TrimSpace(text) == "" || len(text) > 128 {
+				return fmt.Errorf("authorization condition resource.attr.%s value must be a non-empty string of at most 128 characters", attr)
+			}
+			return nil
+		}
 		return fmt.Errorf("unknown authorization condition context field %q", field)
 	}
 	return nil
+}
+
+func isContextListField(field string) bool {
+	switch field {
+	case "client.id", "network.zone", "resource.type", "resource.id", "resource.owner":
+		return true
+	}
+	_, ok := resourceAttrName(field)
+	return ok
+}
+
+func isResourceContextField(field string) bool {
+	switch field {
+	case "resource.type", "resource.id", "resource.owner":
+		return true
+	}
+	_, ok := resourceAttrName(field)
+	return ok
+}
+
+// resourceAttrName validates resource.attr.<name> fields. Names are
+// lowercase alphanumeric with _ . - separators, 1 to 64 characters, and never
+// client-supplied: values are looked up in the server-provided Attrs map.
+func resourceAttrName(field string) (string, bool) {
+	const prefix = "resource.attr."
+	if !strings.HasPrefix(field, prefix) {
+		return "", false
+	}
+	name := field[len(prefix):]
+	if len(name) == 0 || len(name) > 64 || name[0] < 'a' || name[0] > 'z' {
+		return "", false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '.' && c != '-' {
+			return "", false
+		}
+	}
+	return name, true
+}
+
+func resourceFieldValue(field string, trusted TrustedContext) (string, bool) {
+	resource := trusted.Resource
+	switch field {
+	case "resource.type":
+		return resource.Type, resource.Type != ""
+	case "resource.id":
+		return resource.ID, resource.ID != ""
+	case "resource.owner":
+		return resource.Owner, resource.Owner != ""
+	default:
+		if attr, ok := resourceAttrName(field); ok {
+			value, exists := resource.Attrs[attr]
+			return value, exists
+		}
+		return "", false
+	}
+}
+
+func cloneAttrs(attrs map[string]string) map[string]string {
+	if attrs == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(attrs))
+	for key, value := range attrs {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func validateStringList(value any) error {
@@ -329,6 +429,8 @@ func evaluateExpression(value any, trusted TrustedContext, root bool) (bool, err
 		actual := trusted.ClientID
 		if field == "network.zone" {
 			actual = trusted.NetworkZone
+		} else if isResourceContextField(field) {
+			actual, _ = resourceFieldValue(field, trusted)
 		}
 		for _, item := range literal.([]any) {
 			if actual == item.(string) {
@@ -364,6 +466,10 @@ func scalarEqual(field string, expected any, trusted TrustedContext) bool {
 	case "network.zone":
 		return trusted.NetworkZone == expected.(string)
 	default:
+		if isResourceContextField(field) {
+			actual, ok := resourceFieldValue(field, trusted)
+			return ok && actual == expected.(string)
+		}
 		return false
 	}
 }

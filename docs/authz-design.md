@@ -20,7 +20,7 @@ Chaosplus 的在线授权完全由主关系数据库和本地 Go 代码完成，
 - 实体层级的结构化 `DataConstraint`、参数化 SQL 下推和同源授权解释；
 - Huma 路由声明、OpenAPI 元数据和运行时授权的一致性门禁。
 
-当前约束覆盖 tenant role、静态/动态组和岗位派生 role、治理型临时 role grant、角色权限条件、角色 owner/department 数据范围、entity scoped binding，以及 tenant 内实体图、终端业务资源 ReBAC 和关系条件。访问申请、四眼审批、撤销、到期控制及直接/临时租户角色授权复核已实现，详见 [访问治理设计](access-governance.md)；资源属性 ABAC 和派生授权复核仍未完成。
+当前约束覆盖 tenant role、静态/动态组和岗位派生 role、治理型临时 role grant、角色权限条件、角色 owner/department 数据范围、entity scoped binding，以及 tenant 内实体图、终端业务资源 ReBAC 和关系条件。访问申请、四眼审批、撤销、到期控制及直接/临时租户角色授权复核已实现，详见 [访问治理设计](access-governance.md)；派生授权复核与资源属性 ABAC 已实现。
 
 ## 2. 领域边界
 
@@ -180,13 +180,13 @@ POST /iam/authorization/explain
 |---|---|
 | `all` / `any` | 1 到 32 个子表达式 |
 | `not` | 一个子表达式 |
-| `eq` / `neq` | `auth.acr` 与非负整数，或 `client.id` / `network.zone` 与最长 128 字符的非空字符串 |
+| `eq` / `neq` | `auth.acr` 与非负整数，`client.id` / `network.zone` / `resource.type` / `resource.id` / `resource.owner` / `resource.attr.<name>` 与最长 128 字符的非空字符串 |
 | `gt` / `gte` / `lt` / `lte` | `auth.acr` 与 0 到 10 的整数 |
-| `in` | `client.id` / `network.zone` 与 1 到 16 个非空字符串 |
+| `in` | `client.id` / `network.zone` / `resource.type` / `resource.id` / `resource.owner` / `resource.attr.<name>` 与 1 到 16 个非空字符串 |
 | `contains` | `auth.amr` 与一个非空认证方法字符串 |
 | `between_time` | 两个不同的 `HH:MM` 和一个有效 IANA timezone；支持跨午夜时段 |
 
-比较固定写成 `[{"context":"auth.acr"},{"value":2}]`，不接受任意对象路径。`auth.acr`、`auth.amr`、`client.id` 和 `network.zone` 只来自已验证 Cookie/JWT claims；判定时间由服务端在单次授权快照开始时生成。客户端 body/header 不能注入可信上下文。未知 version、字段、operator、类型、timezone、超限或损坏的数据库 JSON 全部 fail closed；写入返回三语 `422 invalid_relationship_condition`，读取到损坏条件时该边不授权。
+比较固定写成 `[{"context":"auth.acr"},{"value":2}]`，不接受任意对象路径。`auth.acr`、`auth.amr`、`client.id` 和 `network.zone` 只来自已验证 Cookie/JWT claims；判定时间由服务端在单次授权快照开始时生成。客户端 body/header 不能注入可信上下文。资源事实 `resource.type` / `resource.id` 来自授权请求参数，`resource.owner` / `resource.attr.<name>` 由业务层从自身资源库经 `policyx.WithResourceContext` 注入；两者都不接受客户端自报，缺失时资源条件 fail closed。未知 version、字段、operator、类型、timezone、超限或损坏的数据库 JSON 全部 fail closed；写入返回三语 `422 invalid_relationship_condition`，读取到损坏条件时该边不授权。
 
 同一元组、窗口和规范化条件都相同的重复 POST 是 no-op；同一元组的新窗口或条件原位更新并保留 `created_at`。创建、约束更新、删除与 policy revision、`relationship_put|relationship_deleted` hash-chain audit 在同一事务提交；不存在 DELETE 同样为 no-op。
 

@@ -121,7 +121,7 @@ Membership 被禁用后，受保护请求会在角色检查前被拒绝，因此
 
 关系写入只接受以下组合：直接 `principal`、`group#member`、`position#member`、`entity#owner|editor|viewer`，关系为 `owner|editor|viewer`。实体目标写入 `iam_relationships`，其 `resource_type` 必须等于当前 tenant active entity 的 type。业务资源目标写入 `iam_resource_relationships`，必须同时提供所属 active `entity_id`、权限目录声明的 `resource_type` 和业务模块持有的 opaque `resource_id`；IAM 不复制业务对象。主体缺失、停用、跨 tenant、未知组合、循环或超过 16 层均拒绝。可选 `starts_at/ends_at` 使用 RFC 3339，结束时间必须在未来且晚于可选开始时间；无效窗口返回三语 `422 invalid_relationship_window`。
 
-可选 `condition` 必须是 `version: 1` 的受限 JSON AST，不接受 SQL、脚本或客户端自定义属性。组合 operator 为 `all/any/not`；比较为 `eq/neq/gt/gte/lt/lte/in/contains`；时间为 `between_time`。字段闭集是 `auth.acr`、`auth.amr`、`client.id`、`network.zone`，只从已验证认证上下文读取。原始 JSON 最大 4 KiB、深度 8、节点 32，字符串最长 128、列表最多 16；未知字段/operator/type/timezone 或超限返回三语 `422 invalid_relationship_condition`。
+可选 `condition` 必须是 `version: 1` 的受限 JSON AST，不接受 SQL、脚本或客户端自定义属性。组合 operator 为 `all/any/not`；比较为 `eq/neq/gt/gte/lt/lte/in/contains`；时间为 `between_time`。字段闭集是 `auth.acr`、`auth.amr`、`client.id`、`network.zone`、`resource.type`、`resource.id`、`resource.owner`、`resource.attr.<name>`；认证字段只从已验证认证上下文读取，资源字段由业务层从自身资源库经 `policyx.WithResourceContext` 注入，客户端不能自报，缺失时 fail closed。原始 JSON 最大 4 KiB、深度 8、节点 32，字符串最长 128、列表最多 16；未知字段/operator/type/timezone 或超限返回三语 `422 invalid_relationship_condition`。
 
 `POST /iam/relationships` 在一个事务中：
 

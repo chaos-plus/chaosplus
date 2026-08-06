@@ -89,6 +89,11 @@ func TestConditionRejectsUntrustedOrUnboundedInput(t *testing.T) {
 		json.RawMessage(`{"version":1,"eq":[{"context":"client.id"},{"value":" "}]}`),
 		json.RawMessage(`{"version":1,"sql":"tenant_id = 'other'"}`),
 		json.RawMessage(`{"version":1,"eq":[{"context":"request.header.x-zone"},{"value":"trusted"}]}`),
+		json.RawMessage(`{"version":1,"eq":[{"context":"resource.tier"},{"value":"gold"}]}`),
+		json.RawMessage(`{"version":1,"eq":[{"context":"resource.attr.9region"},{"value":"cn"}]}`),
+		json.RawMessage(`{"version":1,"eq":[{"context":"resource.attr."},{"value":"cn"}]}`),
+		json.RawMessage(`{"version":1,"in":[{"context":"resource.attr.Region"},{"value":["cn"]}]}`),
+		json.RawMessage(`{"version":1,"eq":[{"context":"resource.type"},{"value":""}]}`),
 		json.RawMessage(`{"version":1,"gte":[{"context":"client.id"},{"value":1}]}`),
 		json.RawMessage(`{"version":1,"in":[{"context":"auth.acr"},{"value":["1"]}]}`),
 		json.RawMessage(`{"version":1,"in":[{"context":"client.id"},{"value":[]}]}`),
@@ -112,4 +117,59 @@ func TestConditionRejectsUntrustedOrUnboundedInput(t *testing.T) {
 	deep := json.RawMessage(`{"version":1,"not":{"not":{"not":{"not":{"not":{"not":{"not":{"not":{"eq":[{"context":"auth.acr"},{"value":1}]}}}}}}}}}`)
 	_, err := CanonicalCondition(deep)
 	assert.Error(t, err)
+}
+
+func TestConditionResourceContextFields(t *testing.T) {
+	raw := json.RawMessage(`{"version":1,"all":[
+		{"eq":[{"context":"resource.type"},{"value":"order"}]},
+		{"eq":[{"context":"resource.owner"},{"value":"principal-a"}]},
+		{"in":[{"context":"resource.attr.region"},{"value":["cn-east","cn-west"]}]}
+	]}`)
+	canonical, err := CanonicalCondition(raw)
+	require.NoError(t, err)
+
+	trusted := TrustedContext{Resource: ResourceContext{
+		Type: "order", ID: "order-1", Owner: "principal-a",
+		Attrs: map[string]string{"region": "cn-east"},
+	}}
+	matched, err := EvaluateCondition(canonical, trusted)
+	require.NoError(t, err)
+	assert.True(t, matched)
+
+	trusted.Resource.Attrs["region"] = "us-west"
+	matched, err = EvaluateCondition(canonical, trusted)
+	require.NoError(t, err)
+	assert.False(t, matched)
+
+	matched, err = EvaluateCondition(canonical, TrustedContext{})
+	require.NoError(t, err)
+	assert.False(t, matched, "absent resource facts must fail closed")
+
+	matched, err = EvaluateCondition(json.RawMessage(`{"version":1,"eq":[{"context":"resource.attr.region"},{"value":"cn-east"}]}`), TrustedContext{})
+	require.NoError(t, err)
+	assert.False(t, matched, "missing attributes must never match")
+
+	// Owner and attributes arrive from the server-side context; type and id
+	// are filled by the authorizer from the request arguments.
+	now := time.Date(2026, time.August, 6, 8, 0, 0, 0, time.UTC)
+	ctx := WithResourceContext(context.Background(), ResourceContext{Owner: "principal-a", Attrs: map[string]string{"region": "cn-east"}})
+	merged := TrustedFromContext(ctx, now)
+	merged.Resource.Type = "order"
+	merged.Resource.ID = "order-1"
+	matched, err = EvaluateCondition(canonical, merged)
+	require.NoError(t, err)
+	assert.True(t, matched)
+
+	// Resource context merges with, never replaces, the authentication context.
+	authCtx := WithTrustedContext(context.Background(), TrustedContext{ACR: 2, ClientID: "console"})
+	combined := TrustedFromContext(WithResourceContext(authCtx, ResourceContext{Type: "order"}), now)
+	assert.Equal(t, 2, combined.ACR)
+	assert.Equal(t, "console", combined.ClientID)
+	assert.Equal(t, "order", combined.Resource.Type)
+
+	// Attributes are defensively copied in both directions.
+	attrs := map[string]string{"region": "cn-east"}
+	ctx = WithResourceContext(context.Background(), ResourceContext{Attrs: attrs})
+	attrs["region"] = "mutated"
+	assert.Equal(t, "cn-east", TrustedFromContext(ctx, now).Resource.Attrs["region"])
 }

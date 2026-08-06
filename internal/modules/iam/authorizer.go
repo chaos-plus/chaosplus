@@ -137,7 +137,8 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subje
 	if err := validateAuthorizationRequest(tenantID, "", permission, subject); err != nil {
 		return authz.DataConstraint{}, err
 	}
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, true)
+	trusted := policyx.TrustedFromContext(ctx, a.now())
+	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, true, trusted)
 	if err != nil {
 		return authz.DataConstraint{}, err
 	}
@@ -185,7 +186,8 @@ func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID, perm
 	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil {
 		return authz.Explanation{}, err
 	}
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false)
+	trusted := policyx.TrustedFromContext(ctx, a.now())
+	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false, trusted)
 	if err != nil {
 		return authz.Explanation{}, err
 	}
@@ -199,7 +201,10 @@ func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID, re
 	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil || resourceType == "" || resourceID == "" || len(resourceType) > 64 || len(resourceID) > 255 {
 		return authz.Explanation{}, fmt.Errorf("%w: invalid business resource authorization request", iamdomain.ErrInvalidArgument)
 	}
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false)
+	trusted := policyx.TrustedFromContext(ctx, a.now())
+	trusted.Resource.Type = resourceType
+	trusted.Resource.ID = resourceID
+	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false, trusted)
 	if err != nil {
 		return authz.Explanation{}, err
 	}
@@ -285,9 +290,8 @@ func (a *Authorizer) CheckResource(ctx context.Context, tenantID, entityID, reso
 	return explanation.Allowed, err
 }
 
-func (a *Authorizer) snapshot(ctx context.Context, tenantID, permission, subject string, includeDataScope bool) (authorizationSnapshot, error) {
+func (a *Authorizer) snapshot(ctx context.Context, tenantID, permission, subject string, includeDataScope bool, trusted policyx.TrustedContext) (authorizationSnapshot, error) {
 	requested, _ := requestedPermissions(permission)
-	trusted := policyx.TrustedFromContext(ctx, a.now())
 	for range policySnapshotAttempts {
 		before, err := policyx.Current(ctx, a.db, tenantID)
 		if err != nil {
