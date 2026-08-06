@@ -75,7 +75,8 @@ func TestBindInitialAdminIsIdempotent(t *testing.T) {
 	require.NoError(t, organization.Migrate(context.Background(), db))
 	require.NoError(t, bindInitialAdmin(context.Background(), db, "tenant", "principal", "Admin", "admin@example.com"))
 	require.NoError(t, bindInitialAdmin(context.Background(), db, "tenant", "principal", "Admin", "admin@example.com"))
-	member, err := iam.NewRepository(db, func() (string, error) { return "", nil }).GetMember(context.Background(), "tenant", "subject")
+	var member iam.TenantMember
+	_, err = iam.NewRepository(db, func() (string, error) { return "", nil }).GetMember(context.Background(), "tenant", "subject")
 	require.Error(t, err)
 	member, err = iam.NewRepository(db, func() (string, error) { return "", nil }).GetMember(context.Background(), "tenant", "principal")
 	require.NoError(t, err)

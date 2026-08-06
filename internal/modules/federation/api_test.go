@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -227,11 +228,13 @@ func TestFederationErrorMapping(t *testing.T) {
 		ErrOIDCState:              http.StatusBadRequest,
 	} {
 		mapped := federationError(err)
-		statusError, ok := mapped.(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(mapped, &statusError))
 		assert.Equal(t, status, statusError.GetStatus())
 	}
-	assert.Equal(t, http.StatusInternalServerError, federationError(assert.AnError).(huma.StatusError).GetStatus())
+	var statusError huma.StatusError
+	require.True(t, errors.As(federationError(assert.AnError), &statusError))
+	assert.Equal(t, http.StatusInternalServerError, statusError.GetStatus())
 }
 
 func TestProviderInputFromBody(t *testing.T) {

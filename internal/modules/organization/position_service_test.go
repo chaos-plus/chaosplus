@@ -26,9 +26,9 @@ func TestPositionLifecycleAndMembership(t *testing.T) {
 	addTenantMember(t, db, "tenant-a", "principal-disabled", "Disabled", iam.MemberDisabled)
 	addTenantMember(t, db, "tenant-b", "principal-b", "Bob", iam.MemberActive)
 
-	engineer := createPosition(t, ctx, service, "tenant-a", CreatePosition{Code: " Engineer ", Name: "Engineer", SortOrder: 20})
-	manager := createPosition(t, ctx, service, "tenant-a", CreatePosition{Code: "manager", Name: "Manager", SortOrder: 10})
-	other := createPosition(t, ctx, service, "tenant-b", CreatePosition{Code: "engineer", Name: "Engineer"})
+	engineer := createPosition(ctx, t, service, "tenant-a", CreatePosition{Code: " Engineer ", Name: "Engineer", SortOrder: 20})
+	manager := createPosition(ctx, t, service, "tenant-a", CreatePosition{Code: "manager", Name: "Manager", SortOrder: 10})
+	other := createPosition(ctx, t, service, "tenant-b", CreatePosition{Code: "engineer", Name: "Engineer"})
 	assert.Equal(t, "engineer", engineer.Code)
 
 	items, err := service.List(ctx, " tenant-a ")
@@ -106,7 +106,7 @@ func TestPositionLifecycleAndMembership(t *testing.T) {
 func TestPositionDeletionRejectsRoleBinding(t *testing.T) {
 	db, service := newPositionService(t)
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "administrator"})
-	position := createPosition(t, ctx, service, "tenant", CreatePosition{Code: "operator", Name: "Operator"})
+	position := createPosition(ctx, t, service, "tenant", CreatePosition{Code: "operator", Name: "Operator"})
 	now := time.Now().UTC().UnixMilli()
 	_, err := db.ExecContext(ctx, "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", "tenant", "role", "Role", "", now, now)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestPositionDeletionRejectsRoleBinding(t *testing.T) {
 
 func TestPositionDeletionRejectsRelationship(t *testing.T) {
 	db, service := newPositionService(t)
-	position := createPosition(t, t.Context(), service, "tenant", CreatePosition{Code: "operator", Name: "Operator"})
+	position := createPosition(t.Context(), t, service, "tenant", CreatePosition{Code: "operator", Name: "Operator"})
 	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_entities
 		(tenant_id,id,parent_id,type,name,status,metadata,created_at,updated_at)
 		VALUES ('tenant','company',NULL,'company','Company','active','{}',1,1)`)
@@ -194,7 +194,7 @@ func TestPositionValidationAndTransactionalRollback(t *testing.T) {
 func TestPositionMemberAuditFailureRollsBack(t *testing.T) {
 	db, service := newPositionService(t)
 	addTenantMember(t, db, "tenant", "principal", "Principal", iam.MemberActive)
-	position := createPosition(t, t.Context(), service, "tenant", CreatePosition{Code: "position", Name: "Position"})
+	position := createPosition(t.Context(), t, service, "tenant", CreatePosition{Code: "position", Name: "Position"})
 	_, err := db.ExecContext(t.Context(), `CREATE TRIGGER reject_position_member_audit BEFORE INSERT ON iam_audit_events WHEN NEW.event_type = 'position_member_assigned' BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
 	require.NoError(t, err)
 
@@ -258,7 +258,7 @@ func bindDirectoryAdministrator(t *testing.T, db *bun.DB, tenantID, assigneeType
 	require.NoError(t, err)
 }
 
-func createPosition(t *testing.T, ctx context.Context, service *PositionService, tenantID string, input CreatePosition) Position {
+func createPosition(ctx context.Context, t *testing.T, service *PositionService, tenantID string, input CreatePosition) Position {
 	t.Helper()
 	position, err := service.Create(ctx, tenantID, input)
 	require.NoError(t, err)

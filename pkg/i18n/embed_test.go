@@ -14,7 +14,7 @@ import (
 // writeLocale is a small helper to create a locale JSON file in dir.
 func writeLocale(t *testing.T, dir, locale, body string) {
 	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, locale+".json"), []byte(body), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, locale+".json"), []byte(body), 0o600))
 }
 
 func TestI18n_Translate(t *testing.T) {
@@ -163,7 +163,7 @@ func TestI18n_LoadDir(t *testing.T) {
 		dir := t.TempDir()
 		writeLocale(t, dir, "en", `{"hello":"Hello"}`)
 		writeLocale(t, dir, "zh", `{"hello":"你好"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("ignore me"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("ignore me"), 0o600))
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "nested"), 0755))
 
 		i := New("en")
@@ -327,7 +327,7 @@ func TestInit_Errors(t *testing.T) {
 	t.Run("ignores non-json and dirs", func(t *testing.T) {
 		dir := t.TempDir()
 		writeLocale(t, dir, "en", `{"k":"v"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "x.txt"), []byte("nope"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "x.txt"), []byte("nope"), 0o600))
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0755))
 		require.NoError(t, Init("en", dir))
 		assert.Equal(t, "v", T("k"))

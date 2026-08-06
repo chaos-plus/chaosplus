@@ -96,6 +96,6 @@ func localizeBody(ctx context.Context, v any) any {
 // for every response — success, business error, and built-in framework error.
 // Register it via config.Transformers before huma.Register. Non-envelope
 // responses pass through untouched.
-func LocalizeMessage(ctx huma.Context, status string, v any) (any, error) {
+func LocalizeMessage(ctx huma.Context, _ string, v any) (any, error) {
 	return localizeBody(ctx.Context(), v), nil
 }

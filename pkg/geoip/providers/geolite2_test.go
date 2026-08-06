@@ -73,7 +73,7 @@ func TestGeolite2_GetIpInfo_EmptyIP(t *testing.T) {
 }
 
 func TestGeolite2_DownloadDb_AssetNotFound(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Release JSON that does NOT contain the requested asset name.
 		_, _ = w.Write([]byte(`{"tag_name":"v9.9","assets":[{"name":"other.mmdb","browser_download_url":"http://x/y"}]}`))
 	}))
@@ -86,7 +86,7 @@ func TestGeolite2_DownloadDb_AssetNotFound(t *testing.T) {
 }
 
 func TestGeolite2_DownloadDb_ReleaseError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
@@ -97,7 +97,7 @@ func TestGeolite2_DownloadDb_ReleaseError(t *testing.T) {
 }
 
 func TestGeolite2_DownloadDb_NoArgsEmptyDb(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"tag_name":"v1","assets":[]}`))
 	}))
 	defer ts.Close()
@@ -112,7 +112,7 @@ func TestGeolite2_DownloadDb_NoArgsEmptyDb(t *testing.T) {
 }
 
 func TestGeolite2_DownloadDb_NoArgsWithDb(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// When m.Db is preset, no-arg DownloadDb downloads names=[m.Db]; respond with
 		// a release missing that asset to exercise the loop + asset-not-found path.
 		_, _ = w.Write([]byte(`{"tag_name":"v1","assets":[]}`))
@@ -170,7 +170,7 @@ func TestIP2Location_DownloadDb_EmptyCode(t *testing.T) {
 }
 
 func TestIP2Location_DownloadDb_DownloadError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer ts.Close()

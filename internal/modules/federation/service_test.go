@@ -31,7 +31,7 @@ type federationEnvironment struct {
 	audit      auditx.Appender
 	identities *identitymod.Service
 	key        []byte
-	idp        *testIdP
+	idp        *testIDP
 }
 
 func newFederationEnvironment(t *testing.T) *federationEnvironment {
@@ -68,7 +68,7 @@ func newFederationEnvironment(t *testing.T) *federationEnvironment {
 	_, err = rand.Read(key)
 	require.NoError(t, err)
 	service := NewService(db, appendAudit, identities, web, Config{HTTPTimeout: 5 * time.Second, ClockSkew: 30 * time.Second, StateTTL: 10 * time.Minute}, key)
-	return &federationEnvironment{db: db, service: service, web: web, audit: appendAudit, identities: identities, key: key, idp: newTestIdP(t)}
+	return &federationEnvironment{db: db, service: service, web: web, audit: appendAudit, identities: identities, key: key, idp: newTestIDP(t)}
 }
 
 func (env *federationEnvironment) createProvider(t *testing.T, input ProviderInput) Provider {

@@ -26,9 +26,9 @@ func TestGroupLifecycleAndMembership(t *testing.T) {
 	addTenantMember(t, db, "tenant-a", "principal-disabled", "Disabled", iam.MemberDisabled)
 	addTenantMember(t, db, "tenant-b", "principal-b", "Bob", iam.MemberActive)
 
-	operators := createGroup(t, ctx, service, "tenant-a", CreateGroup{Name: " Operators ", Description: "Operators", SortOrder: 20})
-	auditors := createGroup(t, ctx, service, "tenant-a", CreateGroup{Name: "Auditors", SortOrder: 10})
-	other := createGroup(t, ctx, service, "tenant-b", CreateGroup{Name: "Operators"})
+	operators := createGroup(ctx, t, service, "tenant-a", CreateGroup{Name: " Operators ", Description: "Operators", SortOrder: 20})
+	auditors := createGroup(ctx, t, service, "tenant-a", CreateGroup{Name: "Auditors", SortOrder: 10})
+	other := createGroup(ctx, t, service, "tenant-b", CreateGroup{Name: "Operators"})
 	assert.Equal(t, GroupTypeStatic, operators.Type)
 
 	items, err := service.List(ctx, " tenant-a ")
@@ -104,7 +104,7 @@ func TestGroupLifecycleAndMembership(t *testing.T) {
 func TestGroupDeletionRejectsRoleBinding(t *testing.T) {
 	db, service := newGroupService(t)
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "administrator"})
-	group := createGroup(t, ctx, service, "tenant", CreateGroup{Name: "Operators"})
+	group := createGroup(ctx, t, service, "tenant", CreateGroup{Name: "Operators"})
 	now := time.Now().UTC().UnixMilli()
 	_, err := db.ExecContext(ctx, "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", "tenant", "role", "Role", "", now, now)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestGroupDeletionRejectsRoleBinding(t *testing.T) {
 
 func TestGroupDeletionRejectsRelationship(t *testing.T) {
 	db, service := newGroupService(t)
-	group := createGroup(t, t.Context(), service, "tenant", CreateGroup{Name: "Operators"})
+	group := createGroup(t.Context(), t, service, "tenant", CreateGroup{Name: "Operators"})
 	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_entities
 		(tenant_id,id,parent_id,type,name,status,metadata,created_at,updated_at)
 		VALUES ('tenant','company',NULL,'company','Company','active','{}',1,1)`)
@@ -192,7 +192,7 @@ func TestGroupValidationAndTransactionalRollback(t *testing.T) {
 func TestGroupMemberAuditFailureRollsBack(t *testing.T) {
 	db, service := newGroupService(t)
 	addTenantMember(t, db, "tenant", "principal", "Principal", iam.MemberActive)
-	group := createGroup(t, t.Context(), service, "tenant", CreateGroup{Name: "Group"})
+	group := createGroup(t.Context(), t, service, "tenant", CreateGroup{Name: "Group"})
 	_, err := db.ExecContext(t.Context(), `CREATE TRIGGER reject_group_member_audit BEFORE INSERT ON iam_audit_events WHEN NEW.event_type = 'group_member_assigned' BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
 	require.NoError(t, err)
 
@@ -214,7 +214,7 @@ func TestDynamicGroupMembersAreComputedFromCurrentAttributes(t *testing.T) {
 	_, err := db.ExecContext(ctx, "UPDATE iam_tenant_members SET email = CASE user_subject WHEN 'alice' THEN 'alice@example.com' ELSE 'bob@example.net' END WHERE tenant_id = 'tenant'")
 	require.NoError(t, err)
 	rule := MembershipRule(`{"version":1,"match":"all","conditions":[{"field":"member.email_domain","operator":"in","values":["example.com"]}]}`)
-	group := createGroup(t, ctx, service, "tenant", CreateGroup{Name: "Example users", Type: GroupTypeDynamic, Rule: rule})
+	group := createGroup(ctx, t, service, "tenant", CreateGroup{Name: "Example users", Type: GroupTypeDynamic, Rule: rule})
 	assert.Equal(t, GroupTypeDynamic, group.Type)
 	assert.JSONEq(t, string(rule), string(group.Rule))
 
@@ -256,7 +256,7 @@ func newGroupService(t *testing.T) (*bun.DB, *GroupService) {
 	return db, service
 }
 
-func createGroup(t *testing.T, ctx context.Context, service *GroupService, tenantID string, input CreateGroup) Group {
+func createGroup(ctx context.Context, t *testing.T, service *GroupService, tenantID string, input CreateGroup) Group {
 	t.Helper()
 	group, err := service.Create(ctx, tenantID, input)
 	require.NoError(t, err)

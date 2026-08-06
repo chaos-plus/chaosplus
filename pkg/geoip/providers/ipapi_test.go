@@ -46,7 +46,7 @@ func TestIPAPI_GetIpInfo_InvalidIP(t *testing.T) {
 }
 
 func TestIPAPI_GetIpInfo_Success(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"ip": "8.8.8.8",
@@ -73,7 +73,7 @@ func TestIPAPI_GetIpInfo_Success(t *testing.T) {
 }
 
 func TestIPAPI_GetIpInfo_Non200(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer ts.Close()
@@ -86,7 +86,7 @@ func TestIPAPI_GetIpInfo_Non200(t *testing.T) {
 }
 
 func TestIPAPI_GetIpInfo_BadJSON(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{not-json`))
 	}))
 	defer ts.Close()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,8 +138,8 @@ func TestGovernanceErrorMappingAndHumanPrincipal(t *testing.T) {
 		{ErrReviewSelfDecision, http.StatusConflict}, {ErrReviewLastAdministrator, http.StatusConflict}, {ErrInvalidReview, http.StatusUnprocessableEntity},
 		{context.Canceled, http.StatusInternalServerError},
 	} {
-		statusError, ok := governanceError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(governanceError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 	_, err := humanPrincipal(t.Context())

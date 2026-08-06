@@ -56,8 +56,8 @@ func TestTenantErrorMapping(t *testing.T) {
 		{ErrInvalidTenant, http.StatusUnprocessableEntity},
 		{errors.New("storage unavailable"), http.StatusInternalServerError},
 	} {
-		statusError, ok := tenantError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(tenantError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 }

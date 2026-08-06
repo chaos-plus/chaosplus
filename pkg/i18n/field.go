@@ -44,7 +44,7 @@ func BaseValue(m map[string]string) string {
 // ResolveField picks the value for the request locale (taken from context and
 // normalized via Canonical), falling back to en-US, then "". This is the single
 // read path for stored multilingual fields; modules must not reimplement it.
-func ResolveField(m map[string]string, ctx context.Context) string {
+func ResolveField(ctx context.Context, m map[string]string) string {
 	return ResolveFieldCode(m, CanonicalFromContext(ctx))
 }
 

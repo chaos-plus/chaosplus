@@ -74,6 +74,7 @@ func Verify(encoded, password string) (bool, error) {
 	if err != nil || len(want) < 16 || len(want) > 64 {
 		return false, ErrInvalidHash
 	}
-	got := argon2.IDKey([]byte(password), salt, uint32(t), uint32(m), uint8(p), uint32(len(want)))
+	// Bounds for t/m/p and len(want) were validated above, so the narrowing is safe.
+	got := argon2.IDKey([]byte(password), salt, uint32(t), uint32(m), uint8(p), uint32(len(want))) //nolint:gosec // G115: values bounded by validation above
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

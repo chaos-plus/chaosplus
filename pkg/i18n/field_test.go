@@ -46,9 +46,9 @@ func TestResolveField_Context(t *testing.T) {
 	m := map[string]string{"en-US": "Color", "zh-CN": "颜色"}
 	ctx := func(loc string) context.Context { return WithLocale(context.Background(), loc) }
 
-	assert.Equal(t, "颜色", ResolveField(m, ctx("zh-CN")))            // canonical hit
-	assert.Equal(t, "颜色", ResolveField(m, ctx("zh")))               // short → canonicalized → hit
-	assert.Equal(t, "Color", ResolveField(m, ctx("ms")))            // supported but absent → Base
-	assert.Equal(t, "Color", ResolveField(m, ctx("ja")))            // unsupported → Base
-	assert.Equal(t, "Color", ResolveField(m, context.Background())) // no locale → Base
+	assert.Equal(t, "颜色", ResolveField(ctx("zh-CN"), m))            // canonical hit
+	assert.Equal(t, "颜色", ResolveField(ctx("zh"), m))               // short → canonicalized → hit
+	assert.Equal(t, "Color", ResolveField(ctx("ms"), m))            // supported but absent → Base
+	assert.Equal(t, "Color", ResolveField(ctx("ja"), m))            // unsupported → Base
+	assert.Equal(t, "Color", ResolveField(context.Background(), m)) // no locale → Base
 }

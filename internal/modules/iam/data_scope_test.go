@@ -18,19 +18,19 @@ func TestRoleDataScopesCompileDirectAndDirectoryGrants(t *testing.T) {
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 
-	selfRole := createDataScopeRole(t, service, ctx, "Self", "self-principal", "", DataScopeSelf, nil)
+	selfRole := createDataScopeRole(ctx, t, service, "Self", "self-principal", "", DataScopeSelf, nil)
 	selfConstraint, err := service.AuthorizationConstraint(ctx, "tenant", "store_view", "self-principal")
 	require.NoError(t, err)
 	assert.False(t, selfConstraint.AllowAll)
 	assert.Equal(t, []string{"self-principal"}, selfConstraint.OwnerIDs)
 
-	departmentRole := createDataScopeRole(t, service, ctx, "Department", "department-principal", "root", DataScopeDepartment, nil)
+	departmentRole := createDataScopeRole(ctx, t, service, "Department", "department-principal", "root", DataScopeDepartment, nil)
 	departmentConstraint, err := service.AuthorizationConstraint(ctx, "tenant", "store_view", "department-principal")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"root"}, departmentConstraint.DepartmentIDs)
 
-	groupRole := createDataScopeRole(t, service, ctx, "Descendants", "group-principal", "root", DataScopeDepartmentAndDescendants, nil)
-	positionRole := createDataScopeRole(t, service, ctx, "Selected", "position-principal", "", DataScopeSelectedDepartments, []string{"other", "child"})
+	groupRole := createDataScopeRole(ctx, t, service, "Descendants", "group-principal", "root", DataScopeDepartmentAndDescendants, nil)
+	positionRole := createDataScopeRole(ctx, t, service, "Selected", "position-principal", "", DataScopeSelectedDepartments, []string{"other", "child"})
 	insertDirectory(t, repo, "tenant", "group", "position", "active")
 	now := repo.now().UTC().UnixMilli()
 	_, err = repo.db.ExecContext(ctx, `INSERT INTO iam_group_members
@@ -55,7 +55,7 @@ func TestRoleDataScopesCompileDirectAndDirectoryGrants(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"child", "other"}, positionConstraint.DepartmentIDs)
 
-	defaultRole := createDataScopeRole(t, service, ctx, "Default", "default-principal", "", DataScopeAll, nil)
+	defaultRole := createDataScopeRole(ctx, t, service, "Default", "default-principal", "", DataScopeAll, nil)
 	defaultScope, err := service.GetRoleDataScope(ctx, "tenant", defaultRole.ID)
 	require.NoError(t, err)
 	assert.Equal(t, DataScopeAll, defaultScope.Scope)
@@ -64,7 +64,7 @@ func TestRoleDataScopesCompileDirectAndDirectoryGrants(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, defaultConstraint.AllowAll)
 
-	adminRole := createDataScopeRole(t, service, ctx, "Administrator", "admin-principal", "", DataScopeSelf, nil)
+	adminRole := createDataScopeRole(ctx, t, service, "Administrator", "admin-principal", "", DataScopeSelf, nil)
 	_, err = service.GrantPermission(ctx, "tenant", adminRole.ID, "tenant_administer")
 	require.NoError(t, err)
 	adminConstraint, err := service.AuthorizationConstraint(ctx, "tenant", "store_view", "admin-principal")
@@ -163,7 +163,7 @@ func TestRoleDataScopeValidationIdempotencyAndMemberAtomicity(t *testing.T) {
 	assert.Equal(t, []string{"other"}, storedScope.DepartmentIDs)
 }
 
-func createDataScopeRole(t *testing.T, service *Service, ctx context.Context, name, principal, departmentID string, scope DataScope, departmentIDs []string) Role {
+func createDataScopeRole(ctx context.Context, t *testing.T, service *Service, name, principal, departmentID string, scope DataScope, departmentIDs []string) Role {
 	t.Helper()
 	_, err := service.PutTenantMember(ctx, "tenant", principal, principal, "", departmentID, MemberActive)
 	require.NoError(t, err)

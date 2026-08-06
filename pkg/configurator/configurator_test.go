@@ -159,7 +159,7 @@ func TestConfiguratorCustomSourcesAndMapKey(t *testing.T) {
 	flagger.UseConfigPathDefault()
 	flagger.UseEnvPrefix("CUSTOM")
 	flagger.UseEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	flagger.BindEnv("name")
+	require.NoError(t, flagger.BindEnv("name"))
 
 	var cfg config
 	require.NoError(t, flagger.Parse(&cfg, "--tenants.acme.enabled=true", "--labels.region=west"))
@@ -175,13 +175,13 @@ func TestFlagSchemaRejectsUnsupportedTypes(t *testing.T) {
 	type unsupported struct {
 		Channel chan int `mapstructure:"channel"`
 	}
-	_, err := parseFlagsMap(&unsupported{}, DEFAULT_MAPKEY)
+	_, err := parseFlagsMap(&unsupported{}, DefaultMapKey)
 	assert.ErrorContains(t, err, "unsupport type")
 
 	type unsupportedSlice struct {
 		Channels []chan int `mapstructure:"channels"`
 	}
-	flags, err := parseFlagsMap(&unsupportedSlice{}, DEFAULT_MAPKEY)
+	flags, err := parseFlagsMap(&unsupportedSlice{}, DefaultMapKey)
 	require.NoError(t, err)
 	for key, value := range flags {
 		assert.ErrorContains(t, bindFlags(pflag.NewFlagSet("invalid", pflag.ContinueOnError), key, value), "unsupport slice type")

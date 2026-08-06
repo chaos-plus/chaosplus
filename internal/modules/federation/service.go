@@ -354,7 +354,7 @@ func (s *Service) CompleteLogin(ctx context.Context, providerID, code, state, co
 	if err != nil {
 		return LoginComplete{}, err
 	}
-	sessionToken, err := s.authenticate(ctx, provider, claims, sealedState.ReturnURL)
+	sessionToken, err := s.authenticate(ctx, provider, claims)
 	if err != nil {
 		return LoginComplete{}, err
 	}
@@ -367,7 +367,7 @@ func (s *Service) StateClearCookie() string {
 	return stateClearCookie(s.authn.CookieSecure())
 }
 
-func (s *Service) authenticate(ctx context.Context, provider providerRow, token idTokenClaims, returnURL string) (string, error) {
+func (s *Service) authenticate(ctx context.Context, provider providerRow, token idTokenClaims) (string, error) {
 	var principalID string
 	now := s.now().UTC()
 	provisioned := false

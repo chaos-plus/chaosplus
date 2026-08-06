@@ -14,8 +14,8 @@ import (
 
 func TestI18n_T(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"hello":"Hello","not_found":"Not found"}`), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "zh.json"), []byte(`{"hello":"你好","not_found":"不存在"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"hello":"Hello","not_found":"Not found"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zh.json"), []byte(`{"hello":"你好","not_found":"不存在"}`), 0o600))
 
 	i := New("en")
 	require.NoError(t, i.Load("en", dir))
@@ -33,7 +33,7 @@ func TestI18n_T(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"success":"OK"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"success":"OK"}`), 0o600))
 
 	require.NoError(t, Init("en", dir))
 	assert.Equal(t, "OK", T("success"))
@@ -65,14 +65,14 @@ func TestRegisterFS_NotInitialized(t *testing.T) {
 
 func TestRegisterFS_AddsNewLocale(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"success":"OK"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "en.json"), []byte(`{"success":"OK"}`), 0o600))
 	require.NoError(t, Init("en", dir))
 
 	fsys := fstest.MapFS{
 		"locales/en-US.json": {Data: []byte(`{"success":"OK"}`)},
 		"locales/zh-CN.json": {Data: []byte(`{"success":"OK"}`)},
 		"locales/ms-MY.json": {Data: []byte(`{"success":"OK"}`)},
-		"locales/fr.json": {Data: []byte(`{"success":"OK"}`)},
+		"locales/fr.json":    {Data: []byte(`{"success":"OK"}`)},
 	}
 	require.NoError(t, RegisterFS(fsys, "locales"))
 	assert.Equal(t, "OK", T("success"))

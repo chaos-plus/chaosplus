@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	DEFAULT_MAPKEY = "<mapkey>"
+	DefaultMapKey = "<mapkey>"
 )
 
 type sFlag struct {
@@ -49,13 +49,13 @@ func New() *Flagger {
 
 func (f *Flagger) GetMapkey() string {
 	if f.mapkey == "" {
-		f.mapkey = DEFAULT_MAPKEY
+		f.mapkey = DefaultMapKey
 	}
 	if !strings.Contains(f.mapkey, "<") {
 		f.mapkey = "<" + f.mapkey
 	}
 	if !strings.Contains(f.mapkey, ">") {
-		f.mapkey = f.mapkey + ">"
+		f.mapkey += ">"
 	}
 	return f.mapkey
 }
@@ -168,7 +168,7 @@ func (f *Flagger) Parse(o interface{}, args ...string) error {
 
 	prefix := vip.GetEnvPrefix()
 	if prefix != "" {
-		prefix = prefix + "_"
+		prefix += "_"
 	}
 	for _, env := range env {
 		if prefix != "" && !strings.HasPrefix(env, prefix) {

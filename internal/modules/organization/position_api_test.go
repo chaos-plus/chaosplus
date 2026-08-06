@@ -2,6 +2,7 @@ package organization
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -122,8 +123,8 @@ func TestPositionErrorMapping(t *testing.T) {
 		{ErrPositionInvalid, http.StatusUnprocessableEntity},
 		{ErrPositionMemberNotFound, http.StatusInternalServerError},
 	} {
-		statusError, ok := positionError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(positionError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 }

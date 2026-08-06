@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -121,8 +122,8 @@ func TestInvitationErrorMapping(t *testing.T) {
 		{ErrInvitationInvalid, http.StatusUnprocessableEntity},
 		{context.Canceled, http.StatusInternalServerError},
 	} {
-		statusError, ok := invitationError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(invitationError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 }

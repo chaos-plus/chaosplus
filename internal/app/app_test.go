@@ -44,7 +44,7 @@ func TestShutdownNoServersIsNoop(t *testing.T) {
 // ListenAndServe/Serve returns http.ErrServerClosed after shutdown.
 func TestShutdownStopsRestServer(t *testing.T) {
 	ln := listen(t)
-	srv := &http.Server{Handler: http.NewServeMux()}
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: 5 * time.Second}
 
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(ln) }()
@@ -113,7 +113,7 @@ func TestAwaitShutdownReturnsServeError(t *testing.T) {
 // all down).
 func TestAwaitShutdownStopsServersOnServeError(t *testing.T) {
 	ln := listen(t)
-	srv := &http.Server{Handler: http.NewServeMux()}
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: 5 * time.Second}
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(ln) }()
 

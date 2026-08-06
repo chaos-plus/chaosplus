@@ -511,7 +511,9 @@ func (s *Service) Introspect(ctx context.Context, form url.Values, authorization
 	}
 	claims, err := s.authn.Authenticate(ctx, "Bearer "+form.Get("token"), "")
 	if err != nil {
-		return map[string]any{"active": false}, nil
+		// RFC 7662 §2.2: an invalid or expired token is reported as active:false,
+		// not as an error, so introspection responses stay stable for clients.
+		return map[string]any{"active": false}, nil //nolint:nilerr // RFC 7662: invalid token => active:false, nil error
 	}
 	return map[string]any{"active": true, "sub": claims.Subject, "iss": claims.Issuer, "aud": claims.Audience, "exp": claims.ExpiresAt.Unix()}, nil
 }

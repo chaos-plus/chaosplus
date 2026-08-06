@@ -20,7 +20,7 @@ func TestRepositoryRejectsCorruptHierarchy(t *testing.T) {
 
 	_, err = db.NewDelete().Model(&row).Where("tenant_id = ? AND id = ?", row.TenantID, row.ID).Exec(t.Context())
 	require.NoError(t, err)
-	department := createDepartment(t, t.Context(), service, "tenant", CreateDepartment{Name: "Root"})
+	department := createDepartment(t.Context(), t, service, "tenant", CreateDepartment{Name: "Root"})
 	_, err = db.NewDelete().Model((*closureRow)(nil)).Where("tenant_id = ? AND ancestor_id = ? AND descendant_id = ?", "tenant", department.ID, department.ID).Exec(t.Context())
 	require.NoError(t, err)
 	_, err = service.Get(t.Context(), "tenant", department.ID)

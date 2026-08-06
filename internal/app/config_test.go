@@ -20,7 +20,7 @@ func TestGenerateAndValidateConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, data, 0o644))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
 
 	var cfg Config
 	require.NoError(t, configurator.LoadStrict(path, &cfg), "generated config must be valid")

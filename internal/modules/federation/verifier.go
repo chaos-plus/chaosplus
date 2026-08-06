@@ -176,13 +176,13 @@ func (c *oidcClient) verifyIDToken(ctx context.Context, issuer, clientID, raw st
 	if err != nil {
 		return idTokenClaims{}, err
 	}
-	claims, err := c.verifyWithKeys(ctx, issuer, clientID, raw, keys, now)
+	claims, err := c.verifyWithKeys(issuer, clientID, raw, keys, now)
 	if errors.Is(err, errUnknownKey) {
 		keys, refreshErr := c.keys(ctx, issuer, true)
 		if refreshErr != nil {
 			return idTokenClaims{}, refreshErr
 		}
-		claims, err = c.verifyWithKeys(ctx, issuer, clientID, raw, keys, now)
+		claims, err = c.verifyWithKeys(issuer, clientID, raw, keys, now)
 	}
 	if err != nil {
 		return idTokenClaims{}, err
@@ -192,7 +192,7 @@ func (c *oidcClient) verifyIDToken(ctx context.Context, issuer, clientID, raw st
 
 var errUnknownKey = errors.New("unknown signing key")
 
-func (c *oidcClient) verifyWithKeys(ctx context.Context, issuer, clientID, raw string, keys map[string]crypto.PublicKey, now time.Time) (idTokenClaims, error) {
+func (c *oidcClient) verifyWithKeys(issuer, clientID, raw string, keys map[string]crypto.PublicKey, now time.Time) (idTokenClaims, error) {
 	header, payload, signature, err := splitJWT(raw)
 	if err != nil {
 		return idTokenClaims{}, fmt.Errorf("%w: %v", ErrOIDCTokenInvalid, err)

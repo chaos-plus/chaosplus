@@ -175,6 +175,7 @@ func mapSCIMError(ctx context.Context, err error) *SCIMError {
 	if errors.Is(err, identity.ErrInvalid) || errors.Is(err, organization.ErrGroupInvalid) {
 		return newSCIMError(ctx, http.StatusBadRequest, "invalidValue", "scim_invalid_syntax")
 	}
+	//nolint:errorlint // serviceErrorKind already normalizes wrapped errors via errors.Is.
 	switch serviceErrorKind(err) {
 	case ErrUnauthorized:
 		return newSCIMError(ctx, http.StatusUnauthorized, "", "scim_unauthorized")

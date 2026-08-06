@@ -12,7 +12,7 @@ import (
 func TestLocaleMiddleware(t *testing.T) {
 	// capture records the canonical locale the middleware placed on the context.
 	capture := func(dst *string) http.Handler {
-		return Locale(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return Locale(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			*dst = i18n.LocaleFromContext(r.Context())
 		}))
 	}

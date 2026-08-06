@@ -3,6 +3,7 @@ package provisioning
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,11 +96,13 @@ func TestProvisioningManagementErrorMapping(t *testing.T) {
 		ErrCredentialLimit:   http.StatusConflict,
 	} {
 		mapped := provisioningError(err)
-		statusError, ok := mapped.(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(mapped, &statusError))
 		assert.Equal(t, status, statusError.GetStatus())
 	}
-	assert.Equal(t, http.StatusInternalServerError, provisioningError(assert.AnError).(huma.StatusError).GetStatus())
+	var statusError huma.StatusError
+	require.True(t, errors.As(provisioningError(assert.AnError), &statusError))
+	assert.Equal(t, http.StatusInternalServerError, statusError.GetStatus())
 }
 
 func adminRequest(t *testing.T, client *http.Client, method, target, tenantID string, body []byte, headers map[string]string) *http.Response {

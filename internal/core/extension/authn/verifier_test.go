@@ -19,7 +19,7 @@ import (
 
 func TestVerifyAuthorization(t *testing.T) {
 	key := newTestKey(t)
-	issuer := "https://issuer.example"
+	var issuer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
@@ -81,7 +81,7 @@ func TestVerifyRejectsBadSignatureAndUnknownKey(t *testing.T) {
 	key := newTestKey(t)
 	other := newTestKey(t)
 	other.kid = "kid2"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{key.jwk()}})
 	}))
 	defer srv.Close()
@@ -164,7 +164,7 @@ func TestVerifierErrorBranches(t *testing.T) {
 }
 
 func TestRefreshAndDiscoveryErrors(t *testing.T) {
-	statusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	statusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer statusSrv.Close()
@@ -172,7 +172,7 @@ func TestRefreshAndDiscoveryErrors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Error(t, verifier.refreshKeys(context.Background()))
 
-	badJWKS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	badJWKS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"keys":[{"kid":"x","kty":"oct"}]}`))
 	}))
 	defer badJWKS.Close()
@@ -180,7 +180,7 @@ func TestRefreshAndDiscoveryErrors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Error(t, verifier.refreshKeys(context.Background()))
 
-	noKey := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	noKey := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer noKey.Close()

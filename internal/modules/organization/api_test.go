@@ -2,6 +2,7 @@ package organization
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -67,8 +68,8 @@ func TestOrganizationErrorMapping(t *testing.T) {
 		{ErrHierarchyCorrupt, http.StatusInternalServerError},
 	}
 	for _, item := range cases {
-		statusError, ok := organizationError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(organizationError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 }

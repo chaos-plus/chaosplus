@@ -169,7 +169,7 @@ func TestLua_CallBoundGoFunc_Variadic(t *testing.T) {
 
 func TestLua_VariadicValidationAndReturnConversion(t *testing.T) {
 	rt, err := New(EngineLua,
-		WithBinding("join", func(prefix string, values ...int) string { return prefix }),
+		WithBinding("join", func(prefix string, _ ...int) string { return prefix }),
 		WithBinding("bad_return", func() chan int { return make(chan int) }),
 		WithBinding("identity", func(value any) any { return value }),
 	)

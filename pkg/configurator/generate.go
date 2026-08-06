@@ -95,7 +95,7 @@ func valueNode(t reflect.Type, tag reflect.StructTag) (*yaml.Node, error) {
 // mapNode emits a single placeholder entry so the shape of a map[string]T section
 // is visible in the template.
 func mapNode(t reflect.Type, tag reflect.StructTag) (*yaml.Node, error) {
-	key := strings.Trim(orElse(tag.Get("mapkey"), DEFAULT_MAPKEY), "<>")
+	key := strings.Trim(orElse(tag.Get("mapkey"), DefaultMapKey), "<>")
 	elem := t.Elem()
 	for elem.Kind() == reflect.Ptr {
 		elem = elem.Elem()

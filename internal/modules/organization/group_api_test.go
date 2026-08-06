@@ -2,6 +2,7 @@ package organization
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -141,8 +142,8 @@ func TestGroupErrorMapping(t *testing.T) {
 		{ErrGroupInvalid, http.StatusUnprocessableEntity},
 		{ErrGroupMemberNotFound, http.StatusInternalServerError},
 	} {
-		statusError, ok := groupError(item.err).(huma.StatusError)
-		require.True(t, ok)
+		var statusError huma.StatusError
+		require.True(t, errors.As(groupError(item.err), &statusError))
 		assert.Equal(t, item.status, statusError.GetStatus())
 	}
 }

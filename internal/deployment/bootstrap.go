@@ -169,8 +169,8 @@ func openRuntimeDB(ctx context.Context, datasources map[string]bunx.Datasource, 
 		if selected != nil {
 			return nil, fmt.Errorf("production bootstrap requires exactly one writable runtime database")
 		}
-		copy := datasource
-		selected = &copy
+		datasourceCopy := datasource
+		selected = &datasourceCopy
 	}
 	if selected == nil {
 		return nil, fmt.Errorf("production bootstrap requires exactly one writable runtime database")

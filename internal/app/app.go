@@ -23,6 +23,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
+	// Register the CBOR media type so huma can encode and decode it.
 	_ "github.com/danielgtaylor/huma/v2/formats/cbor"
 )
 

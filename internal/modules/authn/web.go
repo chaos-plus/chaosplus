@@ -289,10 +289,10 @@ func (s *WebService) Authenticate(ctx context.Context, authorization, cookieHead
 	}
 	now := s.now().UTC()
 	var session sessionRow
-		err = s.db.NewSelect().Model(&session).
+	err = s.db.NewSelect().Model(&session).
 		Where("id_hash = ? AND revoked_at = 0 AND expires_at > ? AND absolute_expires_at > ?", tokenHash(token), now.UnixMilli(), now.UnixMilli()).
 		Scan(ctx)
-if err != nil {
+	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: load session: %v", authnext.ErrUnavailable, err)
 		}
@@ -401,8 +401,12 @@ func (s *WebService) ValidateCSRF(method, origin, cookieHeader, authorization st
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions || method == http.MethodTrace || strings.TrimSpace(authorization) != "" {
 		return nil
 	}
+	// No session cookie means there is no browser session to forge; origin
+	// validation only applies to requests that carry one. Bearer clients were
+	// already exempted above, and cookie-less state changes still require real
+	// credentials downstream.
 	if _, err := cookieValue(cookieHeader, s.web.CookieName); err != nil {
-		return nil
+		return nil //nolint:nilerr // cookie-less requests have no session to CSRF-forge
 	}
 	return s.ValidateLoginOrigin(origin)
 }

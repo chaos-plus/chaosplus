@@ -27,14 +27,14 @@ func TestModule_LookupGeoIP(t *testing.T) {
 		Code int `json:"code"`
 		Data []struct {
 			Provider string `json:"provider"`
-			Ip       string `json:"ip"`
+			IP       string `json:"ip"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
 	assert.Equal(t, 0, body.Code)
 	require.NotEmpty(t, body.Data)
 	for _, entry := range body.Data {
-		assert.Equal(t, "127.0.0.1", entry.Ip)
+		assert.Equal(t, "127.0.0.1", entry.IP)
 		assert.NotEmpty(t, entry.Provider)
 	}
 }

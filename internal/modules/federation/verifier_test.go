@@ -25,19 +25,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testIdP is a real OIDC identity provider for tests: discovery, authorize,
+// testIDP is a real OIDC identity provider for tests: discovery, authorize,
 // token, and JWKS endpoints backed by an Ed25519 signing key. No mocks.
-type testIdPCode struct {
+type testIDPCode struct {
 	issuer    string
 	challenge string
 }
 
-type testIdP struct {
+type testIDP struct {
 	server        *httptest.Server
 	mu            sync.Mutex
 	key           ed25519.PrivateKey
 	kid           string
-	codes         map[string]testIdPCode
+	codes         map[string]testIDPCode
 	issuer        string
 	clientID      string
 	secret        string
@@ -47,11 +47,11 @@ type testIdP struct {
 	discoveryHits int
 }
 
-func newTestIdP(t *testing.T) *testIdP {
+func newTestIDP(t *testing.T) *testIDP {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	idp := &testIdP{key: key, kid: "test-key", codes: map[string]testIdPCode{}, clientID: "chaosplus-app"}
+	idp := &testIDP{key: key, kid: "test-key", codes: map[string]testIDPCode{}, clientID: "chaosplus-app"}
 	idp.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, wellKnownPath):
@@ -97,7 +97,7 @@ func writeJSON(w http.ResponseWriter, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func (p *testIdP) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+func (p *testIDP) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -116,12 +116,12 @@ func (p *testIdP) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	issuer := p.server.URL + strings.TrimSuffix(r.URL.Path, "/authorize")
 	p.mu.Lock()
-	p.codes[code] = testIdPCode{issuer: issuer, challenge: query.Get("code_challenge")}
+	p.codes[code] = testIDPCode{issuer: issuer, challenge: query.Get("code_challenge")}
 	p.mu.Unlock()
 	writeJSON(w, map[string]any{"code": code, "state": query.Get("state")})
 }
 
-func (p *testIdP) handleToken(t *testing.T, w http.ResponseWriter, r *http.Request) {
+func (p *testIDP) handleToken(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -198,7 +198,7 @@ func signTestJWT(t *testing.T, key ed25519.PrivateKey, kid string, claims map[st
 	return signing + "." + enc.EncodeToString(ed25519.Sign(key, []byte(signing)))
 }
 
-func (p *testIdP) setClaim(key string, value any) {
+func (p *testIDP) setClaim(key string, value any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.extra == nil {
@@ -207,7 +207,7 @@ func (p *testIdP) setClaim(key string, value any) {
 	p.extra[key] = value
 }
 
-func (p *testIdP) rotateKey(t *testing.T) {
+func (p *testIDP) rotateKey(t *testing.T) {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func (p *testIdP) rotateKey(t *testing.T) {
 	p.kid = "rotated-key"
 }
 
-func (p *testIdP) authorize(t *testing.T, client *http.Client, issuer, verifier, state string) (code, returnedState string) {
+func (p *testIDP) authorize(t *testing.T, client *http.Client, issuer, verifier, state string) (code, returnedState string) {
 	t.Helper()
 	u := issuer + "/authorize?response_type=code&client_id=" + p.clientID +
 		"&redirect_uri=" + issuer + "/callback&state=" + url.QueryEscape(state) + "&scope=openid&code_challenge=" +
@@ -235,12 +235,12 @@ func (p *testIdP) authorize(t *testing.T, client *http.Client, issuer, verifier,
 	return body.Code, body.State
 }
 
-func newTestOIDCClient(idp *testIdP) *oidcClient {
+func newTestOIDCClient(idp *testIDP) *oidcClient {
 	return newOIDCClient(idp.server.Client(), 30*time.Second, 5*time.Minute)
 }
 
 func TestOIDCDiscoveryCachesAndValidates(t *testing.T) {
-	idp := newTestIdP(t)
+	idp := newTestIDP(t)
 	client := newTestOIDCClient(idp)
 	ctx := context.Background()
 
@@ -260,7 +260,7 @@ func TestOIDCDiscoveryCachesAndValidates(t *testing.T) {
 	_, err = client.discovery(ctx, missing.URL)
 	assert.ErrorIs(t, err, ErrOIDCDiscovery)
 
-	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"authorization_endpoint": "relative/path"})
 	}))
 	t.Cleanup(broken.Close)
@@ -269,7 +269,7 @@ func TestOIDCDiscoveryCachesAndValidates(t *testing.T) {
 }
 
 func TestOIDCCodeExchangeFlow(t *testing.T) {
-	idp := newTestIdP(t)
+	idp := newTestIDP(t)
 	idp.secret = "client-secret"
 	client := newTestOIDCClient(idp)
 	ctx := context.Background()
@@ -286,17 +286,17 @@ func TestOIDCCodeExchangeFlow(t *testing.T) {
 	assert.ErrorIs(t, err, ErrOIDCToken)
 
 	// Wrong PKCE verifier fails at the IdP.
-	code, returned = idp.authorize(t, idp.server.Client(), idp.issuer, verifier, "flow-state")
+	code, _ = idp.authorize(t, idp.server.Client(), idp.issuer, verifier, "flow-state")
 	_, err = client.exchangeCode(ctx, idp.issuer, idp.clientID, idp.secret, code, idp.issuer+"/callback", verifier+"x")
 	assert.ErrorIs(t, err, ErrOIDCToken)
 
 	// Wrong client secret fails at the IdP.
-	code, returned = idp.authorize(t, idp.server.Client(), idp.issuer, verifier, "flow-state")
+	code, _ = idp.authorize(t, idp.server.Client(), idp.issuer, verifier, "flow-state")
 	_, err = client.exchangeCode(ctx, idp.issuer, idp.clientID, "wrong", code, idp.issuer+"/callback", verifier)
 	assert.ErrorIs(t, err, ErrOIDCToken)
 }
 
-func verifyIDTokenViaFlow(t *testing.T, idp *testIdP, client *oidcClient) (idTokenClaims, error) {
+func verifyIDTokenViaFlow(t *testing.T, idp *testIDP, client *oidcClient) (idTokenClaims, error) {
 	t.Helper()
 	ctx := context.Background()
 	verifier := "verifier-12345678901234567890123456789012"
@@ -308,7 +308,7 @@ func verifyIDTokenViaFlow(t *testing.T, idp *testIdP, client *oidcClient) (idTok
 }
 
 func TestOIDCIDTokenVerification(t *testing.T) {
-	idp := newTestIdP(t)
+	idp := newTestIDP(t)
 	client := newTestOIDCClient(idp)
 
 	claims, err := verifyIDTokenViaFlow(t, idp, client)
@@ -321,31 +321,31 @@ func TestOIDCIDTokenVerification(t *testing.T) {
 	assert.True(t, *claims.EmailVerified)
 
 	t.Run("bad signature", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.badSig = true
 		_, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 	})
 	t.Run("wrong issuer", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.setClaim("iss", "https://other.example")
 		_, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 	})
 	t.Run("wrong audience", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.setClaim("aud", "some-other-app")
 		_, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 	})
 	t.Run("expired", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.setClaim("exp", time.Now().Add(-time.Minute).Unix())
 		_, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 	})
 	t.Run("not yet valid", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.setClaim("nbf", time.Now().Add(2*time.Minute).Unix())
 		_, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
@@ -355,7 +355,7 @@ func TestOIDCIDTokenVerification(t *testing.T) {
 		assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 	})
 	t.Run("audience as array", func(t *testing.T) {
-		sub := newTestIdP(t)
+		sub := newTestIDP(t)
 		sub.setClaim("aud", []string{"first", sub.clientID})
 		claims, err := verifyIDTokenViaFlow(t, sub, newTestOIDCClient(sub))
 		require.NoError(t, err)
@@ -364,7 +364,7 @@ func TestOIDCIDTokenVerification(t *testing.T) {
 }
 
 func TestOIDCKeyRotationRetries(t *testing.T) {
-	idp := newTestIdP(t)
+	idp := newTestIDP(t)
 	client := newTestOIDCClient(idp)
 	ctx := context.Background()
 
@@ -389,7 +389,7 @@ func TestOIDCKeyRotationRetries(t *testing.T) {
 	assert.ErrorIs(t, err, ErrOIDCTokenInvalid)
 }
 
-func signedTokenFor(t *testing.T, idp *testIdP, subject string, extra map[string]any) string {
+func signedTokenFor(t *testing.T, idp *testIDP, subject string, extra map[string]any) string {
 	t.Helper()
 	idp.mu.Lock()
 	key, kid := idp.key, idp.kid
@@ -545,11 +545,11 @@ func TestAudClaimUnmarshalRejectsInvalidJSON(t *testing.T) {
 }
 
 func TestOIDCDiscoveryServerErrors(t *testing.T) {
-	internalError := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	internalError := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	t.Cleanup(internalError.Close)
-	badJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	badJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("{"))
 	}))

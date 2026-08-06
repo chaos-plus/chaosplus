@@ -23,11 +23,11 @@ func TestDepartmentLifecycle(t *testing.T) {
 	db, service := newOrganizationService(t)
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "administrator"})
 
-	rootA := createDepartment(t, ctx, service, "tenant-a", CreateDepartment{Name: "Engineering", SortOrder: 10})
-	rootB := createDepartment(t, ctx, service, "tenant-a", CreateDepartment{Name: "Operations", SortOrder: 5})
-	child := createDepartment(t, ctx, service, "tenant-a", CreateDepartment{ParentID: rootA.ID, Name: "Platform", SortOrder: 2})
-	grandchild := createDepartment(t, ctx, service, "tenant-a", CreateDepartment{ParentID: child.ID, Name: "Runtime"})
-	otherTenant := createDepartment(t, ctx, service, "tenant-b", CreateDepartment{Name: "Engineering"})
+	rootA := createDepartment(ctx, t, service, "tenant-a", CreateDepartment{Name: "Engineering", SortOrder: 10})
+	rootB := createDepartment(ctx, t, service, "tenant-a", CreateDepartment{Name: "Operations", SortOrder: 5})
+	child := createDepartment(ctx, t, service, "tenant-a", CreateDepartment{ParentID: rootA.ID, Name: "Platform", SortOrder: 2})
+	grandchild := createDepartment(ctx, t, service, "tenant-a", CreateDepartment{ParentID: child.ID, Name: "Runtime"})
+	otherTenant := createDepartment(ctx, t, service, "tenant-b", CreateDepartment{Name: "Engineering"})
 
 	items, err := service.List(ctx, " tenant-a ")
 	require.NoError(t, err)
@@ -169,8 +169,8 @@ func TestDepartmentCreateRollsBackWhenAuditFails(t *testing.T) {
 
 func TestDepartmentMoveToRootAndMutationRollback(t *testing.T) {
 	db, service := newOrganizationService(t)
-	root := createDepartment(t, t.Context(), service, "tenant", CreateDepartment{Name: "Root"})
-	child := createDepartment(t, t.Context(), service, "tenant", CreateDepartment{ParentID: root.ID, Name: "Child"})
+	root := createDepartment(t.Context(), t, service, "tenant", CreateDepartment{Name: "Root"})
+	child := createDepartment(t.Context(), t, service, "tenant", CreateDepartment{ParentID: root.ID, Name: "Child"})
 
 	emptyParent := ""
 	child, err := service.Update(t.Context(), "tenant", child.ID, UpdateDepartment{ParentID: &emptyParent, Version: child.Version})
@@ -252,7 +252,7 @@ func realOrganizationAuditAppender(db *bun.DB) auditx.Appender {
 	}
 }
 
-func createDepartment(t *testing.T, ctx context.Context, service *Service, tenantID string, input CreateDepartment) Department {
+func createDepartment(ctx context.Context, t *testing.T, service *Service, tenantID string, input CreateDepartment) Department {
 	t.Helper()
 	department, err := service.Create(ctx, tenantID, input)
 	require.NoError(t, err)

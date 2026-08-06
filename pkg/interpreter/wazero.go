@@ -105,11 +105,11 @@ func (r *wasmRuntime) deallocate(ctx context.Context, ptr, size uint32) {
 
 func (r *wasmRuntime) Name() string { return EngineWasm }
 
-func (r *wasmRuntime) Bind(name string, value any) error {
+func (r *wasmRuntime) Bind(name string, _ any) error {
 	return fmt.Errorf("interpreter/wasm: Bind %q is %w; define host functions before instantiation", name, ErrUnsupported)
 }
 
-func (r *wasmRuntime) Eval(ctx context.Context, expr string) (any, error) {
+func (r *wasmRuntime) Eval(ctx context.Context, _ string) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func decodeWasmValue(t api.ValueType, v uint64) any {
 	case api.ValueTypeI32:
 		return api.DecodeI32(v)
 	case api.ValueTypeI64:
-		return int64(v)
+		return int64(v) //nolint:gosec // G115: wasm i64 is a raw two's-complement bit pattern
 	case api.ValueTypeF32:
 		return api.DecodeF32(v)
 	case api.ValueTypeF64:
@@ -231,7 +231,7 @@ func toInt64(v any) (int64, bool) {
 		if uint64(x) > math.MaxInt64 {
 			return 0, false
 		}
-		return int64(x), true
+		return int64(x), true //nolint:gosec // G115: guarded by overflow check above
 	case uint8:
 		return int64(x), true
 	case uint16:

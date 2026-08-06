@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -158,8 +159,8 @@ func TestProtocolErrorContract(t *testing.T) {
 	require.NoError(t, RegisterI18n())
 	err := oauthError(i18n.WithLocale(context.Background(), "zh-CN"), http.StatusUnauthorized, "invalid_client")
 	assert.Equal(t, "invalid_client", err.Error())
-	protocol, ok := err.(*protocolError)
-	require.True(t, ok)
+	var protocol *protocolError
+	require.True(t, errors.As(err, &protocol))
 	assert.Equal(t, http.StatusUnauthorized, protocol.GetStatus())
 	assert.Equal(t, "OAuth 客户端认证失败，请核对客户端标识符和凭据后重试。", protocol.Description)
 	assert.Equal(t, "401", httpStatus(http.StatusUnauthorized))

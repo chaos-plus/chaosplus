@@ -436,7 +436,7 @@ func requestFromRow(row accessRequestRow, now time.Time) AccessRequest {
 	return item
 }
 
-func validID(value string, max int) bool {
+func validID(value string, limit int) bool {
 	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= max
+	return value != "" && len(value) <= limit
 }

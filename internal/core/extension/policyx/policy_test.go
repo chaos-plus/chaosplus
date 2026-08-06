@@ -45,6 +45,7 @@ func TestRevisionDialectAndValidation(t *testing.T) {
 	assert.Error(t, Lock(t.Context(), dbWithNoPolicyTable(t), "sqlite", "tenant"))
 	assert.Error(t, Advance(t.Context(), dbWithNoPolicyTable(t), "sqlite", "tenant", 1))
 	_, err := Current(t.Context(), nil, "tenant")
+	assert.Error(t, err)
 	_, err = Current(t.Context(), dbWithNoPolicyTable(t), "tenant")
 	assert.Error(t, err)
 }

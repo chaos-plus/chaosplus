@@ -3,6 +3,7 @@ package respx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -80,12 +81,12 @@ func TestInstall_AppSummaryPassesThroughUnchanged(t *testing.T) {
 func TestErr_BusinessEnvelope(t *testing.T) {
 	e := Err(context.Background(), 100001, "insufficient_balance")
 
-	se, ok := e.(huma.StatusError)
-	require.True(t, ok)
+	var se huma.StatusError
+	require.True(t, errors.As(e, &se))
 	assert.Equal(t, 400, se.GetStatus())
 
-	ee, ok := e.(*errorEnvelope)
-	require.True(t, ok)
+	var ee *errorEnvelope
+	require.True(t, errors.As(e, &ee))
 	assert.Equal(t, 100001, ee.Code)
 	assert.Equal(t, "insufficient_balance", ee.Message, "message carries the i18n key")
 	assert.Equal(t, "insufficient_balance", ee.Error(), "Error() exposes the message")

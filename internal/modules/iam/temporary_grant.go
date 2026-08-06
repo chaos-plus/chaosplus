@@ -62,7 +62,7 @@ func RevokeTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID stri
 	return affected > 0, nil
 }
 
-func validTemporaryGrantID(value string, max int) bool {
+func validTemporaryGrantID(value string, limit int) bool {
 	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= max
+	return value != "" && len(value) <= limit
 }

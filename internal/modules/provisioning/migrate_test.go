@@ -83,7 +83,7 @@ func newProvisioningLifecycleDatabase(t *testing.T, dialect, adminDSN string) *b
 		assert.NoError(t, cleanupErr)
 	})
 
-	targetDSN := adminDSN
+	var targetDSN string
 	if dialect == "mysql" {
 		cfg, parseErr := mysql.ParseDSN(adminDSN)
 		require.NoError(t, parseErr)

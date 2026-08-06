@@ -169,6 +169,7 @@ func NewModuleI18n(fallback, dir string) *I18n {
 	if err := inst.LoadDir(dir); err != nil {
 		// Non-fatal: fallback to key passthrough when locale files are missing.
 		// This is common during unit tests that run without locale file paths.
+		slog.Warn("module i18n locales unavailable", "dir", dir, "error", err)
 	}
 	return inst
 }

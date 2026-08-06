@@ -157,7 +157,8 @@ func browserResponses(schemas huma.Registry) map[string]*huma.Response {
 }
 
 func writeFederationError(api huma.API, ctx huma.Context, err error) {
-	if mapped, ok := federationError(err).(huma.StatusError); ok {
+	var mapped huma.StatusError
+	if errors.As(federationError(err), &mapped) {
 		_ = huma.WriteErr(api, ctx, mapped.GetStatus(), mapped.Error())
 		return
 	}
@@ -167,11 +168,7 @@ func writeFederationError(api huma.API, ctx huma.Context, err error) {
 func intPointer(value int) *int { return &value }
 
 func providerInputFromBody(body providerBody) ProviderInput {
-	return ProviderInput{
-		Name: body.Name, ProviderType: body.ProviderType, Issuer: body.Issuer, ClientID: body.ClientID,
-		ClientSecret: body.ClientSecret, Scopes: body.Scopes, AutoProvision: body.AutoProvision,
-		DefaultRoleID: body.DefaultRoleID, Status: body.Status,
-	}
+	return ProviderInput(body)
 }
 
 // requestCallbackURL reconstructs the externally visible callback URL from the
