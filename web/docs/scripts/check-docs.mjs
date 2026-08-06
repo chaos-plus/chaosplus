@@ -52,7 +52,12 @@ for (const file of listMarkdown(docsRoot)) {
 		if (!href.startsWith('/') || href.startsWith('//')) continue;
 		const route = href.split('#', 1)[0];
 		const normalized = route.endsWith('/') ? route : `${route}/`;
-		if (!routes.has(normalized)) failures.push(`Broken internal link in ${path.relative(docsRoot, file)}: ${href}`);
+		if (!routes.has(normalized)) {
+			const publicTarget = path.join(siteRoot, 'public', ...normalized.split('/').filter(Boolean));
+			if (!(fs.existsSync(publicTarget) && fs.statSync(publicTarget).isFile())) {
+				failures.push(`Broken internal link in ${path.relative(docsRoot, file)}: ${href}`);
+			}
+		}
 	}
 }
 

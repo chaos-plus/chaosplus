@@ -219,6 +219,12 @@ migration, constraint, and SCIM filter comparisons.
 See `CONTRIBUTING.md` at the repository root for the layout, enforced
 rules, and how to run the full gate before opening a pull request.
 
+## License
+
+Released under the [Apache License 2.0](/LICENSE). The same license is used by
+Keycloak, Zitadel, and Ory for their IAM platforms. Derivative works must
+retain the license and attribution notices; see `LICENSE` for the full terms.
+
 ## Security
 
 Report vulnerabilities through GitHub private vulnerability reporting. See
