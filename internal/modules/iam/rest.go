@@ -1,4 +1,4 @@
-package api
+package iam
 
 import (
 	"context"
@@ -15,57 +15,6 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
-
-type Service interface {
-	PermissionCatalog(context.Context) []authz.Action
-	ScopeModel(context.Context) []ScopeNode
-	MenuCatalog(context.Context) []MenuItem
-	CreateRole(context.Context, string, string, string) (iamdomain.Role, error)
-	ListRoles(context.Context, string) ([]iamdomain.Role, error)
-	GetRole(context.Context, string, string) (iamdomain.Role, error)
-	UpdateRole(context.Context, string, string, *string, *string) (iamdomain.Role, error)
-	DeleteRole(context.Context, string, string) error
-	ListPermissions(context.Context, string, string) ([]string, error)
-	ListPermissionGrants(context.Context, string, string) ([]iamdomain.RolePermissionGrant, error)
-	GrantPermission(context.Context, string, string, string) (bool, error)
-	RevokePermission(context.Context, string, string, string) (bool, error)
-	SetPermissionCondition(context.Context, string, string, string, json.RawMessage) (iamdomain.RolePermissionGrant, bool, error)
-	ListMembers(context.Context, string, string) ([]string, error)
-	AddMember(context.Context, string, string, string) (bool, error)
-	RemoveMember(context.Context, string, string, string) (bool, error)
-	ListDirectoryBindings(context.Context, string, string) ([]iamdomain.RoleDirectoryBinding, error)
-	AddDirectoryBinding(context.Context, string, string, iamdomain.DirectoryAssigneeType, string) (bool, error)
-	RemoveDirectoryBinding(context.Context, string, string, iamdomain.DirectoryAssigneeType, string) (bool, error)
-	GetRoleDataScope(context.Context, string, string) (iamdomain.RoleDataScope, error)
-	SetRoleDataScope(context.Context, string, string, iamdomain.DataScope, []string) (iamdomain.RoleDataScope, bool, error)
-	PutTenantMember(context.Context, string, string, string, string, string, iamdomain.MemberStatus) (iamdomain.TenantMember, error)
-	GetTenantMember(context.Context, string, string) (iamdomain.TenantMember, error)
-	ListTenantMembers(context.Context, string, iamdomain.MemberFilter) ([]iamdomain.TenantMember, int64, error)
-	SetTenantMemberStatus(context.Context, string, string, iamdomain.MemberStatus) (iamdomain.TenantMember, error)
-	ListTenantMemberRoles(context.Context, string, string) ([]string, error)
-	CreateMenu(context.Context, iamdomain.Menu) (iamdomain.Menu, error)
-	ListMenus(context.Context, string) ([]iamdomain.Menu, error)
-	GetMenu(context.Context, string, string) (iamdomain.Menu, error)
-	UpdateMenu(context.Context, iamdomain.Menu) (iamdomain.Menu, error)
-	DeleteMenu(context.Context, string, string) error
-	EffectiveMenus(context.Context, string, string) ([]MenuItem, error)
-	CreateEntity(context.Context, iamdomain.Entity) (iamdomain.Entity, error)
-	ListEntities(context.Context, string) ([]iamdomain.Entity, error)
-	GetEntity(context.Context, string, string) (iamdomain.Entity, error)
-	UpdateEntity(context.Context, string, string, iamdomain.EntityPatch) (iamdomain.Entity, error)
-	DeleteEntity(context.Context, string, string) error
-	ListEntityRoleBindings(context.Context, string, string) ([]iamdomain.EntityRoleBinding, error)
-	PutEntityRoleBinding(context.Context, string, string, string, string, iamdomain.BindingEffect, time.Time) (iamdomain.EntityRoleBinding, bool, error)
-	DeleteEntityRoleBinding(context.Context, string, string, string, string) (bool, error)
-	ListRelationships(context.Context, string, iamdomain.RelationshipFilter) ([]iamdomain.Relationship, error)
-	PutRelationship(context.Context, iamdomain.Relationship) (iamdomain.Relationship, bool, error)
-	DeleteRelationship(context.Context, iamdomain.Relationship) (bool, error)
-	CheckEntityAuthorization(context.Context, string, string, string, string) (authz.Explanation, error)
-	CheckResourceAuthorization(context.Context, string, string, string, string, string, string) (authz.Explanation, error)
-	AuthorizationConstraint(context.Context, string, string, string) (authz.DataConstraint, error)
-	ExplainEntityAuthorization(context.Context, string, string, string, string) (authz.Explanation, error)
-	ExplainResourceAuthorization(context.Context, string, string, string, string, string, string) (authz.Explanation, error)
-}
 
 type ScopeNode struct {
 	Type       string `json:"type" doc:"authorization scope type"`
@@ -84,7 +33,7 @@ type MenuItem struct {
 	Children       []MenuItem `json:"children,omitempty"`
 }
 
-type TenantMember struct {
+type APITenantMember struct {
 	TenantID     string                 `json:"tenant_id"`
 	Subject      string                 `json:"subject"`
 	DisplayName  string                 `json:"display_name"`
@@ -97,7 +46,7 @@ type TenantMember struct {
 	DisabledAt   *time.Time             `json:"disabled_at,omitempty"`
 }
 
-type Menu struct {
+type APIMenu struct {
 	ID             string               `json:"id"`
 	TenantID       string               `json:"tenant_id"`
 	ParentID       string               `json:"parent_id,omitempty"`
@@ -111,7 +60,7 @@ type Menu struct {
 	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
-type Role struct {
+type APIRole struct {
 	ID          string    `json:"id"`
 	TenantID    string    `json:"tenant_id"`
 	Name        string    `json:"name"`
@@ -120,20 +69,20 @@ type Role struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-type RolePermissionGrant struct {
+type APIRolePermissionGrant struct {
 	PermissionCode string          `json:"permission_code"`
 	Condition      policyCondition `json:"condition,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
-type RoleDirectoryBinding struct {
+type APIRoleDirectoryBinding struct {
 	RoleID       string                          `json:"role_id"`
 	AssigneeType iamdomain.DirectoryAssigneeType `json:"assignee_type" enum:"group,position"`
 	AssigneeID   string                          `json:"assignee_id"`
 	CreatedAt    time.Time                       `json:"created_at"`
 }
 
-type RoleDataScope struct {
+type APIRoleDataScope struct {
 	RoleID        string              `json:"role_id"`
 	Scope         iamdomain.DataScope `json:"scope" enum:"all,self,department,department_and_descendants,selected_departments"`
 	DepartmentIDs []string            `json:"department_ids"`
@@ -362,7 +311,7 @@ type authorizationExplanationInput struct {
 }
 
 // RegisterREST mounts IAM discovery endpoints for the management UI.
-func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
+func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 	registerRelationshipREST(a, svc, registrar)
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-permission-catalog",
@@ -510,7 +459,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-roles", Method: http.MethodGet, Path: "/iam/roles", Summary: "List tenant roles", Tags: []string{"iam"},
-	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]Role], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]APIRole], error) {
 		roles, err := svc.ListRoles(ctx, in.TenantID)
 		if err != nil {
 			return nil, apiError("list roles", err)
@@ -520,7 +469,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-create-role", Method: http.MethodPost, Path: "/iam/roles", Summary: "Create a tenant role", Tags: []string{"iam"}, Errors: []int{http.StatusConflict},
-	}, authz.Guard{Resource: "role", Verb: "create"}, func(ctx context.Context, in *createRoleInput) (*respx.Body[Role], error) {
+	}, authz.Guard{Resource: "role", Verb: "create"}, func(ctx context.Context, in *createRoleInput) (*respx.Body[APIRole], error) {
 		role, err := svc.CreateRole(ctx, in.TenantID, in.Body.Name, in.Body.Description)
 		if err != nil {
 			return nil, apiError("create role", err)
@@ -530,7 +479,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-get-role", Method: http.MethodGet, Path: "/iam/roles/{role_id}", Summary: "Get a tenant role", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound},
-	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[Role], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[APIRole], error) {
 		role, err := svc.GetRole(ctx, in.TenantID, in.RoleID)
 		if err != nil {
 			return nil, apiError("get role", err)
@@ -540,7 +489,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-get-role-data-scope", Method: http.MethodGet, Path: "/iam/roles/{role_id}/data-scope", Summary: "Get a role data scope", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity},
-	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[RoleDataScope], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[APIRoleDataScope], error) {
 		scope, err := svc.GetRoleDataScope(ctx, in.TenantID, in.RoleID)
 		if err != nil {
 			return nil, apiError("get role data scope", err)
@@ -550,7 +499,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-set-role-data-scope", Method: http.MethodPut, Path: "/iam/roles/{role_id}/data-scope", Summary: "Set a role data scope", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
-	}, authz.Guard{Resource: "role", Verb: "update"}, func(ctx context.Context, in *setRoleDataScopeInput) (*respx.Body[RoleDataScope], error) {
+	}, authz.Guard{Resource: "role", Verb: "update"}, func(ctx context.Context, in *setRoleDataScopeInput) (*respx.Body[APIRoleDataScope], error) {
 		scope, _, err := svc.SetRoleDataScope(ctx, in.TenantID, in.RoleID, in.Body.Scope, in.Body.DepartmentIDs)
 		if err != nil {
 			return nil, apiError("set role data scope", err)
@@ -560,7 +509,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-update-role", Method: http.MethodPatch, Path: "/iam/roles/{role_id}", Summary: "Update a tenant role", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict},
-	}, authz.Guard{Resource: "role", Verb: "update"}, func(ctx context.Context, in *updateRoleInput) (*respx.Body[Role], error) {
+	}, authz.Guard{Resource: "role", Verb: "update"}, func(ctx context.Context, in *updateRoleInput) (*respx.Body[APIRole], error) {
 		role, err := svc.UpdateRole(ctx, in.TenantID, in.RoleID, in.Body.Name, in.Body.Description)
 		if err != nil {
 			return nil, apiError("update role", err)
@@ -589,7 +538,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-role-permission-grants", Method: http.MethodGet, Path: "/iam/roles/{role_id}/permission-grants", Summary: "List role permission grants with conditions", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound},
-	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[[]RolePermissionGrant], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[[]APIRolePermissionGrant], error) {
 		grants, err := svc.ListPermissionGrants(ctx, in.TenantID, in.RoleID)
 		if err != nil {
 			return nil, apiError("list role permission grants", err)
@@ -619,7 +568,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-set-role-permission-condition", Method: http.MethodPut, Path: "/iam/roles/{role_id}/permissions/{permission_code}/condition", Summary: "Set a trusted-context condition on a role permission", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
-	}, authz.Guard{Resource: "role", Verb: "grant_permission"}, func(ctx context.Context, in *setPermissionConditionInput) (*respx.Body[RolePermissionGrant], error) {
+	}, authz.Guard{Resource: "role", Verb: "grant_permission"}, func(ctx context.Context, in *setPermissionConditionInput) (*respx.Body[APIRolePermissionGrant], error) {
 		grant, _, err := svc.SetPermissionCondition(ctx, in.TenantID, in.RoleID, in.PermissionCode, json.RawMessage(in.Body.Condition))
 		if err != nil {
 			return nil, apiError("set role permission condition", err)
@@ -669,7 +618,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-role-directory-bindings", Method: http.MethodGet, Path: "/iam/roles/{role_id}/directory-bindings", Summary: "List group and position role assignments", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound},
-	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[[]RoleDirectoryBinding], error) {
+	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *roleInput) (*respx.Body[[]APIRoleDirectoryBinding], error) {
 		bindings, err := svc.ListDirectoryBindings(ctx, in.TenantID, in.RoleID)
 		if err != nil {
 			return nil, apiError("list role directory bindings", err)
@@ -697,21 +646,21 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 		return respx.OK(ctx, MutationResult{Changed: changed, SyncStatus: "applied"}), nil
 	})
 
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-tenant-members", Method: http.MethodGet, Path: "/iam/members", Summary: "List tenant memberships", Tags: []string{"iam"}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *listTenantMembersInput) (*respx.Body[[]TenantMember], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-tenant-members", Method: http.MethodGet, Path: "/iam/members", Summary: "List tenant memberships", Tags: []string{"iam"}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *listTenantMembersInput) (*respx.Body[[]APITenantMember], error) {
 		members, total, err := svc.ListTenantMembers(ctx, in.TenantID, iamdomain.MemberFilter{Search: in.Search, Status: in.Status, Offset: in.Offset, Limit: in.Limit})
 		if err != nil {
 			return nil, apiError("list tenant members", err)
 		}
 		return respx.List(ctx, membersFromDomain(members), respx.Page{Offset: in.Offset, Limit: in.Limit, Count: len(members), Total: total}), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-tenant-member", Method: http.MethodPost, Path: "/iam/members", Summary: "Bind an existing principal to a tenant", Tags: []string{"iam"}, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createTenantMemberInput) (*respx.Body[TenantMember], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-tenant-member", Method: http.MethodPost, Path: "/iam/members", Summary: "Bind an existing principal to a tenant", Tags: []string{"iam"}, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createTenantMemberInput) (*respx.Body[APITenantMember], error) {
 		member, err := svc.PutTenantMember(ctx, in.TenantID, in.Body.Subject, in.Body.DisplayName, in.Body.Email, in.Body.DepartmentID, in.Body.Status)
 		if err != nil {
 			return nil, apiError("create tenant member", err)
 		}
 		return respx.OK(ctx, memberFromDomain(member)), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-tenant-member", Method: http.MethodGet, Path: "/iam/members/{subject}", Summary: "Get a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *tenantMemberInput) (*respx.Body[TenantMember], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-tenant-member", Method: http.MethodGet, Path: "/iam/members/{subject}", Summary: "Get a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *tenantMemberInput) (*respx.Body[APITenantMember], error) {
 		member, err := svc.GetTenantMember(ctx, in.TenantID, in.Subject)
 		if err != nil {
 			return nil, apiError("get tenant member", err)
@@ -724,7 +673,7 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 		out.RoleIDs = roles
 		return respx.OK(ctx, out), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-tenant-member", Method: http.MethodPatch, Path: "/iam/members/{subject}", Summary: "Update or disable a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "update"}, func(ctx context.Context, in *updateTenantMemberInput) (*respx.Body[TenantMember], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-tenant-member", Method: http.MethodPatch, Path: "/iam/members/{subject}", Summary: "Update or disable a tenant membership", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "update"}, func(ctx context.Context, in *updateTenantMemberInput) (*respx.Body[APITenantMember], error) {
 		member, err := svc.GetTenantMember(ctx, in.TenantID, in.Subject)
 		if err != nil {
 			return nil, apiError("get tenant member", err)
@@ -755,28 +704,28 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 		return respx.OK(ctx, roles), nil
 	})
 
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-menus", Method: http.MethodGet, Path: "/iam/menus", Summary: "List tenant menu metadata", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]Menu], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-list-menus", Method: http.MethodGet, Path: "/iam/menus", Summary: "List tenant menu metadata", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]APIMenu], error) {
 		menus, err := svc.ListMenus(ctx, in.TenantID)
 		if err != nil {
 			return nil, apiError("list menus", err)
 		}
 		return respx.OK(ctx, menusFromDomain(menus)), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-menu", Method: http.MethodPost, Path: "/iam/menus", Summary: "Create a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "create"}, func(ctx context.Context, in *createMenuInput) (*respx.Body[Menu], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-menu", Method: http.MethodPost, Path: "/iam/menus", Summary: "Create a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "create"}, func(ctx context.Context, in *createMenuInput) (*respx.Body[APIMenu], error) {
 		menu, err := svc.CreateMenu(ctx, iamdomain.Menu{TenantID: in.TenantID, ParentID: in.Body.ParentID, Label: in.Body.Label, Route: in.Body.Route, Icon: in.Body.Icon, SortOrder: in.Body.SortOrder, PermissionCode: in.Body.PermissionCode, Status: in.Body.Status})
 		if err != nil {
 			return nil, apiError("create menu", err)
 		}
 		return respx.OK(ctx, menuFromDomain(menu)), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-menu", Method: http.MethodGet, Path: "/iam/menus/{menu_id}", Summary: "Get a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *menuInput) (*respx.Body[Menu], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-get-menu", Method: http.MethodGet, Path: "/iam/menus/{menu_id}", Summary: "Get a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "view"}, func(ctx context.Context, in *menuInput) (*respx.Body[APIMenu], error) {
 		menu, err := svc.GetMenu(ctx, in.TenantID, in.MenuID)
 		if err != nil {
 			return nil, apiError("get menu", err)
 		}
 		return respx.OK(ctx, menuFromDomain(menu)), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-menu", Method: http.MethodPatch, Path: "/iam/menus/{menu_id}", Summary: "Update a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "update"}, func(ctx context.Context, in *updateMenuInput) (*respx.Body[Menu], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-update-menu", Method: http.MethodPatch, Path: "/iam/menus/{menu_id}", Summary: "Update a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "update"}, func(ctx context.Context, in *updateMenuInput) (*respx.Body[APIMenu], error) {
 		menu, err := svc.GetMenu(ctx, in.TenantID, in.MenuID)
 		if err != nil {
 			return nil, apiError("get menu", err)
@@ -827,24 +776,24 @@ func RegisterREST(a huma.API, svc Service, registrar *authz.Registrar) {
 	})
 }
 
-func roleFromDomain(role iamdomain.Role) Role {
-	return Role{ID: role.ID, TenantID: role.TenantID, Name: role.Name, Description: role.Description, CreatedAt: role.CreatedAt, UpdatedAt: role.UpdatedAt}
+func roleFromDomain(role iamdomain.Role) APIRole {
+	return APIRole{ID: role.ID, TenantID: role.TenantID, Name: role.Name, Description: role.Description, CreatedAt: role.CreatedAt, UpdatedAt: role.UpdatedAt}
 }
 
-func rolesFromDomain(roles []iamdomain.Role) []Role {
-	out := make([]Role, 0, len(roles))
+func rolesFromDomain(roles []iamdomain.Role) []APIRole {
+	out := make([]APIRole, 0, len(roles))
 	for _, role := range roles {
 		out = append(out, roleFromDomain(role))
 	}
 	return out
 }
 
-func rolePermissionGrantFromDomain(grant iamdomain.RolePermissionGrant) RolePermissionGrant {
-	return RolePermissionGrant{PermissionCode: grant.PermissionCode, Condition: policyCondition(grant.Condition), CreatedAt: grant.CreatedAt}
+func rolePermissionGrantFromDomain(grant iamdomain.RolePermissionGrant) APIRolePermissionGrant {
+	return APIRolePermissionGrant{PermissionCode: grant.PermissionCode, Condition: policyCondition(grant.Condition), CreatedAt: grant.CreatedAt}
 }
 
-func rolePermissionGrantsFromDomain(grants []iamdomain.RolePermissionGrant) []RolePermissionGrant {
-	out := make([]RolePermissionGrant, 0, len(grants))
+func rolePermissionGrantsFromDomain(grants []iamdomain.RolePermissionGrant) []APIRolePermissionGrant {
+	out := make([]APIRolePermissionGrant, 0, len(grants))
 	for _, grant := range grants {
 		out = append(out, rolePermissionGrantFromDomain(grant))
 	}
@@ -886,16 +835,16 @@ func entityBindingsFromDomain(bindings []iamdomain.EntityRoleBinding) []EntityRo
 	return out
 }
 
-func directoryBindingsFromDomain(bindings []iamdomain.RoleDirectoryBinding) []RoleDirectoryBinding {
-	out := make([]RoleDirectoryBinding, 0, len(bindings))
+func directoryBindingsFromDomain(bindings []iamdomain.RoleDirectoryBinding) []APIRoleDirectoryBinding {
+	out := make([]APIRoleDirectoryBinding, 0, len(bindings))
 	for _, binding := range bindings {
-		out = append(out, RoleDirectoryBinding{RoleID: binding.RoleID, AssigneeType: binding.AssigneeType, AssigneeID: binding.AssigneeID, CreatedAt: binding.CreatedAt})
+		out = append(out, APIRoleDirectoryBinding{RoleID: binding.RoleID, AssigneeType: binding.AssigneeType, AssigneeID: binding.AssigneeID, CreatedAt: binding.CreatedAt})
 	}
 	return out
 }
 
-func memberFromDomain(member iamdomain.TenantMember) TenantMember {
-	out := TenantMember{TenantID: member.TenantID, Subject: member.Subject, DisplayName: member.DisplayName, Email: member.Email, DepartmentID: member.DepartmentID, Status: member.Status, CreatedAt: member.CreatedAt, UpdatedAt: member.UpdatedAt}
+func memberFromDomain(member iamdomain.TenantMember) APITenantMember {
+	out := APITenantMember{TenantID: member.TenantID, Subject: member.Subject, DisplayName: member.DisplayName, Email: member.Email, DepartmentID: member.DepartmentID, Status: member.Status, CreatedAt: member.CreatedAt, UpdatedAt: member.UpdatedAt}
 	if !member.DisabledAt.IsZero() {
 		value := member.DisabledAt
 		out.DisabledAt = &value
@@ -903,8 +852,8 @@ func memberFromDomain(member iamdomain.TenantMember) TenantMember {
 	return out
 }
 
-func roleDataScopeFromDomain(scope iamdomain.RoleDataScope) RoleDataScope {
-	out := RoleDataScope{RoleID: scope.RoleID, Scope: scope.Scope, DepartmentIDs: scope.DepartmentIDs}
+func roleDataScopeFromDomain(scope iamdomain.RoleDataScope) APIRoleDataScope {
+	out := APIRoleDataScope{RoleID: scope.RoleID, Scope: scope.Scope, DepartmentIDs: scope.DepartmentIDs}
 	if !scope.UpdatedAt.IsZero() {
 		updatedAt := scope.UpdatedAt
 		out.UpdatedAt = &updatedAt
@@ -912,18 +861,18 @@ func roleDataScopeFromDomain(scope iamdomain.RoleDataScope) RoleDataScope {
 	return out
 }
 
-func membersFromDomain(members []iamdomain.TenantMember) []TenantMember {
-	out := make([]TenantMember, 0, len(members))
+func membersFromDomain(members []iamdomain.TenantMember) []APITenantMember {
+	out := make([]APITenantMember, 0, len(members))
 	for _, member := range members {
 		out = append(out, memberFromDomain(member))
 	}
 	return out
 }
-func menuFromDomain(menu iamdomain.Menu) Menu {
-	return Menu{ID: menu.ID, TenantID: menu.TenantID, ParentID: menu.ParentID, Label: menu.Label, Route: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Status: menu.Status, CreatedAt: menu.CreatedAt, UpdatedAt: menu.UpdatedAt}
+func menuFromDomain(menu iamdomain.Menu) APIMenu {
+	return APIMenu{ID: menu.ID, TenantID: menu.TenantID, ParentID: menu.ParentID, Label: menu.Label, Route: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Status: menu.Status, CreatedAt: menu.CreatedAt, UpdatedAt: menu.UpdatedAt}
 }
-func menusFromDomain(menus []iamdomain.Menu) []Menu {
-	out := make([]Menu, 0, len(menus))
+func menusFromDomain(menus []iamdomain.Menu) []APIMenu {
+	out := make([]APIMenu, 0, len(menus))
 	for _, menu := range menus {
 		out = append(out, menuFromDomain(menu))
 	}

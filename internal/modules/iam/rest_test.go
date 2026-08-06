@@ -1,4 +1,4 @@
-package api_test
+package iam_test
 
 import (
 	"context"
@@ -20,7 +20,6 @@ import (
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
-	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/danielgtaylor/huma/v2"
@@ -45,7 +44,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	emptyMenus := api.Get("/iam/me/menus", header[0], header[1])
 	require.Equal(t, http.StatusOK, emptyMenus.Code, emptyMenus.Body.String())
 	var emptyMenuEnvelope struct {
-		Data []iamapi.MenuItem `json:"data"`
+		Data []iam.MenuItem `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(emptyMenus.Body.Bytes(), &emptyMenuEnvelope))
 	assert.NotNil(t, emptyMenuEnvelope.Data)
@@ -481,7 +480,7 @@ func newIAMAPI(t *testing.T) (*bun.DB, humatest.TestAPI, iamAuthorization) {
 	router.(interface {
 		Use(...func(http.Handler) http.Handler)
 	}).Use(respx.Locale)
-	iamapi.RegisterREST(api, service, registrar)
+	iam.RegisterREST(api, service, registrar)
 	auditmod.RegisterREST(api, auditTrail, registrar)
 	token, _, err := web.IssueAccessToken(context.Background(), principalID, "api", "openid")
 	require.NoError(t, err)

@@ -1,4 +1,4 @@
-package api
+package iam
 
 import (
 	"context"
@@ -102,7 +102,7 @@ type AuthorizationDecision struct {
 	Revision int64  `json:"revision"`
 }
 
-func registerRelationshipREST(a huma.API, svc Service, registrar *authz.Registrar) {
+func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-relationships", Method: http.MethodGet, Path: "/iam/relationships",
 		Summary: "List tenant entity or business-resource relationship grants", Tags: []string{"iam"}, Errors: []int{http.StatusUnprocessableEntity},

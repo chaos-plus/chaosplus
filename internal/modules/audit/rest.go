@@ -107,6 +107,13 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		}
 		return respx.OK(ctx, result), nil
 	})
+	authz.Register(registrar, api, huma.Operation{OperationID: "audit-anchor-current", Method: http.MethodPost, Path: "/iam/audit-anchor", Summary: "Anchor the current verified audit head into the WORM store", Tags: []string{"audit"}, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "anchor"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Anchor], error) {
+		anchor, err := service.Anchor(ctx, in.TenantID)
+		if err != nil {
+			return nil, auditAPIError(err)
+		}
+		return respx.OK(ctx, anchor), nil
+	})
 }
 
 func exportOperation() huma.Operation {
@@ -154,6 +161,14 @@ func auditAPIError(err error) error {
 		return huma.Error422UnprocessableEntity("invalid_audit_query")
 	case errors.Is(err, ErrIntegrity):
 		return huma.Error409Conflict("audit_integrity_failed")
+	case errors.Is(err, ErrAnchorDisabled):
+		return huma.Error503ServiceUnavailable("audit_anchor_not_enabled")
+	case errors.Is(err, ErrAnchorEmpty):
+		return huma.Error422UnprocessableEntity("audit_anchor_empty")
+	case errors.Is(err, ErrAnchorAlreadyExists):
+		return huma.Error409Conflict("audit_anchor_already_exists")
+	case errors.Is(err, ErrAnchorUnavailable):
+		return huma.Error503ServiceUnavailable("audit_anchor_unavailable")
 	default:
 		return huma.Error500InternalServerError("audit_unavailable")
 	}

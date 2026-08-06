@@ -1,4 +1,4 @@
-package api
+package authn
 
 import (
 	"context"
@@ -29,43 +29,6 @@ type meInput struct {
 
 type Authenticator interface {
 	Authenticate(context.Context, string, string) (*authnext.Claims, error)
-}
-
-type WebService interface {
-	Enabled() bool
-	Capabilities() authnext.Capabilities
-	Register(context.Context, string, string, string) error
-	BeginLogin(context.Context, string, string, string) (authnext.LoginResult, error)
-	VerifyLoginMFA(context.Context, string, string) (authnext.LoginResult, error)
-	Authenticate(context.Context, string, string) (*authnext.Claims, error)
-	ValidateCSRF(string, string, string, string) error
-	ValidateLoginOrigin(string) error
-	Logout(context.Context, string) string
-	SessionCookie(string) string
-	ClearCookie() string
-	PostLogoutURL() string
-	ListSessions(context.Context, string, string) ([]authnext.BrowserSession, error)
-	RevokeSession(context.Context, string, string, string) error
-	LogoutAll(context.Context, string, string) error
-	ChangePassword(context.Context, string, string, string, string) error
-	RecoveryEnabled() bool
-	BeginPasswordRecovery(context.Context, string) error
-	CompletePasswordRecovery(context.Context, string, string) error
-	EmailVerificationEnabled() bool
-	BeginEmailVerification(context.Context, string, string) error
-	CompleteEmailVerification(context.Context, string) error
-	MFAStatus(context.Context, string, string) (authnext.MFAStatus, error)
-	BeginTOTPEnrollment(context.Context, string, string, string) (authnext.MFAEnrollment, error)
-	ConfirmTOTPEnrollment(context.Context, string, string, string) (authnext.MFAConfirmation, error)
-	RegenerateRecoveryCodes(context.Context, string, string, string, string) (authnext.MFAConfirmation, error)
-	DisableTOTP(context.Context, string, string, string, string) error
-	ListPasskeys(context.Context, string, string) ([]authnext.Passkey, error)
-	BeginPasskeyRegistration(context.Context, string, string, string) (authnext.PasskeyOptions, error)
-	FinishPasskeyRegistration(context.Context, string, string, string, string, json.RawMessage) (authnext.Passkey, error)
-	BeginPasskeyLogin(context.Context, string, string) (authnext.PasskeyOptions, error)
-	FinishPasskeyLogin(context.Context, string, string, json.RawMessage) (authnext.LoginResult, error)
-	RenamePasskey(context.Context, string, string, string, string) (authnext.Passkey, error)
-	DeletePasskey(context.Context, string, string, string, string) error
 }
 
 type logoutInput struct {
@@ -243,7 +206,7 @@ type loginOutput struct {
 	Body      respx.Envelope[authnext.LoginResult]
 }
 
-func RegisterREST(a huma.API, authenticator Authenticator, web WebService) {
+func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-me",
 		Method:      http.MethodGet,

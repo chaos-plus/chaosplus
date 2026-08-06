@@ -6,8 +6,6 @@ import (
 	"net/mail"
 	"sort"
 	"strings"
-
-	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
 func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displayName, email, departmentID string, status MemberStatus) (TenantMember, error) {
@@ -204,7 +202,7 @@ func (s *Service) DeleteMenu(ctx context.Context, tenantID, menuID string) error
 	})
 }
 
-func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) ([]iamapi.MenuItem, error) {
+func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) ([]MenuItem, error) {
 	if err := validateMemberRef(tenantID, subject); err != nil {
 		return nil, err
 	}
@@ -242,9 +240,9 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 	for _, menu := range menus {
 		children[menu.ParentID] = append(children[menu.ParentID], menu)
 	}
-	var build func(string, map[string]bool) []iamapi.MenuItem
-	build = func(parent string, visiting map[string]bool) []iamapi.MenuItem {
-		result := make([]iamapi.MenuItem, 0, len(children[parent]))
+	var build func(string, map[string]bool) []MenuItem
+	build = func(parent string, visiting map[string]bool) []MenuItem {
+		result := make([]MenuItem, 0, len(children[parent]))
 		for _, menu := range children[parent] {
 			if visiting[menu.ID] {
 				continue
@@ -258,7 +256,7 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 			if menu.PermissionCode != "" && !allowed[menu.PermissionCode] && len(nodes) == 0 {
 				continue
 			}
-			result = append(result, iamapi.MenuItem{ID: menu.ID, Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
+			result = append(result, MenuItem{ID: menu.ID, Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
 		}
 		return result
 	}

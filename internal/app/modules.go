@@ -95,7 +95,7 @@ func (app *App) buildModules() []any {
 					return changed, err
 				},
 			}, nextID))
-			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar))
+			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar, app.cfg.Audit))
 			if app.cfg.Federation.Enabled && app.authnWeb != nil {
 				mods = append(mods, federation.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, identityService, app.authnWeb, app.cfg.Federation, app.federationKey))
 			}

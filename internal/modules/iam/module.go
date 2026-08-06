@@ -8,7 +8,6 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
-	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
 // Module exposes IAM management backed by the primary relational database.
@@ -46,5 +45,5 @@ func (m *Module) Migrate(ctx context.Context) error {
 }
 
 func (m *Module) RegisterREST(api huma.API) {
-	iamapi.RegisterREST(api, m.service, m.registrar)
+	RegisterREST(api, m.service, m.registrar)
 }

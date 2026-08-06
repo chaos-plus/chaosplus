@@ -284,4 +284,4 @@ GET /iam/audit-integrity
 
 具有 `audit_event:export` 权限的会话可调用 `GET /iam/audit-events/export`，并沿用列表的筛选参数。响应是固定 tenant head 的 `application/x-ndjson`；必须保留首行 manifest 和末行 `complete`，校验完成记录中的事件数及 SHA-256 后再移交。缺少 `complete` 表示传输或数据库读取中断，文件不可作为完整证据。
 
-当前只对新链式事件进行验证和导出，历史 `sequence=0` 记录仍可查询但不计入 `verified_events`。尚未实现分区 root 签名、外部 WORM 锚定和自动归档/保留，运维不得把数据库内 hash chain 或普通下载文件当作独立不可抵赖存证。
+当前只对新链式事件进行验证和导出，历史 `sequence=0` 记录仍可查询但不计入 `verified_events`。WORM root anchoring 已实现：配置 `audit.anchor`（S3/MinIO 兼容端点、object-lock 桶、COMPLIANCE 保留天数）后，具有 `audit_event:anchor` 权限的会话调用 `POST /iam/audit-anchor` 会把当前已验证的 tenant head 以 COMPLIANCE 保留写入外部桶，形成带 `previous_anchor_hash` 链接、write-once 的锚链；`GET /iam/audit-integrity` 返回的 `anchor` 字段报告外部锚链状态，数据库事件或锚对象被篡改、本地链被回滚到已锚定 head 之后时验证失败并拒绝继续锚定。未启用锚定时 `anchor.enabled` 为 `false`，运维不得把数据库内 hash chain 或普通下载文件当作独立不可抵赖存证。自动归档/保留策略和完整合规治理不在当前交付内。

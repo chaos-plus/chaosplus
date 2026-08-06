@@ -1,9 +1,5 @@
-// Package api is the guid module's transport layer (REST + gRPC). It depends on a
-// small NextFunc port injected by the module rather than on the guid core, which
-// keeps the module layering acyclic (module -> api -> proto; api never imports
-// the module root). Ids cross the wire as decimal strings, matching the REST
-// contract, so this package needs neither guid.ID nor guid.Next directly.
-package api
+// Package guid is the guid module: the wuid-backed id generator plus its REST and gRPC transport, kept together so the transport stays a thin port over the core.
+package guid
 
 import (
 	"context"

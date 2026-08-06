@@ -6,7 +6,7 @@ This file is generated from repository manifests and source trees. Do not edit i
 
 - Go module: `github.com/chaos-plus/chaosplus`
 - Go version: `1.26.5`
-- Go package directories: 44
+- Go package directories: 41
 - Feature modules: audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
 - IAM SQL dialects: mysql, postgres, sqlite
 - HTTP framework: Huma v2 on chi

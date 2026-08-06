@@ -9,7 +9,6 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
-	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
 
@@ -50,8 +49,8 @@ func (s *Service) PermissionCatalog(context.Context) []authz.Action {
 	return tenantActions
 }
 
-func (s *Service) ScopeModel(context.Context) []iamapi.ScopeNode {
-	return []iamapi.ScopeNode{
+func (s *Service) ScopeModel(context.Context) []ScopeNode {
+	return []ScopeNode{
 		{Type: "platform", ParentType: "", Relation: "owns", Label: "Platform"},
 		{Type: "tenant", ParentType: "platform", Relation: "contains", Label: "Tenant"},
 		{Type: "entity", ParentType: "tenant", Relation: "parent", Label: "Company / enterprise / merchant / store"},
@@ -59,10 +58,10 @@ func (s *Service) ScopeModel(context.Context) []iamapi.ScopeNode {
 	}
 }
 
-func (s *Service) MenuCatalog(context.Context) []iamapi.MenuItem {
-	items := make([]iamapi.MenuItem, 0, len(DefaultMenus()))
+func (s *Service) MenuCatalog(context.Context) []MenuItem {
+	items := make([]MenuItem, 0, len(DefaultMenus()))
 	for _, menu := range DefaultMenus() {
-		items = append(items, iamapi.MenuItem{
+		items = append(items, MenuItem{
 			ID:             menu.ID,
 			Label:          menu.Label,
 			Path:           menu.Route,
@@ -71,7 +70,7 @@ func (s *Service) MenuCatalog(context.Context) []iamapi.MenuItem {
 			SortOrder:      menu.SortOrder,
 		})
 	}
-	return []iamapi.MenuItem{{ID: "iam", Label: "IAM Administration", Children: items}}
+	return []MenuItem{{ID: "iam", Label: "IAM Administration", Children: items}}
 }
 
 // DefaultMenus is the built-in administration navigation seeded for a new

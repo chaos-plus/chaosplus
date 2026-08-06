@@ -1252,7 +1252,7 @@ source_ip_prefix, user_agent_hash, idempotency_key,
 previous_event_hash, event_hash
 ```
 
-审计 append-only。`event_hash` 形成分区内 hash chain，定期把分区 root 签名并写入独立对象存储/WORM 介质。
+审计 append-only。`event_hash` 形成分区内 hash chain；启用 `audit.anchor` 后，已验证的 tenant head 以 COMPLIANCE 保留写入独立 S3/MinIO object-lock 桶，形成 `previous_anchor_hash` 链接的 write-once 锚链。
 这不是区块链，而是可验证的篡改证据。
 
 不得记录密码、OTP、Token、Cookie、Passkey private material、TOTP secret、恢复码或 OAuth client secret。
@@ -1269,7 +1269,7 @@ Identity 主体创建在一个事务内写入全局 Principal、Credential、当
 
 事件 detail 不记录邮箱、密码、Cookie、Token 或 client secret。登录、MFA、Passkey 和账号恢复事件统一进入可验证 hash chain。当前管理 API 支持 tenant 分区查询、详情、完整性验证和固定 head 的流式 NDJSON 导出；导出请求本身进入同一 tenant 链，管理端可按当前筛选下载且会拒绝缺失完成记录的响应。
 
-真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。尚未完成：分区 root 签名与独立 WORM 锚定、归档/保留策略，因此当前实现是可验证审计与可移交证据基线，不是完整合规治理交付。
+真实 SQLite failure trigger 已逐项证明上述 IAM 管理写入、Identity 主体写入和 MFA/Passkey 成功 mutation 不会在审计失败时留下领域状态、revision、安全凭证状态或审计半状态；真实 HTTP listener 用例同时验证 500 映射、enrollment 回滚和 NDJSON 导出。WORM root anchoring 已通过真实 MinIO object-lock 测试闭环（compliance 保留、write-once、篡改/回滚检测、锚链校验）。尚未完成：分区 root 签名、归档/保留策略与完整治理管理面，因此当前实现是可验证审计、外部 WORM 锚定与可移交证据基线，不是完整合规治理交付。
 
 ### 17.2 审批
 
@@ -1500,7 +1500,9 @@ authz:
   enabled: true
 ```
 
-以上字段是当前 `internal/app/config.go` 与 `authn.Config` 可加载的契约。`rest.trusted_proxies` 必须是实际反向代理的精确 CIDR；为空时忽略转发 IP 头，只有来源地址可信时才解析 `X-Forwarded-For`。Passkey RP ID 与 origin 必须显式配置，且每个 Passkey origin 同时属于 `authn.web.allowed_origins`；服务端不会从 Host、Origin 或其他 Forwarded header 推导信任边界。可调 Argon2 policy、KMS key ring、authorization decision cache 和 audit retention 尚未进入生产配置，不能提前把目标字段写入部署 YAML。生产配置校验必须拒绝 HTTP issuer、非 Secure Cookie、默认/缺失 secret、过长 access token 和不受信任的 return URL/origin。
+`audit.anchor` 同样由 `internal/app/config.go` 加载：`endpoint` 是 S3/MinIO 兼容端点，`bucket` 不存在时以 object-lock 创建，`retention_days` 为 COMPLIANCE 保留天数，默认关闭；未配置时锚定接口返回 `audit_anchor_not_enabled`，不得把普通对象存储桶或数据库 hash chain 当作 WORM 存证。
+
+以上字段是当前 `internal/app/config.go` 与 `authn.Config` 可加载的契约。`rest.trusted_proxies` 必须是实际反向代理的精确 CIDR；为空时忽略转发 IP 头，只有来源地址可信时才解析 `X-Forwarded-For`。Passkey RP ID 与 origin 必须显式配置，且每个 Passkey origin 同时属于 `authn.web.allowed_origins`；服务端不会从 Host、Origin 或其他 Forwarded header 推导信任边界。可调 Argon2 policy、KMS key ring 和 authorization decision cache 尚未进入生产配置，不能提前把目标字段写入部署 YAML。生产配置校验必须拒绝 HTTP issuer、非 Secure Cookie、默认/缺失 secret、过长 access token 和不受信任的 return URL/origin。
 
 ## 21. 可观测性与 SLO
 
@@ -1611,7 +1613,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 
 ### Phase 1：本地 Identity/Credential（密码、TOTP 与 Passkey 基线完成，增强项待续）
 
-- 已实现 tenant 分区的审计 hash chain、append-only 数据库约束、事件检索/详情/完整性、固定 head 的流式证据导出和管理页面；当前同事务接入覆盖 OAuth Client 四类 mutation、密码修改、单会话撤销、全会话撤销、Identity 主体创建/更新/禁用/恢复、MFA/Passkey 全部成功安全 mutation，以及 IAM 角色/权限/角色成员/tenant member/菜单全部现有管理写入。WORM root anchoring 尚未完成。
+- 已实现 tenant 分区的审计 hash chain、append-only 数据库约束、事件检索/详情/完整性、固定 head 的流式证据导出和管理页面；当前同事务接入覆盖 OAuth Client 四类 mutation、密码修改、单会话撤销、全会话撤销、Identity 主体创建/更新/禁用/恢复、MFA/Passkey 全部成功安全 mutation，以及 IAM 角色/权限/角色成员/tenant member/菜单全部现有管理写入。WORM root anchoring 已实现（`audit.anchor` + 真实 MinIO object-lock：compliance 保留、write-once、篡改/回滚检测、锚链校验）。
 - 使用全局 Principal 和租户 Membership 分离身份与租户准入。
 - 新用户可由租户管理邀请或自助注册创建；自助注册只创建全局 Principal，完成邮箱验证后才能登录，租户准入仍只通过邀请。历史账号若需要导入，只允许预绑定或强制恢复密码，不能导入不可验证密码。
 - 已实现 Argon2id Password、失败锁定、密码历史、Principal 状态、会话管理、TOTP enrollment/login challenge、128 bit 一次性恢复码和完整安全中心工作流。
@@ -1662,7 +1664,7 @@ Argon2id 密码、数据库会话、Ed25519 JWT/JWKS、OAuth 授权码 + PKCE、
 - 已实现租户成员邀请创建、列表、重发轮换、撤销和公开幂等接受；一次性 HMAC 凭据、默认部门/角色、事务 revision/audit、三方言迁移、三语错误、OpenAPI 和管理端桌面/移动工作流已闭环。邮件投递仍属于后续 notification 边界。
 - 已实现访问申请、四眼审批、临时角色授权、申请人放弃、审批人撤销、在线到期失效，以及直接/临时授权复核、最后管理员保护、三方言迁移、三语错误、OpenAPI、管理端与真实桌面/移动端流程；详见 [访问治理设计](access-governance.md)。
 - 套餐、资源属性 ABAC 和派生授权复核尚未实现。
-- 企业 OIDC/SAML federation、出站 SCIM client，以及 WORM root anchoring、归档保留和完整治理管理面。
+- 企业 OIDC/SAML federation、出站 SCIM client，以及归档保留和完整治理管理面。
 
 ### Phase 5：删除外部依赖（已完成）
 

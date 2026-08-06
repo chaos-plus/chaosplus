@@ -232,7 +232,9 @@ docker compose stats --no-stream
 - [ ] challenge 一次性消费和无效因子失败次数不因 denied 审计失败而回滚；审计不可用不得复活 challenge 或清零防爆破状态。
 - [ ] 审计 detail、错误、日志和 UI 不出现 OAuth client secret、密码、OTP、恢复码、Cookie 或 Token。
 - [ ] `/iam/audit-events` 匿名深链登录后回到原页面；桌面、详情和 390px 移动端无横向溢出或隐藏操作。
-- [ ] 当前验收不包含 WORM root anchoring、归档/保留策略或完整合规治理。
+- [ ] `audit.anchor` 启用后，`POST /iam/audit-anchor` 使用真实 S3/MinIO object-lock 桶：锚对象以 COMPLIANCE 保留写入，未锁桶写入失败；同一 head 重复锚定幂等，已存在锚对象不允许覆盖或删除（write-once）。
+- [ ] 篡改数据库事件、替换/伪造锚对象或把本地链回滚到已锚定 head 之后时，`GET /iam/audit-integrity` 的 `valid`/`anchor.valid` 为 `false`，且继续锚定返回失败（fail closed）；锚对象通过 `previous_anchor_hash` 链接成链。
+- [ ] 未启用 `audit.anchor` 时，`POST /iam/audit-anchor` 返回 503 `audit_anchor_not_enabled`，完整性接口如实报告 `anchor.enabled:false`。归档/保留策略和完整合规治理不包含在本次验收内。
 
 ## 8. Web 安全
 

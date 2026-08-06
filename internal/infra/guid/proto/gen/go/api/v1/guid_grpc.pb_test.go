@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid/api"
+	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid"
 	guidv1 "github.com/chaos-plus/chaosplus/internal/infra/guid/proto/gen/go/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

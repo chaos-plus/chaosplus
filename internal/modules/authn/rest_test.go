@@ -1,4 +1,4 @@
-package api_test
+package authn_test
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
-	authnapi "github.com/chaos-plus/chaosplus/internal/modules/authn/api"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/danielgtaylor/huma/v2"
@@ -33,7 +32,7 @@ import (
 func TestAuthenticationHTTPFlow(t *testing.T) {
 	db, web, principalID := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	login := api.Post("/authn/login", map[string]any{
 		"login_name": "alice", "password": "correct horse battery staple", "return_url": "https://app.example/",
@@ -79,7 +78,7 @@ func TestAuthenticationHTTPFlow(t *testing.T) {
 func TestAuthenticationSecurityCenterHTTPFlow(t *testing.T) {
 	_, web, _ := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 	login := func(password string) string {
 		response := api.Post("/authn/login", map[string]any{
 			"login_name": "alice", "password": password, "return_url": "https://app.example/",
@@ -150,7 +149,7 @@ func TestPasswordRecoveryHTTPFlow(t *testing.T) {
 	require.NoError(t, web.StartNotificationWorker(t.Context()))
 	t.Cleanup(func() { _ = web.StopNotificationWorker(context.Background()) })
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	assert.Equal(t, http.StatusForbidden, api.Post("/authn/password/recovery/start", map[string]any{"identifier": "alice"}, "Origin: https://evil.example").Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/authn/password/recovery/start", map[string]any{}, "Origin: https://app.example").Code)
@@ -212,7 +211,7 @@ func TestEmailVerificationHTTPFlow(t *testing.T) {
 	require.NoError(t, web.StartNotificationWorker(t.Context()))
 	t.Cleanup(func() { _ = web.StopNotificationWorker(context.Background()) })
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	login := api.Post("/authn/login", map[string]any{
 		"login_name": "alice", "password": "correct horse battery staple", "return_url": "https://app.example/",
@@ -253,7 +252,7 @@ func TestEmailVerificationHTTPFlow(t *testing.T) {
 func TestRegistrationHTTPFlow(t *testing.T) {
 	db, web, _ := newRecoveryAuthenticationService(t, "https://notify.example.test/events", true)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	capabilities := api.Get("/authn/capabilities")
 	require.Equal(t, http.StatusOK, capabilities.Code, capabilities.Body.String())
@@ -290,7 +289,7 @@ func TestRegistrationHTTPFlow(t *testing.T) {
 
 	_, disabled, _ := newAuthenticationService(t)
 	_, disabledAPI := humatest.New(t)
-	authnapi.RegisterREST(disabledAPI, disabled, disabled)
+	authnmod.RegisterREST(disabledAPI, disabled, disabled)
 	assert.Contains(t, disabledAPI.Get("/authn/capabilities").Body.String(), `"registration":false`)
 	assert.Equal(t, http.StatusServiceUnavailable, disabledAPI.Post("/authn/register", map[string]any{
 		"email": "disabled@example.com", "password": "correct registration password",
@@ -300,7 +299,7 @@ func TestRegistrationHTTPFlow(t *testing.T) {
 func TestDisabledPasswordRecoveryHTTPFlow(t *testing.T) {
 	_, web, _ := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	start := api.Post("/authn/password/recovery/start", map[string]any{"identifier": "alice@example.com"}, "Origin: https://app.example")
 	assert.Equal(t, http.StatusServiceUnavailable, start.Code, start.Body.String())
@@ -313,7 +312,7 @@ func TestDisabledPasswordRecoveryHTTPFlow(t *testing.T) {
 func TestAuthenticationMFAHTTPFlow(t *testing.T) {
 	_, web, _ := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 
 	login := api.Post("/authn/login", map[string]any{
 		"login_name": "alice", "password": "correct horse battery staple", "return_url": "https://app.example/",
@@ -429,7 +428,7 @@ func TestMFAAuditFailureHTTPRollsBackEnrollment(t *testing.T) {
 	db, web, principalID := newAuthenticationService(t)
 	router := chi.NewMux()
 	api := humachi.New(router, huma.DefaultConfig("Chaosplus API", "test"))
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
@@ -470,7 +469,7 @@ func TestMFAAuditFailureHTTPRollsBackEnrollment(t *testing.T) {
 func TestAuthenticationPasskeyHTTPContract(t *testing.T) {
 	_, web, _ := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 	login := api.Post("/authn/login", map[string]any{
 		"login_name": "alice", "password": "correct horse battery staple", "return_url": "https://app.example/",
 	}, "Origin: https://app.example")
@@ -539,7 +538,7 @@ func differentTOTP(code string) string {
 func TestAuthenticationHTTPUnavailableAndDisabledWeb(t *testing.T) {
 	db, web, _ := newAuthenticationService(t)
 	_, api := humatest.New(t)
-	authnapi.RegisterREST(api, web, web)
+	authnmod.RegisterREST(api, web, web)
 	require.NoError(t, db.Close())
 	assert.Equal(t, http.StatusInternalServerError, api.Post("/authn/login", map[string]any{
 		"login_name": "alice", "password": "correct horse battery staple",
@@ -549,7 +548,7 @@ func TestAuthenticationHTTPUnavailableAndDisabledWeb(t *testing.T) {
 	}, "Origin: https://app.example").Code)
 
 	_, declaration := humatest.New(t)
-	authnapi.RegisterREST(declaration, web, nil)
+	authnmod.RegisterREST(declaration, web, nil)
 	assert.Contains(t, declaration.OpenAPI().Paths, "/authn/me")
 	assert.NotContains(t, declaration.OpenAPI().Paths, "/authn/login")
 }

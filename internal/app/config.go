@@ -7,6 +7,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
+	"github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 )
 
@@ -24,6 +25,7 @@ type Config struct {
 	Cors        Cors                       `mapstructure:"cors" group:"cors"`
 	Security    Security                   `mapstructure:"security" group:"security"`
 	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
+	Audit       audit.Config               `mapstructure:"audit" group:"audit"`
 	Federation  federation.Config          `mapstructure:"federation" group:"federation"`
 	Authz       Authz                      `mapstructure:"authz" group:"authz"`
 	Plugins     plugin.Config              `mapstructure:"plugins" group:"plugins"`

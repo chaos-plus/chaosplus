@@ -68,11 +68,12 @@ type Filter struct {
 }
 
 type Integrity struct {
-	TenantID       string `json:"tenant_id"`
-	Valid          bool   `json:"valid"`
-	VerifiedEvents int64  `json:"verified_events"`
-	HeadSequence   int64  `json:"head_sequence"`
-	HeadHash       string `json:"head_hash,omitempty"`
+	TenantID       string       `json:"tenant_id"`
+	Valid          bool         `json:"valid"`
+	VerifiedEvents int64        `json:"verified_events"`
+	HeadSequence   int64        `json:"head_sequence"`
+	HeadHash       string       `json:"head_hash,omitempty"`
+	Anchor         AnchorStatus `json:"anchor"`
 }
 
 type ExportSnapshot struct {
@@ -144,14 +145,19 @@ type Service struct {
 	dialect string
 	now     func() time.Time
 	nextID  func() (string, error)
+	anchor  *AnchorStore
 }
 
 func NewService(db *bun.DB) *Service {
+	return NewServiceWithAnchor(db, nil)
+}
+
+func NewServiceWithAnchor(db *bun.DB, anchor *AnchorStore) *Service {
 	if db == nil {
 		panic("audit service requires database")
 	}
 	dialect := db.Dialect().Name().String()
-	return &Service{db: db, dialect: dialect, now: time.Now, nextID: secureID}
+	return &Service{db: db, dialect: dialect, now: time.Now, nextID: secureID, anchor: anchor}
 }
 
 func (s *Service) Append(ctx context.Context, input EventInput) (Event, error) {
@@ -253,10 +259,114 @@ func (s *Service) Verify(ctx context.Context, tenantID string) (Integrity, error
 	if err != nil {
 		return Integrity{}, err
 	}
-	if !found {
-		return Integrity{TenantID: tenantID, Valid: true}, nil
+	result := Integrity{TenantID: tenantID, Valid: true}
+	if found {
+		result, err = s.verifyHead(ctx, head)
+		if err != nil {
+			return Integrity{}, err
+		}
 	}
-	return s.verifyHead(ctx, head)
+	if s.anchor != nil {
+		status, err := s.verifyAnchors(ctx, tenantID)
+		if err != nil {
+			return Integrity{}, err
+		}
+		result.Anchor = status
+	}
+	return result, nil
+}
+
+// Anchor commits the current verified head into the external WORM store.
+// Anchoring is idempotent: an already-committed head returns its anchor.
+func (s *Service) Anchor(ctx context.Context, tenantID string) (Anchor, error) {
+	if s.anchor == nil {
+		return Anchor{}, ErrAnchorDisabled
+	}
+	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
+		return Anchor{}, ErrInvalidFilter
+	}
+	head, found, err := s.readHead(ctx, tenantID)
+	if err != nil {
+		return Anchor{}, err
+	}
+	if !found {
+		return Anchor{}, ErrAnchorEmpty
+	}
+	integrity, err := s.verifyHead(ctx, head)
+	if err != nil {
+		return Anchor{}, err
+	}
+	if !integrity.Valid {
+		return Anchor{}, ErrIntegrity
+	}
+	anchors, err := s.anchor.List(ctx, tenantID)
+	if err != nil {
+		return Anchor{}, anchorStoreError(err)
+	}
+	var latest *Anchor
+	if len(anchors) > 0 {
+		latest = &anchors[len(anchors)-1]
+	}
+	switch {
+	case latest != nil && latest.HeadSequence > head.Sequence:
+		return Anchor{}, ErrIntegrity // local chain rolled back behind its anchors
+	case latest != nil && latest.HeadSequence == head.Sequence:
+		return *latest, nil // already anchored
+	}
+	anchor := Anchor{
+		Schema: anchorSchema, TenantID: tenantID, HeadSequence: head.Sequence,
+		HeadHash: head.EventHash, AnchoredAt: s.now().UTC(),
+	}
+	if latest != nil {
+		anchor.PreviousAnchorHash = latest.AnchorHash
+	}
+	anchor.AnchorHash = computeAnchorHash(anchor)
+	if err := s.anchor.Put(ctx, anchor); err != nil {
+		putErr := err
+		if errors.Is(putErr, ErrAnchorAlreadyExists) {
+			// Lost a concurrent anchor race; the committed object is authoritative.
+			anchors, listErr := s.anchor.List(ctx, tenantID)
+			if listErr != nil {
+				return Anchor{}, anchorStoreError(listErr)
+			}
+			if len(anchors) > 0 {
+				return anchors[len(anchors)-1], nil
+			}
+		}
+		return Anchor{}, anchorStoreError(putErr)
+	}
+	return anchor, nil
+}
+
+func (s *Service) verifyAnchors(ctx context.Context, tenantID string) (AnchorStatus, error) {
+	anchors, err := s.anchor.List(ctx, tenantID)
+	if err != nil {
+		return AnchorStatus{}, anchorStoreError(err)
+	}
+	status := AnchorStatus{Enabled: true, Valid: true}
+	if len(anchors) == 0 {
+		return status, nil
+	}
+	previous := ""
+	for _, anchor := range anchors {
+		if anchor.PreviousAnchorHash != previous || anchor.AnchorHash != computeAnchorHash(anchor) {
+			status.Valid = false
+			return status, nil
+		}
+		previous = anchor.AnchorHash
+	}
+	latest := anchors[len(anchors)-1]
+	status.Sequence = latest.HeadSequence
+	status.Hash = latest.AnchorHash
+	status.AnchoredAt = latest.AnchoredAt
+	chain, err := s.verifyPrefix(ctx, tenantID, latest.HeadSequence)
+	if err != nil {
+		return AnchorStatus{}, err
+	}
+	if !chain.Valid || chain.HeadHash != latest.HeadHash {
+		status.Valid = false
+	}
+	return status, nil
 }
 
 func (s *Service) PrepareExport(ctx context.Context, filter Filter) (ExportSnapshot, error) {
@@ -345,13 +455,23 @@ func (s *Service) readHead(ctx context.Context, tenantID string) (headRow, bool,
 }
 
 func (s *Service) verifyHead(ctx context.Context, head headRow) (Integrity, error) {
+	result, err := s.verifyPrefix(ctx, head.TenantID, head.Sequence)
+	if err != nil {
+		return Integrity{}, err
+	}
+	result.Valid = result.Valid && result.HeadHash == head.EventHash
+	result.HeadHash = head.EventHash
+	return result, nil
+}
+
+func (s *Service) verifyPrefix(ctx context.Context, tenantID string, maxSequence int64) (Integrity, error) {
 	var rows []eventRow
 	if err := s.db.NewSelect().Model(&rows).
-		Where("tenant_id = ? AND sequence > 0 AND sequence <= ?", head.TenantID, head.Sequence).
+		Where("tenant_id = ? AND sequence > 0 AND sequence <= ?", tenantID, maxSequence).
 		Order("sequence ASC").Scan(ctx); err != nil {
 		return Integrity{}, err
 	}
-	result := Integrity{TenantID: head.TenantID, Valid: true, VerifiedEvents: int64(len(rows)), HeadSequence: head.Sequence, HeadHash: head.EventHash}
+	result := Integrity{TenantID: tenantID, Valid: true, VerifiedEvents: int64(len(rows)), HeadSequence: maxSequence}
 	previous := ""
 	for index, row := range rows {
 		if row.Sequence != int64(index+1) || row.PreviousHash != previous || row.EventHash != hash(row) {
@@ -360,7 +480,8 @@ func (s *Service) verifyHead(ctx context.Context, head headRow) (Integrity, erro
 		}
 		previous = row.EventHash
 	}
-	result.Valid = result.Valid && head.Sequence == int64(len(rows)) && head.EventHash == previous
+	result.HeadHash = previous
+	result.Valid = result.Valid && maxSequence == int64(len(rows))
 	return result, nil
 }
 

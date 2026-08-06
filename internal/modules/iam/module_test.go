@@ -13,13 +13,12 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
-	"github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
 func TestModuleRegistersREST(t *testing.T) {
 	m := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
 	require.NotNil(t, m.service)
-	assert.Implements(t, (*api.Service)(nil), m.service)
+	assert.IsType(t, (*Service)(nil), m.service)
 
 	_, a := humatest.New(t)
 	m.RegisterREST(a)

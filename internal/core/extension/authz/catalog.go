@@ -237,5 +237,6 @@ func DefaultActions() []Action {
 
 		{Resource: "audit_event", Verb: "view", Scope: "tenant", Summary: "view and verify tenant audit events", Menu: true},
 		{Resource: "audit_event", Verb: "export", Scope: "tenant", Summary: "export tenant audit events"},
+		{Resource: "audit_event", Verb: "anchor", Scope: "tenant", Summary: "anchor tenant audit heads into the external WORM store"},
 	}
 }
