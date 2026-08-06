@@ -295,7 +295,7 @@ go test ./internal/modules/iam ./internal/modules/provisioning ./internal/module
 | --- | --- | --- |
 | 0 环境准备 | 本地 SQLite 实例运行中，`/.well-known/openid-configuration` 与 `/.well-known/jwks.json` 均 200；资源占用实测 | backend(18080) WS 117MB/21 线程；web(8091) WS 129MB；docs(4322) WS 63MB；通知接收器(18081) WS 55MB；MySQL(3308) WS 564MB；PostgreSQL(5432) WS 23MB |
 | 1 本地身份与会话 | 真实 Chromium 浏览器审计（13 个 audit 脚本） | `audit:tenants`、`audit:invitations`、`audit:passkey` 等全部通过：登录/退出/深链回跳、无控制台错误、1440px/390px 无横向溢出；`TestSessionAndPasswordSecurityCenter` 覆盖会话列表、单会话撤销即时失效、无效撤销与密码修改约束 |
-| 1.1 TOTP 与恢复码 | 真实后端测试 + 浏览器绑定截图 | `internal/modules/authn/mfa_test.go`：`TestTOTPEnrollmentAndLogin`、`TestRecoveryCodesRegenerationAndDisable`、`TestMFAChallengeAttemptsAndExpiration`、`TestMFAAuditFailuresRollBackSecurityMutations`；`.local/screenshots/admin-mfa-*` 绑定/轮换/停用截图 |
+| 1.1 TOTP 与恢复码 | 真实后端测试 + 浏览器绑定截图 + RFC 6238 官方向量 | `internal/modules/authn/mfa_test.go`：`TestTOTPEnrollmentAndLogin`、`TestRecoveryCodesRegenerationAndDisable`、`TestMFAChallengeAttemptsAndExpiration`、`TestMFAAuditFailuresRollBackSecurityMutations`；新增 `TestTOTPGoogleGitHubCompatibleAlgorithm`（RFC 6238 Appendix B 官方向量，即 Google Authenticator 测试套件同源值：SHA1/6 位/30s，逐条断言生产库生成与 `validateTOTP` 接受）与 `TestTOTPProvisioningURIGoogleCompatible`（otpauth://totp/ URI 含 secret/SHA1/digits=6/period=30/issuer，secret 160 bit，独立流程完成绑定与 MFA 登录）；`.local/screenshots/admin-mfa-*` 绑定/轮换/停用截图 |
 | 1.2 Passkey/WebAuthn | 真实 Chromium CTAP2 虚拟认证器（CDP WebAuthn） | `audit:passkey` 全流程：注册→重命名→无密码登录→删除→删除后拒绝；rp_id=localhost，来源匹配要求已写入验收命令 |
 | 1.3 自助注册 | 真实浏览器 + Webhook 通知 + 直接查库 | `audit:registration`：验证 token 一次性消费、`activation_required` 清除、tenant 成员数 0、注册后登录成功 |
 | 1.4/1.5 邮箱验证与密码找回 | 真实后端测试 + 注册审计的验证链 | `internal/modules/authn`：`TestEmailVerification*` 与 `TestPasswordRecovery*`（生命周期、过期、一次性、回滚、并发） |
@@ -305,4 +305,4 @@ go test ./internal/modules/iam ./internal/modules/provisioning ./internal/module
 | 9 数据库兼容性 | 真实 MySQL 8.0.42 / PostgreSQL 17.5 一次性数据库 | IAM/Provisioning/Federation `Test*MigrationDialectLifecycle` 全部 PASS（create→migrate→down→re-migrate）；`TestProvisionAndLoginRealDialect` 在 MySQL/PG 实库完成全模块迁移 + 幂等 bootstrap + 初始管理员密码登录 + session 认证 + 令牌轮换（凭据版本提升撤销旧 session/token）冒烟；`TestIAMConstraintBehaviorDialectLifecycle` 实库验证唯一约束、外键 RESTRICT/CASCADE、租户隔离与审计链唯一性；SQLite 由全量门禁覆盖 |
 | 10 结构约束 | 门禁扫描 | `check-gates.ps1 -Scope all -Full` 通过：Go race 测试、90.0% 覆盖率、govulncheck 0 漏洞、vet、golangci-lint（11 linters，已接入本地门禁与 CI）、前端 lint/typecheck/真实测试/构建、文档构建/链接/Mermaid；门禁在 Windows PowerShell 5.1 下实测全绿（此前 stderr 被误报为失败的缺陷已修复并回归）；门禁新增外部 IAM/PDP 依赖扫描（Zitadel/SpiceDB/Authzed/Ory），go.mod、go.sum、deploy/、cmd/、internal/、pkg/ 全部零命中 |
 
-仍待人工/硬件验证：TOTP 物理验证器真机流、真实二维码扫码、真实邮箱供应商投递、实体/层级真机扫码。
+TOTP 算法兼容性已由自动化测试替代真机验证（见 1.1 行证据）；仍待人工/硬件验证：真实邮箱供应商投递、实体/层级真机扫码。

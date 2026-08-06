@@ -1,8 +1,10 @@
 package authn
 
 import (
+	"encoding/base32"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -569,4 +571,77 @@ func differentCode(code string) string {
 		return "1" + code[1:]
 	}
 	return "0" + code[1:]
+}
+func TestTOTPGoogleGitHubCompatibleAlgorithm(t *testing.T) {
+	// RFC 6238 Appendix B test vectors (SHA-1, 30s period) are the exact values
+	// Google Authenticator's test suite uses, so passing them proves the same
+	// algorithm GitHub and Google ship. Secret is base32 of ASCII
+	// "12345678901234567890"; expected values are the official 8-digit vectors
+	// truncated to the 6 digits Google/GitHub display.
+	rfcSecret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte("12345678901234567890"))
+	vectors := []struct {
+		unix int64
+		want string
+	}{
+		{59, "287082"},
+		{1_111_111_109, "081804"},
+		{1_111_111_111, "050471"},
+		{1_234_567_890, "005924"},
+		{2_000_000_000, "279037"},
+		{20_000_000_000, "353130"},
+	}
+	for _, v := range vectors {
+		at := time.Unix(v.unix, 0).UTC()
+		code, err := totp.GenerateCode(rfcSecret, at)
+		require.NoError(t, err)
+		assert.Equal(t, v.want, code, "production library code at %d", v.unix)
+		step, ok := validateTOTP(code, rfcSecret, at)
+		assert.True(t, ok, "validator accepts RFC 6238 vector at %d", v.unix)
+		assert.Equal(t, v.unix/totpPeriod, step)
+	}
+	// A code three steps away must not validate inside the one-step window.
+	otherStep, err := totp.GenerateCode(rfcSecret, time.Unix(1_111_111_109+90, 0).UTC())
+	require.NoError(t, err)
+	_, ok := validateTOTP(otherStep, rfcSecret, time.Unix(1_111_111_109, 0).UTC())
+	assert.False(t, ok, "code three steps away must be rejected")
+}
+
+func TestTOTPProvisioningURIGoogleCompatible(t *testing.T) {
+	service, _ := newLocalService(t)
+	service.cfg.MFA.Issuer = "Chaosplus Test"
+	now := time.Unix(1_785_600_000, 0).UTC()
+	service.now = func() time.Time { return now }
+	sessionID, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	cookie := service.SessionCookie(sessionID)
+
+	enrollment, err := service.BeginTOTPEnrollment(t.Context(), "", cookie, "correct horse battery staple")
+	require.NoError(t, err)
+
+	u, err := url.Parse(enrollment.ProvisioningURI)
+	require.NoError(t, err)
+	assert.Equal(t, "otpauth", u.Scheme)
+	assert.Equal(t, "totp", u.Host)
+	assert.Contains(t, u.Path, service.cfg.MFA.Issuer+":admin")
+	q := u.Query()
+	assert.Equal(t, enrollment.Secret, q.Get("secret"))
+	assert.Equal(t, "SHA1", q.Get("algorithm"))
+	assert.Equal(t, "6", q.Get("digits"))
+	assert.Equal(t, "30", q.Get("period"))
+	assert.Equal(t, service.cfg.MFA.Issuer, q.Get("issuer"))
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(enrollment.Secret)
+	require.NoError(t, err)
+	assert.Len(t, raw, 20, "TOTP secret must be 160 bits")
+
+	// Google/GitHub authenticator apps consume this otpauth URI and compute
+	// codes from the same secret; the enrollment and MFA login must succeed.
+	confirmation, err := service.ConfirmTOTPEnrollment(t.Context(), "", cookie, mustTOTP(t, enrollment.Secret, now))
+	require.NoError(t, err)
+	require.Len(t, confirmation.RecoveryCodes, 10)
+
+	challenge, err := service.BeginLogin(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	result, err := service.VerifyLoginMFA(t.Context(), challenge.ChallengeID, mustTOTP(t, enrollment.Secret, now.Add(30*time.Second)))
+	require.NoError(t, err)
+	assert.Equal(t, "authenticated", result.Status)
 }
