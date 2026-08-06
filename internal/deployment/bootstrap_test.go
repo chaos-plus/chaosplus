@@ -2,18 +2,27 @@ package deployment
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/app"
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
+	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -304,4 +313,110 @@ func TestInitialAdministratorTransactionFailures(t *testing.T) {
 		require.NoError(t, err)
 		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""), "create default menu")
 	})
+}
+func TestProvisionAndLoginRealDialect(t *testing.T) {
+	dialect := strings.ToLower(strings.TrimSpace(os.Getenv("IAM_DB_LIFECYCLE_TYPE")))
+	if dialect == "" {
+		t.Skip("set IAM_DB_LIFECYCLE_TYPE and IAM_DB_LIFECYCLE_ADMIN_DSN to test bootstrap and login on a real database")
+	}
+	dsn := newDeploymentLifecycleDatabase(t, dialect, os.Getenv("IAM_DB_LIFECYCLE_ADMIN_DSN"))
+	datasource := bunx.Datasource{Type: dialect, Dsn: dsn, Writable: true}
+	cfg := app.Config{
+		Bootstrap: app.BootstrapConfig{
+			LockTimeout: time.Second,
+			Database:    datasource,
+			InitialAdmin: app.BootstrapInitialAdmin{
+				TenantID: "tenant", LoginName: "admin", Password: "correct horse battery staple",
+				DisplayName: "System Admin", Email: "admin@example.com",
+			},
+		},
+		Database: map[string]bunx.Datasource{"primary": datasource},
+	}
+	require.NoError(t, Migrate(context.Background(), cfg))
+	require.NoError(t, Provision(context.Background(), cfg))
+	require.NoError(t, Provision(context.Background(), cfg), "provisioning must be idempotent")
+
+	db, err := datasource.Open()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	var principalID string
+	require.NoError(t, db.NewSelect().Table("iam_principals").Column("id").Where("login_name = ?", "admin").Scan(context.Background(), &principalID))
+	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), "tenant", "tenant_administer", principalID)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	allowed, err = iam.NewAuthorizer(db).CheckPlatform(context.Background(), "platform_administer", principalID)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+
+	service, err := authnmod.NewWebService(loginSmokeAuthConfig(), db)
+	require.NoError(t, err)
+	token, returnURL, err := service.Login(context.Background(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example/", returnURL)
+	claims, err := service.Authenticate(context.Background(), "", service.SessionCookie(token))
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.Subject)
+	assert.Equal(t, "admin", claims.PreferredUsername)
+	assert.Equal(t, "admin@example.com", claims.Email)
+	assert.True(t, claims.EmailVerified)
+}
+
+func newDeploymentLifecycleDatabase(t *testing.T, dialect, adminDSN string) string {
+	t.Helper()
+	require.Contains(t, []string{"mysql", "postgres"}, dialect)
+	require.NotEmpty(t, adminDSN)
+	admin := (&bunx.Datasource{Type: dialect, Dsn: adminDSN}).NewDB()
+	require.NotNil(t, admin)
+	t.Cleanup(func() { _ = admin.Close() })
+	require.NoError(t, admin.PingContext(t.Context()))
+
+	name := fmt.Sprintf("chaosplus_deployment_%d", time.Now().UTC().UnixNano())
+	quoted := `"` + name + `"`
+	create := "CREATE DATABASE " + quoted
+	if dialect == "mysql" {
+		quoted = "`" + name + "`"
+		create = "CREATE DATABASE " + quoted + " CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+	}
+	_, err := admin.ExecContext(t.Context(), create)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, cleanupErr := admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+quoted)
+		assert.NoError(t, cleanupErr)
+	})
+
+	var targetDSN string
+	if dialect == "mysql" {
+		cfg, parseErr := mysql.ParseDSN(adminDSN)
+		require.NoError(t, parseErr)
+		cfg.DBName = name
+		targetDSN = cfg.FormatDSN()
+	} else {
+		parsed, parseErr := url.Parse(adminDSN)
+		require.NoError(t, parseErr)
+		parsed.Path = "/" + name
+		targetDSN = parsed.String()
+	}
+	db := (&bunx.Datasource{Type: dialect, Dsn: targetDSN}).NewDB()
+	require.NotNil(t, db)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.PingContext(t.Context()))
+	return targetDSN
+}
+
+func loginSmokeAuthConfig() authnext.Config {
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	return authnext.Config{
+		Enabled: true, Issuer: "https://iam.example", Audience: []string{"api"},
+		SigningKey: base64.RawStdEncoding.EncodeToString(seed), AccessTokenTTL: time.Minute,
+		MFA:     authnext.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
+		Passkey: authnext.PasskeyConfig{Enabled: false, RPID: "app.example", DisplayName: "Chaosplus", Origins: []string{"https://app.example"}},
+		Web: authnext.WebConfig{
+			Enabled: true, CookieName: "cp_session", SessionTTL: time.Hour, IdleTTL: 10 * time.Minute,
+			PostLoginURL: "https://app.example/", PostLogoutURL: "https://app.example/login",
+			AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"}, CookieSecure: true,
+		},
+	}
 }
