@@ -16,6 +16,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/governance"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
@@ -77,6 +78,8 @@ func Rollback(ctx context.Context, cfg app.Config, module string, target *int64)
 		err = down(organization.MigrateDown, organization.MigrateDownTo)
 	case "governance":
 		err = down(governance.MigrateDown, governance.MigrateDownTo)
+	case "federation":
+		err = down(federation.MigrateDown, federation.MigrateDownTo)
 	case "provisioning":
 		err = down(provisioning.MigrateDown, provisioning.MigrateDownTo)
 	case "wuid":
@@ -84,7 +87,7 @@ func Rollback(ctx context.Context, cfg app.Config, module string, target *int64)
 	case "dlock":
 		err = down(dlock.MigrateDown, dlock.MigrateDownTo)
 	default:
-		return fmt.Errorf("unknown migration module %q (want dlock, wuid, iam, organization, provisioning, or governance)", module)
+		return fmt.Errorf("unknown migration module %q (want dlock, wuid, iam, organization, provisioning, governance, or federation)", module)
 	}
 	if err != nil {
 		return fmt.Errorf("rollback %s: %w", module, err)
@@ -215,6 +218,9 @@ func migrate(ctx context.Context, db *bun.DB) error {
 	if err := governance.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("migrate governance: %w", err)
 	}
+	if err := federation.Migrate(ctx, db); err != nil {
+		return fmt.Errorf("migrate federation: %w", err)
+	}
 	return nil
 }
 
@@ -230,6 +236,9 @@ func assertRuntimeAccess(ctx context.Context, db *bun.DB) error {
 	}
 	if err := governance.AssertMigrated(ctx, db); err != nil {
 		return fmt.Errorf("runtime database cannot read migrated governance tables: %w", err)
+	}
+	if err := federation.AssertMigrated(ctx, db); err != nil {
+		return fmt.Errorf("runtime database cannot read migrated federation tables: %w", err)
 	}
 	return nil
 }

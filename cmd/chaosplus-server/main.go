@@ -120,7 +120,7 @@ func newMigrationCommand(cfg *app.Config) *cobra.Command {
 	}
 	down := &cobra.Command{
 		Use:   "down <module>",
-		Short: "Roll back the latest migration for dlock, wuid, iam, or organization",
+		Short: "Roll back the latest migration for dlock, wuid, iam, organization, provisioning, governance, or federation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return deployment.Rollback(context.Background(), *cfg, args[0], nil)

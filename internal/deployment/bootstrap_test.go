@@ -11,6 +11,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,7 @@ func TestMigrateSQLite(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.AssertMigrated(context.Background(), db))
 	require.NoError(t, organization.AssertMigrated(context.Background(), db))
+	require.NoError(t, federation.AssertMigrated(context.Background(), db))
 }
 
 func TestOpenRuntimeDBComparesCanonicalDialects(t *testing.T) {
@@ -124,7 +126,7 @@ func TestProvisionRealSQLiteInitialAdministrator(t *testing.T) {
 }
 
 func TestRollbackRealSQLiteModules(t *testing.T) {
-	for _, module := range []string{"organization", "iam", "wuid", "dlock"} {
+	for _, module := range []string{"dlock", "wuid", "iam", "organization", "provisioning", "governance", "federation"} {
 		t.Run(module, func(t *testing.T) {
 			dsn := filepath.Join(t.TempDir(), module+".db")
 			cfg := app.Config{Bootstrap: app.BootstrapConfig{
@@ -240,6 +242,18 @@ func TestMigrationStageFailures(t *testing.T) {
 		_, err = db.ExecContext(t.Context(), "CREATE TABLE goose_organization (bad TEXT)")
 		require.NoError(t, err)
 		assert.ErrorContains(t, migrate(t.Context(), db), "migrate organization")
+	})
+	t.Run("federation", func(t *testing.T) {
+		db, err := bunxtest.Memory()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		require.NoError(t, dlock.Migrate(t.Context(), db))
+		require.NoError(t, wuid.Migrate(t.Context(), db))
+		require.NoError(t, iam.Migrate(t.Context(), db))
+		require.NoError(t, organization.Migrate(t.Context(), db))
+		_, err = db.ExecContext(t.Context(), "CREATE TABLE goose_federation (bad TEXT)")
+		require.NoError(t, err)
+		assert.ErrorContains(t, migrate(t.Context(), db), "migrate federation")
 	})
 }
 
