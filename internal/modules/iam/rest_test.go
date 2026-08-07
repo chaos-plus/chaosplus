@@ -404,7 +404,9 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/permissions/user_view", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/permissions/user_view/condition", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing/members", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusConflict, api.Put("/iam/roles/missing/members/subject", authorizationHeader, tenant).Code)
+	// The escalation guard resolves the role before the member, so a missing
+	// role now reports 404 instead of leaking a membership conflict.
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/missing/members/subject", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/members/subject", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/members/missing", authorizationHeader, tenant, map[string]any{"display_name": "Missing"}).Code)
 	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/menus/missing", authorizationHeader, tenant, map[string]any{"label": "Missing"}).Code)
@@ -454,7 +456,13 @@ func newIAMAPI(t *testing.T) (*bun.DB, humatest.TestAPI, iamAuthorization) {
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", "tenant", "administrator", "Administrator", "", now, now)
 	require.NoError(t, err)
+	// Platform-scope permissions are deliberately excluded: the service refuses
+	// to grant them to a tenant role, so seeding them would build a state
+	// production can never reach.
 	for _, action := range registry.All() {
+		if action.Scope == "platform" {
+			continue
+		}
 		_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_permissions (tenant_id,role_id,permission_code,created_at) VALUES (?,?,?,?)", "tenant", "administrator", action.Code, now)
 		require.NoError(t, err)
 	}

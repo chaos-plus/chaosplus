@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 
 	"github.com/stretchr/testify/assert"
@@ -52,6 +53,128 @@ func createTestRole(t *testing.T, repo *Repository, tenant, name string) Role {
 	role, err := repo.CreateRole(context.Background(), tenant, name, "description")
 	require.NoError(t, err)
 	return role
+}
+
+// TestRepositoryPropagatesDatabaseFailures drops real tables to produce real
+// driver errors, so the error branches are exercised against the actual engine
+// rather than a substituted failure. These paths are otherwise unreached.
+func TestRepositoryPropagatesDatabaseFailures(t *testing.T) {
+	dropAndAssert := func(t *testing.T, tables []string, call func(repo *Repository) error) {
+		t.Helper()
+		repo := newIAMRepository(t)
+		require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "tenant"))
+		for _, table := range tables {
+			_, err := repo.db.ExecContext(t.Context(), "DROP TABLE "+table)
+			require.NoError(t, err)
+		}
+		assert.Error(t, call(repo))
+	}
+
+	t.Run("roles", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.ListRoles(t.Context(), "tenant")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, _, err := repo.ListRolesPage(t.Context(), "tenant", 0, 10)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.CreateRole(t.Context(), "tenant", "Broken", "")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.GetRole(t.Context(), "tenant", "missing")
+			return err
+		})
+	})
+
+	t.Run("entities", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := repo.ListEntities(t.Context(), "tenant")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, _, err := repo.ListEntitiesPage(t.Context(), "tenant", 0, 10)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := repo.CreateEntity(t.Context(), iamdomain.Entity{TenantID: "tenant", Type: "store", Name: "Broken", Status: iamdomain.EntityActive})
+			return err
+		})
+	})
+
+	t.Run("platform authorization", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.ListPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.ListPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.SetPlatformAdministrator(t.Context(), "someone", true, nil)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.SetPlatformAdministrator(t.Context(), "someone", false, []string{"tenant_view"})
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.DeletePlatformAdministrator(t.Context(), "someone")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.DeletePlatformAdministrator(t.Context(), "someone")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.CountFullPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			return repo.assertPlatformAdministratorRemains(t.Context())
+		})
+	})
+
+	t.Run("permissions and members", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_role_permissions"}, func(repo *Repository) error {
+			_, err := repo.ListPermissionGrants(t.Context(), "tenant", "role")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_role_members"}, func(repo *Repository) error {
+			_, err := repo.ListMembers(t.Context(), "tenant", "role")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
+			_, err := repo.IsMemberActive(t.Context(), "tenant", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_role_members", "iam_temporary_role_grants"}, func(repo *Repository) error {
+			_, err := repo.ListMemberRoleIDs(t.Context(), "tenant", "root")
+			return err
+		})
+	})
+
+	t.Run("authorizer", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).Constraint(t.Context(), "tenant", "store_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_principals"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).CheckPlatform(t.Context(), "tenant_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).Check(t.Context(), "tenant", "store_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_groups"}, func(repo *Repository) error {
+			_, err := matchingDynamicGroupIDs(t.Context(), repo.db, "tenant", "root")
+			return err
+		})
+	})
 }
 
 func TestRepositoryRoleCRUDAndTenantIsolation(t *testing.T) {

@@ -16,6 +16,7 @@ func TestRoleDataScopesCompileDirectAndDirectoryGrants(t *testing.T) {
 	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "tenant"))
 	seedDataScopeDepartments(t, repo)
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
+	makeTenantAdministrator(t, repo, "tenant", "operator")
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 
 	selfRole := createDataScopeRole(ctx, t, service, "Self", "self-principal", "", DataScopeSelf, nil)
@@ -83,6 +84,7 @@ func TestRoleDataScopeValidationIdempotencyAndMemberAtomicity(t *testing.T) {
 	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "tenant"))
 	seedDataScopeDepartments(t, repo)
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
+	makeTenantAdministrator(t, repo, "tenant", "operator")
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 	role, err := service.CreateRole(ctx, "tenant", "Scoped", "")
 	require.NoError(t, err)

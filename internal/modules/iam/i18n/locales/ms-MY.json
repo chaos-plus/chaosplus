@@ -31,5 +31,9 @@
   "invalid_relationship_window": "Tempoh sah kebenaran hubungan tidak sah. Gunakan cap masa RFC 3339, tetapkan masa tamat selepas masa mula pilihan, dan pastikan masa tamat masih pada masa hadapan.",
   "invalid_relationship_condition": "Syarat kebenaran hubungan tidak sah. Gunakan syarat versi 1 dengan medan konteks dipercayai dan pengendali yang disokong, dalam had saiz dan kedalaman yang didokumenkan.",
   "role_permission_not_granted": "Kebenaran ini belum diberikan kepada peranan. Berikan kebenaran sebelum mengkonfigurasi syaratnya.",
-  "invalid_role_permission_condition": "Syarat kebenaran peranan tidak sah. Gunakan syarat versi 1 dengan medan konteks dipercayai dan pengendali yang disokong, dalam had saiz dan kedalaman yang didokumenkan."
+  "invalid_role_permission_condition": "Syarat kebenaran peranan tidak sah. Gunakan syarat versi 1 dengan medan konteks dipercayai dan pengendali yang disokong, dalam had saiz dan kedalaman yang didokumenkan.",
+  "platform_administrator_not_found": "Prinsipal ini tidak memegang sebarang kebenaran platform. Berikan kebenaran platform sebelum mengemas kini atau membatalkannya.",
+  "last_platform_administrator": "Perubahan ini akan meninggalkan platform tanpa pentadbir penuh. Naikkan pangkat prinsipal lain terlebih dahulu.",
+  "platform_permission_scope": "Hanya kebenaran berskop platform boleh diberikan kepada pentadbir platform. Pilih kod daripada katalog kebenaran platform.",
+  "privilege_escalation_denied": "Anda tidak boleh memberikan kebenaran yang anda sendiri tidak miliki. Minta pentadbir penyewa melaksanakan tugasan ini."
 }

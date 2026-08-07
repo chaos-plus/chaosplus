@@ -34,6 +34,8 @@ func TestServiceDialectContract(t *testing.T) {
 	var id atomic.Int64
 	repo := NewRepository(db, func() (string, error) { return fmt.Sprint(id.Add(1)), nil })
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(db), newTestAuditAppender(db))
+	makeTenantAdministrator(t, repo, "tenant-a", "dialect-administrator")
+	makeTenantAdministrator(t, repo, "tenant-b", "dialect-administrator")
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "dialect-administrator"})
 
 	roleA, err := service.CreateRole(ctx, "tenant-a", "Operators", "")

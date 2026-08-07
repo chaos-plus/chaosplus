@@ -317,6 +317,7 @@ type authorizationExplanationInput struct {
 // RegisterREST mounts IAM discovery endpoints for the management UI.
 func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 	registerRelationshipREST(a, svc, registrar)
+	registerPlatformREST(a, svc, registrar)
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-permission-catalog",
 		Method:      http.MethodGet,
@@ -376,11 +377,11 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-entities", Method: http.MethodGet, Path: "/iam/entities", Summary: "List tenant entities", Tags: []string{"iam"},
 	}, authz.Guard{Resource: "entity", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]Entity], error) {
-		entities, err := svc.ListEntities(ctx, in.TenantID)
+		entities, total, err := svc.ListEntitiesPage(ctx, in.TenantID, in.Offset, in.Limit)
 		if err != nil {
 			return nil, apiError("list entities", err)
 		}
-		return paginateList(ctx, entitiesFromDomain(entities), in.Offset, in.Limit), nil
+		return respx.List(ctx, entitiesFromDomain(entities), respx.Page{Offset: in.Offset, Limit: in.Limit, Total: total}), nil
 	})
 
 	authz.Register(registrar, a, huma.Operation{
@@ -464,11 +465,11 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, a, huma.Operation{
 		OperationID: "iam-list-roles", Method: http.MethodGet, Path: "/iam/roles", Summary: "List tenant roles", Tags: []string{"iam"},
 	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]APIRole], error) {
-		roles, err := svc.ListRoles(ctx, in.TenantID)
+		roles, total, err := svc.ListRolesPage(ctx, in.TenantID, in.Offset, in.Limit)
 		if err != nil {
 			return nil, apiError("list roles", err)
 		}
-		return paginateList(ctx, rolesFromDomain(roles), in.Offset, in.Limit), nil
+		return respx.List(ctx, rolesFromDomain(roles), respx.Page{Offset: in.Offset, Limit: in.Limit, Total: total}), nil
 	})
 
 	authz.Register(registrar, a, huma.Operation{
@@ -951,6 +952,8 @@ func apiError(operation string, err error) error {
 		return huma.Error404NotFound("role_permission_not_granted")
 	case errors.Is(err, iamdomain.ErrInvalidRolePermissionCondition):
 		return huma.Error422UnprocessableEntity("invalid_role_permission_condition")
+	case errors.Is(err, iamdomain.ErrPrivilegeEscalation):
+		return huma.Error403Forbidden("privilege_escalation_denied")
 	case errors.Is(err, iamdomain.ErrInvalidArgument):
 		return huma.Error422UnprocessableEntity("invalid_iam_request")
 	default:

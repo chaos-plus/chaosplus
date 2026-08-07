@@ -310,6 +310,12 @@ func (s *Service) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, 
 	if err := validateEntityBinding(tenantID, entityID, roleID, principalID, effect, expiresAt); err != nil {
 		return iamdomain.EntityRoleBinding{}, false, err
 	}
+	// A deny binding only narrows access, so only allow bindings can escalate.
+	if effect == iamdomain.BindingAllow {
+		if err := s.requireGrantableRole(ctx, tenantID, roleID); err != nil {
+			return iamdomain.EntityRoleBinding{}, false, err
+		}
+	}
 	record := newAuditRecord(ctx, tenantID, "entity_role_binding_put", "entity", entityID)
 	record.Detail["role_id"], record.Detail["principal_id"], record.Detail["effect"] = roleID, principalID, effect
 	var binding iamdomain.EntityRoleBinding

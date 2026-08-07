@@ -31,5 +31,9 @@
   "invalid_relationship_window": "The relationship validity window is invalid. Use RFC 3339 timestamps, set the end after the optional start, and choose an end time in the future.",
   "invalid_relationship_condition": "The relationship condition is invalid. Use a version 1 condition with supported trusted-context fields and operators, within the documented size and depth limits.",
   "role_permission_not_granted": "This permission is not granted to the role. Grant the permission before configuring its condition.",
-  "invalid_role_permission_condition": "The role permission condition is invalid. Use a version 1 condition with supported trusted-context fields and operators, within the documented size and depth limits."
+  "invalid_role_permission_condition": "The role permission condition is invalid. Use a version 1 condition with supported trusted-context fields and operators, within the documented size and depth limits.",
+  "platform_administrator_not_found": "The principal holds no platform authorization. Grant platform permissions before updating or revoking them.",
+  "last_platform_administrator": "This change would leave the platform without a full administrator. Promote another principal first.",
+  "platform_permission_scope": "Only platform-scope permissions can be granted to a platform administrator. Choose a code from the platform permission catalog.",
+  "privilege_escalation_denied": "You cannot grant a permission you do not hold yourself. Ask a tenant administrator to perform this assignment."
 }

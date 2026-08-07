@@ -19,6 +19,7 @@ import (
 func TestIAMWriteTransactionAuditAndRevision(t *testing.T) {
 	repo := newIAMRepository(t)
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
+	makeTenantAdministrator(t, repo, "tenant", "administrator")
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "administrator"})
 
 	role, err := service.CreateRole(ctx, "tenant", "Operators", "")

@@ -43,7 +43,21 @@ var (
 	ErrRoleScopeDepartmentInactive    = errors.New("role scope department inactive")
 	ErrMemberDepartmentMissing        = errors.New("member department not found")
 	ErrMemberDepartmentInactive       = errors.New("member department inactive")
+	ErrPlatformPermissionScope        = errors.New("permission is not a platform permission")
+	ErrPlatformAdministratorNotFound  = errors.New("platform administrator not found")
+	ErrLastPlatformAdministrator      = errors.New("cannot remove the last platform administrator")
+	ErrPrivilegeEscalation            = errors.New("cannot grant a permission the actor does not hold")
 )
+
+// PlatformAdministrator is one principal's platform authorization. A full
+// administrator holds every declared platform permission; a restricted one
+// holds only the explicitly granted permission codes.
+type PlatformAdministrator struct {
+	PrincipalID       string
+	FullAdministrator bool
+	Permissions       []string
+	CreatedAt         time.Time
+}
 
 type IDGenerator func() (string, error)
 

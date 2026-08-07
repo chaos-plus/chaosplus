@@ -25,6 +25,10 @@ var (
 	ErrRoleScopeDepartmentInactive    = iamdomain.ErrRoleScopeDepartmentInactive
 	ErrMemberDepartmentMissing        = iamdomain.ErrMemberDepartmentMissing
 	ErrMemberDepartmentInactive       = iamdomain.ErrMemberDepartmentInactive
+	ErrPlatformPermissionScope        = iamdomain.ErrPlatformPermissionScope
+	ErrPlatformAdministratorNotFound  = iamdomain.ErrPlatformAdministratorNotFound
+	ErrLastPlatformAdministrator      = iamdomain.ErrLastPlatformAdministrator
+	ErrPrivilegeEscalation            = iamdomain.ErrPrivilegeEscalation
 )
 
 type IDGenerator = iamdomain.IDGenerator
@@ -39,6 +43,7 @@ type MemberStatus = iamdomain.MemberStatus
 type MemberFilter = iamdomain.MemberFilter
 type Menu = iamdomain.Menu
 type MenuStatus = iamdomain.MenuStatus
+type PlatformAdministrator = iamdomain.PlatformAdministrator
 
 const (
 	MemberActive                      = iamdomain.MemberActive

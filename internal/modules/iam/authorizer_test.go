@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -88,6 +91,126 @@ func TestAuthorizerFollowsTenantLifecycle(t *testing.T) {
 			assert.Equal(t, "inactive_tenant", explanation.Reason)
 		}
 	}
+}
+
+// TestAuthorizerDialectBehaviorContract exercises the authorization SQL that
+// differs most between engines: the four-branch UNION CTE in loadTenantGrants,
+// the WITH RECURSIVE entity walk in loadScopedGrants, and the deny-wins
+// resolution in decideEntity. Every other authorizer test runs on SQLite only,
+// so this is the contract that proves MySQL and PostgreSQL agree.
+func TestAuthorizerDialectBehaviorContract(t *testing.T) {
+	db := newLifecycleDatabase(t)
+	require.NoError(t, Migrate(t.Context(), db))
+	require.NoError(t, organization.Migrate(t.Context(), db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), db, "tenant"))
+
+	var sequence atomic.Int64
+	repo := NewRepository(db, func() (string, error) { return fmt.Sprintf("d%d", sequence.Add(1)), nil })
+	ctx := t.Context()
+	authorizer := NewAuthorizer(db)
+
+	_, err := repo.PutMember(ctx, TenantMember{TenantID: "tenant", Subject: "principal", DisplayName: "Principal", Status: MemberActive})
+	require.NoError(t, err)
+
+	// Direct role membership resolves through the first CTE branch.
+	direct, err := repo.CreateRole(ctx, "tenant", "Direct", "")
+	require.NoError(t, err)
+	_, err = repo.GrantPermission(ctx, "tenant", direct.ID, "store_view")
+	require.NoError(t, err)
+	_, err = repo.AddMember(ctx, "tenant", direct.ID, "principal")
+	require.NoError(t, err)
+	allowed, err := authorizer.Check(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed, "direct role membership must grant on every dialect")
+
+	// A temporary grant resolves through the second CTE branch and respects
+	// its validity window on both engines.
+	temporary, err := repo.CreateRole(ctx, "tenant", "Temporary", "")
+	require.NoError(t, err)
+	_, err = repo.GrantPermission(ctx, "tenant", temporary.ID, "user_view")
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, GrantTemporaryRole(ctx, db, "tenant", "grant-active", temporary.ID, "principal", "actor", now.Add(-time.Hour), now.Add(time.Hour)))
+	allowed, err = authorizer.Check(ctx, "tenant", "user_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed, "an active temporary grant must apply")
+	revoked, err := RevokeTemporaryRole(ctx, db, "tenant", "grant-active")
+	require.NoError(t, err)
+	assert.True(t, revoked)
+	require.NoError(t, GrantTemporaryRole(ctx, db, "tenant", "grant-expired", temporary.ID, "principal", "actor", now.Add(-2*time.Hour), now.Add(-time.Hour)))
+	allowed, err = authorizer.Check(ctx, "tenant", "user_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed, "an expired temporary grant must not apply")
+
+	// Entity scoped bindings walk the recursive CTE from parent to child.
+	parent, err := repo.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: "company", Name: "Parent", Status: iamdomain.EntityActive})
+	require.NoError(t, err)
+	child, err := repo.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", ParentID: parent.ID, Type: "store", Name: "Child", Status: iamdomain.EntityActive})
+	require.NoError(t, err)
+	grandchild, err := repo.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", ParentID: child.ID, Type: "store", Name: "Grandchild", Status: iamdomain.EntityActive})
+	require.NoError(t, err)
+	scoped, err := repo.CreateRole(ctx, "tenant", "Scoped", "")
+	require.NoError(t, err)
+	_, err = repo.GrantPermission(ctx, "tenant", scoped.ID, "merchant_view")
+	require.NoError(t, err)
+	_, _, err = repo.PutEntityRoleBinding(ctx, "tenant", parent.ID, scoped.ID, "principal", iamdomain.BindingAllow, time.Time{})
+	require.NoError(t, err)
+
+	for _, entityID := range []string{parent.ID, child.ID, grandchild.ID} {
+		allowed, err = authorizer.CheckEntity(ctx, "tenant", entityID, "merchant_view", "principal")
+		require.NoError(t, err)
+		assert.True(t, allowed, "recursive inheritance must reach %s", entityID)
+	}
+
+	// An explicit deny on the child wins over the inherited allow and does not
+	// revoke the parent.
+	_, _, err = repo.PutEntityRoleBinding(ctx, "tenant", child.ID, scoped.ID, "principal", iamdomain.BindingDeny, time.Time{})
+	require.NoError(t, err)
+	explanation, err := authorizer.ExplainEntity(ctx, "tenant", child.ID, "merchant_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, explanation.Allowed)
+	assert.Equal(t, "explicit_deny", explanation.Reason)
+	allowed, err = authorizer.CheckEntity(ctx, "tenant", parent.ID, "merchant_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, allowed, "denying a child must not revoke the parent")
+
+	// Constraint compiles the same state into concrete identifiers.
+	constraint, err := authorizer.Constraint(ctx, "tenant", "merchant_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, constraint.AllowAll)
+	assert.Contains(t, constraint.ResourceIDs, parent.ID)
+	assert.Contains(t, constraint.DeniedIDs, child.ID)
+	// This test writes through the repository, which never bumps the policy
+	// revision, so the value is only required to be consistent across the two
+	// evaluation entry points.
+	assert.GreaterOrEqual(t, constraint.Revision, int64(0))
+	assert.Equal(t, explanation.Revision, constraint.Revision)
+
+	// A tenant-wide administrator short-circuits to AllowAll on every dialect.
+	administrator, err := repo.CreateRole(ctx, "tenant", "Administrators", "")
+	require.NoError(t, err)
+	_, err = repo.GrantPermission(ctx, "tenant", administrator.ID, "tenant_administer")
+	require.NoError(t, err)
+	_, err = repo.AddMember(ctx, "tenant", administrator.ID, "principal")
+	require.NoError(t, err)
+	constraint, err = authorizer.Constraint(ctx, "tenant", "merchant_view", "principal")
+	require.NoError(t, err)
+	assert.True(t, constraint.AllowAll)
+
+	// Bulk evaluation must agree with the single-permission path.
+	bulk, err := authorizer.CheckBulk(ctx, "tenant", []string{"store_view", "merchant_view", "user_delete"}, "principal")
+	require.NoError(t, err)
+	assert.True(t, bulk["store_view"])
+	assert.True(t, bulk["merchant_view"])
+	assert.True(t, bulk["user_delete"], "tenant_administer satisfies every tenant permission")
+
+	// Disabling the membership revokes everything immediately, with no cache
+	// to invalidate.
+	_, err = repo.SetMemberStatus(ctx, "tenant", "principal", MemberDisabled)
+	require.NoError(t, err)
+	allowed, err = authorizer.Check(ctx, "tenant", "store_view", "principal")
+	require.NoError(t, err)
+	assert.False(t, allowed)
 }
 
 func TestAuthorizerPlatformAdministrationIsNotATenantGrant(t *testing.T) {

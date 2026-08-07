@@ -203,6 +203,11 @@ func (s *Service) SetPermissionCondition(ctx context.Context, tenantID, roleID, 
 	if action.Scope == "platform" {
 		return RolePermissionGrant{}, false, fmt.Errorf("%w: platform permissions cannot be granted to tenant roles", ErrInvalidArgument)
 	}
+	// Relaxing a condition broadens an existing grant, so it needs the same
+	// escalation guard as granting the permission outright.
+	if err := s.requireGrantablePermissions(ctx, tenantID, code); err != nil {
+		return RolePermissionGrant{}, false, err
+	}
 	canonical, err := policyx.CanonicalCondition(condition)
 	if err != nil {
 		return RolePermissionGrant{}, false, fmt.Errorf("%w: %v", ErrInvalidRolePermissionCondition, err)
@@ -256,6 +261,11 @@ func (s *Service) changePermission(ctx context.Context, tenantID, roleID, code s
 	if action.Scope == "platform" {
 		return false, fmt.Errorf("%w: platform permissions cannot be granted to tenant roles", ErrInvalidArgument)
 	}
+	if grant {
+		if err := s.requireGrantablePermissions(ctx, tenantID, code); err != nil {
+			return false, err
+		}
+	}
 	eventType := "role_permission_revoked"
 	if grant {
 		eventType = "role_permission_granted"
@@ -307,6 +317,11 @@ func (s *Service) changeMember(ctx context.Context, tenantID, roleID, subject st
 	subject = strings.TrimSpace(subject)
 	if subject == "" || len(subject) > 255 {
 		return false, fmt.Errorf("%w: invalid principal subject", ErrInvalidArgument)
+	}
+	if add {
+		if err := s.requireGrantableRole(ctx, tenantID, roleID); err != nil {
+			return false, err
+		}
 	}
 	eventType := "role_member_removed"
 	if add {

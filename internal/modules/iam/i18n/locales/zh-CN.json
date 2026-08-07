@@ -31,5 +31,9 @@
   "invalid_relationship_window": "关系授权有效期无效。请使用 RFC 3339 时间，将结束时间设为晚于可选的开始时间，并确保结束时间仍在未来。",
   "invalid_relationship_condition": "关系授权条件无效。请使用版本 1 条件、受支持的可信上下文字段和操作符，并遵守文档规定的大小与深度限制。",
   "role_permission_not_granted": "该权限尚未授予此角色，请先授予权限，再配置权限条件。",
-  "invalid_role_permission_condition": "角色权限条件无效。请使用版本 1 条件、受支持的可信上下文字段和操作符，并遵守文档规定的大小与深度限制。"
+  "invalid_role_permission_condition": "角色权限条件无效。请使用版本 1 条件、受支持的可信上下文字段和操作符，并遵守文档规定的大小与深度限制。",
+  "platform_administrator_not_found": "该主体没有任何平台授权。请先授予平台权限，再进行更新或撤销。",
+  "last_platform_administrator": "此变更会导致平台不再有完整管理员。请先将其他主体提升为平台管理员。",
+  "platform_permission_scope": "只有平台作用域的权限才能授予平台管理员。请从平台权限目录中选择权限码。",
+  "privilege_escalation_denied": "不能授予自己并不拥有的权限。请联系租户管理员执行此项授权。"
 }

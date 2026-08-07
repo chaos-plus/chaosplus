@@ -156,6 +156,11 @@ func (s *Service) changeDirectoryBinding(ctx context.Context, tenantID, roleID s
 	if err := validateDirectoryBindingRef(tenantID, roleID, assigneeType, assigneeID); err != nil {
 		return false, err
 	}
+	if add {
+		if err := s.requireGrantableRole(ctx, tenantID, roleID); err != nil {
+			return false, err
+		}
+	}
 	eventType := "role_directory_binding_removed"
 	if add {
 		eventType = "role_directory_binding_added"

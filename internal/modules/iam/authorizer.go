@@ -70,15 +70,26 @@ func (a *Authorizer) Check(ctx context.Context, tenantID, permission, subject st
 }
 
 // CheckPlatform authorizes platform operations independently from tenant
-// membership and tenant roles. Mutable principal state is rechecked on every
-// request so disabling a principal revokes platform access immediately.
+// membership and tenant roles. The requested permission is honored: a full
+// platform administrator holds every declared platform permission, while a
+// restricted principal holds only its explicit iam_platform_grants rows.
+// Mutable principal state is rechecked on every request so disabling a
+// principal revokes platform access immediately.
 func (a *Authorizer) CheckPlatform(ctx context.Context, permission, subject string) (bool, error) {
 	if permission == "" || subject == "" || len(permission) > 128 || len(subject) > 255 {
 		return false, fmt.Errorf("platform permission and subject are required")
 	}
-	count, err := a.db.NewSelect().TableExpr("iam_platform_administrators AS pa").
-		Join("JOIN iam_principals AS p ON p.id = pa.principal_id AND p.status = 'active'").
-		Where("pa.principal_id = ?", subject).Count(ctx)
+	// Fail closed for codes that are not declared platform actions. Route
+	// registration already rejects them, so reaching this branch means a
+	// caller bypassed the declaration gate.
+	if action, ok := authz.DefaultRegistry().Find(permission); !ok || action.Scope != "platform" {
+		return false, nil
+	}
+	count, err := a.db.NewSelect().TableExpr("iam_principals AS p").
+		Where("p.id = ? AND p.status = 'active'", subject).
+		Where("(EXISTS (SELECT 1 FROM iam_platform_administrators AS pa WHERE pa.principal_id = p.id)"+
+			" OR EXISTS (SELECT 1 FROM iam_platform_grants AS pg WHERE pg.principal_id = p.id AND pg.permission_code = ?))", permission).
+		Count(ctx)
 	if err != nil {
 		return false, fmt.Errorf("evaluate platform permission: %w", err)
 	}
@@ -138,7 +149,9 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subje
 		return authz.DataConstraint{}, err
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, true, trusted)
+	// Constraint returns concrete identifiers, so it genuinely needs the full
+	// tenant enumeration.
+	snapshot, err := a.snapshot(ctx, tenantID, "", permission, subject, true, trusted)
 	if err != nil {
 		return authz.DataConstraint{}, err
 	}
@@ -187,7 +200,7 @@ func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID, perm
 		return authz.Explanation{}, err
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false, trusted)
+	snapshot, err := a.snapshot(ctx, tenantID, entityID, permission, subject, false, trusted)
 	if err != nil {
 		return authz.Explanation{}, err
 	}
@@ -204,7 +217,7 @@ func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID, re
 	trusted := policyx.TrustedFromContext(ctx, a.now())
 	trusted.Resource.Type = resourceType
 	trusted.Resource.ID = resourceID
-	snapshot, err := a.snapshot(ctx, tenantID, permission, subject, false, trusted)
+	snapshot, err := a.snapshot(ctx, tenantID, entityID, permission, subject, false, trusted)
 	if err != nil {
 		return authz.Explanation{}, err
 	}
@@ -290,7 +303,12 @@ func (a *Authorizer) CheckResource(ctx context.Context, tenantID, entityID, reso
 	return explanation.Allowed, err
 }
 
-func (a *Authorizer) snapshot(ctx context.Context, tenantID, permission, subject string, includeDataScope bool, trusted policyx.TrustedContext) (authorizationSnapshot, error) {
+// snapshot reads one consistent view of the policy state backing a decision.
+// focusEntityID narrows the entity load to a single row: only Constraint needs
+// the full tenant enumeration, while per-entity checks just need to know
+// whether their target is active. Loading every entity for those was O(tenant
+// entities) on the hot authorization path.
+func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, permission, subject string, includeDataScope bool, trusted policyx.TrustedContext) (authorizationSnapshot, error) {
 	requested, _ := requestedPermissions(permission)
 	for range policySnapshotAttempts {
 		before, err := policyx.Current(ctx, a.db, tenantID)
@@ -302,7 +320,11 @@ func (a *Authorizer) snapshot(ctx context.Context, tenantID, permission, subject
 		if err != nil {
 			return authorizationSnapshot{}, err
 		}
-		if err := a.db.NewSelect().Table("iam_entities").Column("id").Where("tenant_id = ? AND status = ?", tenantID, iamdomain.EntityActive).Order("id ASC").Scan(ctx, &snapshot.entityIDs); err != nil {
+		entities := a.db.NewSelect().Table("iam_entities").Column("id").Where("tenant_id = ? AND status = ?", tenantID, iamdomain.EntityActive)
+		if focusEntityID != "" {
+			entities = entities.Where("id = ?", focusEntityID)
+		}
+		if err := entities.Order("id ASC").Scan(ctx, &snapshot.entityIDs); err != nil {
 			return authorizationSnapshot{}, fmt.Errorf("list authorization entities: %w", err)
 		}
 		if snapshot.memberActive {
