@@ -30,7 +30,7 @@ func NewModule(db *bun.DB, registrar *authz.Registrar, cfg Config) *Module {
 
 // Start wires the anchor store and root signer from the deferred config.
 // Config-derived errors surface here instead of panicking at construction.
-func (m *Module) Start(ctx context.Context) error {
+func (m *Module) Start(_ context.Context) error {
 	if !m.anchorCfg.Anchor.Enabled {
 		return nil
 	}

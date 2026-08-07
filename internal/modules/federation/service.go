@@ -112,7 +112,7 @@ type Service struct {
 	samlSPs    sync.Map
 	// SAML SP-initiated login state: cached upstream IdP metadata keyed by
 	// provider ID, plus the lazily generated SP signing key for AuthnRequests.
-	samlIdP sync.Map // providerID -> *saml.EntityDescriptor
+	samlIDPCache sync.Map // providerID -> *saml.EntityDescriptor
 	spMu    sync.Mutex
 	spKey   *rsa.PrivateKey
 	spCert  *x509.Certificate

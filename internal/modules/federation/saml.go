@@ -996,10 +996,10 @@ func parseSAMLMetadata(raw, entityID string) (*saml.EntityDescriptor, error) {
 	return nil, fmt.Errorf("%w: metadata has no HTTP-POST or HTTP-Redirect assertion consumer service", ErrInvalidSAMLSP)
 }
 
-// samlIdPEntry is a cached upstream IdP descriptor with the time it was
+// samlIDPEntry is a cached upstream IdP descriptor with the time it was
 // fetched, so a rotated IdP signing certificate is picked up within one TTL
 // instead of requiring a service restart.
-type samlIdPEntry struct {
+type samlIDPEntry struct {
 	ed        *saml.EntityDescriptor
 	fetchedAt time.Time
 }
@@ -1016,7 +1016,7 @@ const samlSPMetadataTTL = 5 * time.Minute
 // signatures would reject them. Publish SP metadata or wire a configured key if
 // an IdP requires verifiable SP signatures.
 func (s *Service) samlServiceProvider(ctx context.Context, provider providerRow, callback string) (*saml.ServiceProvider, error) {
-	metadata, err := s.samlIdPMetadata(ctx, provider)
+	metadata, err := s.samlIDPMetadata(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,13 +1042,13 @@ func (s *Service) samlServiceProvider(ctx context.Context, provider providerRow,
 	}, nil
 }
 
-// samlIdPMetadata returns the cached IdP descriptor for an upstream SAML
+// samlIDPMetadata returns the cached IdP descriptor for an upstream SAML
 // provider, fetching and validating it from the provider's issuer URL on a
 // cache miss or after the TTL expires.
-func (s *Service) samlIdPMetadata(ctx context.Context, provider providerRow) (*saml.EntityDescriptor, error) {
+func (s *Service) samlIDPMetadata(ctx context.Context, provider providerRow) (*saml.EntityDescriptor, error) {
 	now := s.now().UTC()
-	if cached, ok := s.samlIdP.Load(provider.ID); ok {
-		entry := cached.(samlIdPEntry)
+	if cached, ok := s.samlIDPCache.Load(provider.ID); ok {
+		entry := cached.(samlIDPEntry)
 		if now.Sub(entry.fetchedAt) < samlSPMetadataTTL {
 			return entry.ed, nil
 		}
@@ -1082,7 +1082,7 @@ func (s *Service) samlIdPMetadata(ctx context.Context, provider providerRow) (*s
 	if len(ed.IDPSSODescriptors) == 0 {
 		return nil, fmt.Errorf("%w: metadata has no IdP SSO descriptor", ErrSAMLResponse)
 	}
-	s.samlIdP.Store(provider.ID, samlIdPEntry{ed: &ed, fetchedAt: now})
+	s.samlIDPCache.Store(provider.ID, samlIDPEntry{ed: &ed, fetchedAt: now})
 	return &ed, nil
 }
 
