@@ -1,0 +1,40 @@
+# golangci-lint configuration. Run: golangci-lint run ./...
+run:
+  timeout: 10m
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - gocritic
+    - gosec
+    - revive
+    - usestdlibvars
+    - nilerr
+    - errorlint
+
+issues:
+  max-same-issues: 0
+  exclude-rules:
+    # Deliberate style: fmt.Errorf("%w: %v", sentinel, err) keeps the sentinel
+    # for errors.Is classification while preserving human-readable detail in the
+    # message. errorlint's non-wrapping check is a false positive for this
+    # pattern; errors.As/errors.Is usage checks remain enabled.
+    - linters: [errorlint]
+      text: "non-wrapping format verb"
+    # gopher-lua idiom: the LState parameter is conventionally named L.
+    - linters: [gocritic]
+      path: pkg/interpreter/lua.go
+      text: "captLocal"
+    # pkg/geoip identifiers mirror upstream service/product names (Ip2region,
+    # Ip2location) and the public JSON field "ip"; the public API stays stable.
+    - linters: [revive]
+      path: pkg/geoip
+      text: "var-naming|exported"
+    # gocritic test-only nits don't affect shipped code.
+    - path: _test\.go
+      linters: [gocritic]

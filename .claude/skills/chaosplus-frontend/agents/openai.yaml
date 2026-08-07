@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chaosplus Frontend"
+  short_description: "Build and verify the IAM administration UI"
+  default_prompt: "Use $chaosplus-frontend to implement and verify this Chaosplus admin UI change."
