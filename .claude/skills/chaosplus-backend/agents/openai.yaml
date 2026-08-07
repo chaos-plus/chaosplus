@@ -1,4 +1,0 @@
-interface:
-  display_name: "Chaosplus Backend"
-  short_description: "Build and verify the Chaosplus Go backend"
-  default_prompt: "Use $chaosplus-backend to implement and verify this Chaosplus backend change."

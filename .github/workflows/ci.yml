@@ -9,6 +9,9 @@ on:
 jobs:
   go:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
     steps:
       - uses: actions/checkout@v4
 
@@ -31,4 +34,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t chaosplus:ci .
+        run: docker build -t chaosplus:ci apps/server

@@ -1,0 +1,162 @@
+name: ${COMPOSE_PROJECT_NAME:-chaosplus}
+
+services:
+  proxy:
+    image: ${TRAEFIK_IMAGE}
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-chaosplus}
+      - --entrypoints.web.address=:80
+      - --entrypoints.traefik.address=:8080
+      - --api.dashboard=false
+      - --ping=true
+    ports:
+      - "${PUBLIC_PORT:-80}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --ping]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      chaosplus:
+        ipv4_address: 172.30.0.2
+        aliases: ["${APP_DOMAIN}"]
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?run init-secrets first}
+      POSTGRES_DB: postgres
+      CHAOSPLUS_MIGRATOR_PASSWORD: ${CHAOSPLUS_MIGRATOR_PASSWORD:?run init-secrets first}
+      CHAOSPLUS_RUNTIME_PASSWORD: ${CHAOSPLUS_RUNTIME_PASSWORD:?run init-secrets first}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/01-databases.sh:/docker-entrypoint-initdb.d/01-databases.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d postgres]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks: [chaosplus]
+
+  redis:
+    image: ${REDIS_IMAGE}
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes", --requirepass, "${REDIS_PASSWORD:?run init-secrets first}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [chaosplus]
+
+  chaosplus:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: chaosplus:local
+    pull_policy: never
+    restart: unless-stopped
+    command: [--config, /etc/chaosplus/config.yaml]
+    environment:
+      AUTHN_ISSUER: ${APP_URL}
+      AUTHN_WEB_POST_LOGIN_URL: ${APP_URL}
+      AUTHN_WEB_POST_LOGOUT_URL: ${APP_URL}/login
+      AUTHN_WEB_ALLOWED_RETURN_URLS: ${APP_URL},${APP_URL}/,${APP_URL}/iam/users,${APP_URL}/iam/invitations,${APP_URL}/iam/service-accounts,${APP_URL}/iam/tenants,${APP_URL}/iam/entities,${APP_URL}/iam/departments,${APP_URL}/iam/positions,${APP_URL}/iam/groups,${APP_URL}/iam/roles,${APP_URL}/iam/access-requests,${APP_URL}/iam/access-reviews,${APP_URL}/iam/menus,${APP_URL}/iam/oauth-clients,${APP_URL}/iam/scim-directories,${APP_URL}/iam/audit-events,${APP_URL}/security
+      AUTHN_WEB_ALLOWED_ORIGINS: ${APP_URL}
+      BOOTSTRAP_INITIAL_ADMIN_TENANT_ID: ${INITIAL_TENANT_ID}
+      BOOTSTRAP_INITIAL_ADMIN_LOGIN_NAME: ${INITIAL_ADMIN_LOGIN}
+      BOOTSTRAP_INITIAL_ADMIN_DISPLAY_NAME: ${INITIAL_ADMIN_DISPLAY_NAME}
+    volumes:
+      - ./config.yaml:/etc/chaosplus/config.yaml:ro
+    secrets:
+      - chaosplus_migration_dsn
+      - chaosplus_runtime_dsn
+      - redis_password
+      - authn_signing_key
+      - authn_mfa_key
+      - initial_admin_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/openapi.json]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-chaosplus}
+      traefik.http.services.chaosplus-api.loadbalancer.server.port: "8080"
+      traefik.http.routers.chaosplus-api.rule: Host(`${APP_DOMAIN}`) && (PathPrefix(`/authn`) || PathPrefix(`/oauth`) || PathPrefix(`/iam`) || PathPrefix(`/guid`) || PathPrefix(`/geoip`) || PathPrefix(`/openapi`) || PathPrefix(`/docs`) || PathPrefix(`/.well-known`))
+      traefik.http.routers.chaosplus-api.entrypoints: web
+      traefik.http.routers.chaosplus-api.priority: "200"
+    networks: [chaosplus]
+
+  web:
+    build:
+      context: ../../admin
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+        VITE_DEFAULT_TENANT: ${INITIAL_TENANT_ID}
+    image: chaosplus-admin:local
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      chaosplus:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-chaosplus}
+      traefik.http.services.chaosplus-web.loadbalancer.server.port: "8080"
+      traefik.http.routers.chaosplus-web.rule: Host(`${APP_DOMAIN}`)
+      traefik.http.routers.chaosplus-web.entrypoints: web
+      traefik.http.routers.chaosplus-web.priority: "10"
+    networks:
+      chaosplus:
+        ipv4_address: 172.30.0.3
+
+networks:
+  chaosplus:
+    name: ${COMPOSE_PROJECT_NAME:-chaosplus}
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres-data:
+  redis-data:
+
+secrets:
+  chaosplus_migration_dsn:
+    file: ./secrets/chaosplus_migration_dsn
+  chaosplus_runtime_dsn:
+    file: ./secrets/chaosplus_runtime_dsn
+  redis_password:
+    file: ./secrets/redis_password
+  authn_signing_key:
+    file: ./secrets/authn_signing_key
+  authn_mfa_key:
+    file: ./secrets/authn_mfa_key
+  initial_admin_password:
+    file: ./secrets/initial_admin_password

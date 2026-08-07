@@ -1,0 +1,6 @@
+.git
+.local
+deploy/compose/.env
+deploy/compose/secrets
+*.cover
+coverage

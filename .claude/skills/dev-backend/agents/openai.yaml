@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Backend"
+  short_description: "Build and verify the Dev Go backend"
+  default_prompt: "Use $dev-backend to implement and verify this Dev backend change."

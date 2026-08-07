@@ -5,13 +5,12 @@ quality gates. Pull requests must keep every gate green.
 
 ## Repository layout
 
-- `cmd/`, `internal/`, `pkg/` — Go backend. Domain code lives in
-  `internal/modules/<module>`; every module registers its own i18n catalog.
-- `web/admin` — React admin console (Bun/Turborepo workspace).
-- `web/docs`, `docs/` — documentation site; `docs/*.md` are the sources and
-  are synchronized into `web/docs` by `scripts/sync-source-docs.mjs`.
-- `.agents/skills/` — agent skills; the quality gate is
-  `.agents/skills/chaosplus-quality-gate`.
+- `apps/server/` — Go backend. Domain code lives in
+  `apps/server/internal/modules/<module>`; every module registers its own i18n catalog.
+- `apps/admin` — React admin console (Bun/Turborepo workspace).
+- `docs/` — documentation site (Astro/Starlight).
+- `.claude/skills/` — agent skills; the quality gate is
+  `.claude/skills/dev-quality-gate`.
 
 ## Rules enforced by the gate
 
@@ -31,10 +30,9 @@ Run the full gate locally and fix every failure:
 
 ```powershell
 $env:GOSUMDB='sum.golang.org'
-.\.agents\skills\chaosplus-quality-gate\scripts\check-gates.ps1 -Scope all -Full
+.\.claude\skills\dev-quality-gate\scripts\check-gates.ps1 -Scope all -Full
 ```
 
 `golangci-lint` (`.golangci.yml`) and `govulncheck` are part of the gate.
 Commit messages use a conventional prefix (`feat`, `fix`, `test`, `docs`,
-`ci`). When changing a `docs/*.md` source, keep the synchronized
-`web/docs` copy updated.
+`ci`).

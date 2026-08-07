@@ -14,6 +14,9 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
     services:
       redis:
         image: redis:7.4-alpine
@@ -30,7 +33,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version-file: apps/server/go.mod
           cache: true
       - name: Verify modules
         run: go mod verify
@@ -60,6 +63,9 @@ jobs:
 
   database-dialects:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
     services:
       mysql:
         image: mysql:8.4
@@ -87,7 +93,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version-file: apps/server/go.mod
           cache: true
       - name: Verify MySQL IAM lifecycle and behavior
         env:
@@ -114,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web/admin
+        working-directory: apps/admin
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -130,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web/docs
+        working-directory: docs
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -171,14 +177,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate Compose manifests
         run: |
-          docker compose -f deploy/compose/compose.yaml config --quiet
-          docker compose -f deploy/compose/compose.yaml -f deploy/compose/compose.tls.yaml config --quiet
+          docker compose -f apps/server/deploy/compose/compose.yaml config --quiet
+          docker compose -f apps/server/deploy/compose/compose.yaml -f apps/server/deploy/compose/compose.tls.yaml config --quiet
       - name: Build backend image
-        run: docker build --tag chaosplus:ci .
+        run: docker build --tag chaosplus:ci apps/server
       - name: Build admin image
-        run: docker build --tag chaosplus-admin:ci web/admin
+        run: docker build --tag chaosplus-admin:ci apps/admin
       - name: Build documentation image
-        run: docker build --tag chaosplus-docs:ci web/docs
+        run: docker build --tag dev-docs:ci docs
 
   skills:
     runs-on: ubuntu-latest
@@ -188,6 +194,6 @@ jobs:
         with:
           python-version: "3.13"
       - name: Validate repository skills
-        run: python .agents/skills/chaosplus-quality-gate/scripts/skill-runtime.py validate
+        run: python .claude/skills/dev-quality-gate/scripts/skill-runtime.py validate
       - name: Test repository skill runtime
-        run: python -m unittest discover -s .agents/skills/chaosplus-quality-gate/scripts -p 'test_*.py'
+        run: python -m unittest discover -s .claude/skills/dev-quality-gate/scripts -p 'test_*.py'

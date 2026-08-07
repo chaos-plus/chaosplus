@@ -42,7 +42,7 @@ configs/.env
 
 # Local-only dev notes & scratch (credentials, server info — never commit)
 /.local/
-/deploy/compose/secrets/
+/apps/server/deploy/compose/secrets/
 
 # Editor / OS
 .idea/

@@ -10,7 +10,7 @@ Use GitHub private vulnerability reporting for this repository
 
 Please include:
 
-- The affected component (Go backend, `web/admin`, `web/docs`, deployment).
+- The affected component (Go backend, `apps/admin`, `docs`, deployment).
 - A minimal reproduction: configuration, request, and observed behavior.
 - Impact and, if known, a suggested fix.
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Quality Gate"
+  short_description: "Route work and enforce repository quality"
+  default_prompt: "Use $dev-quality-gate to route this change and run every applicable gate."
