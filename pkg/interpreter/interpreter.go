@@ -44,6 +44,13 @@ type Runtime interface {
 	Close() error
 }
 
+// ByteRuntime is the capability implemented by WebAssembly runtimes using the
+// alloc/call/dealloc byte ABI. It keeps guest memory details out of callers.
+type ByteRuntime interface {
+	Runtime
+	CallBytes(ctx context.Context, fn string, input []byte, maxOutput uint32) ([]byte, error)
+}
+
 // ErrUnsupported is returned by engines for operations they cannot fulfil, e.g. binding
 // host functions into a Wasm runtime via the generic Bind API.
 var ErrUnsupported = errors.New("interpreter: unsupported operation for this engine")
@@ -53,8 +60,9 @@ var ErrNotFound = errors.New("interpreter: function or symbol not found")
 
 // config holds the options passed to New.
 type config struct {
-	wasmBytes []byte
-	bindings  map[string]any
+	wasmBytes       []byte
+	wasmMemoryPages uint32
+	bindings        map[string]any
 }
 
 // Option configures a Runtime created by New.
@@ -63,6 +71,12 @@ type Option func(*config)
 // WithWASM provides the WebAssembly module bytes required by EngineWasm.
 func WithWASM(b []byte) Option {
 	return func(c *config) { c.wasmBytes = b }
+}
+
+// WithWASMMemoryLimitPages caps each guest memory. One WebAssembly page is
+// 64KiB. Zero uses the secure default configured by the runtime.
+func WithWASMMemoryLimitPages(pages uint32) Option {
+	return func(c *config) { c.wasmMemoryPages = pages }
 }
 
 // WithBinding pre-binds a Go value into the runtime before Eval/Call are used. It is
@@ -96,7 +110,7 @@ func New(engine string, opts ...Option) (Runtime, error) {
 	case EngineLua:
 		rt, err = newLuaRuntime()
 	case EngineWasm:
-		rt, err = newWasmRuntime(cfg.wasmBytes)
+		rt, err = newWasmRuntime(cfg.wasmBytes, cfg.wasmMemoryPages)
 	default:
 		return nil, fmt.Errorf("interpreter: unknown engine %q (want %s, %s, %s or %s)",
 			engine, EngineYaegi, EngineGoja, EngineLua, EngineWasm)

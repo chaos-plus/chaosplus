@@ -6,17 +6,14 @@ import (
 	"net/mail"
 	"sort"
 	"strings"
-
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
-	iamapi "github.com/chaos-plus/chaosplus/internal/modules/iam/api"
 )
 
-func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displayName, email string, status MemberStatus) (TenantMember, error) {
+func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displayName, email, departmentID string, status MemberStatus) (TenantMember, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return TenantMember{}, err
 	}
-	subject, displayName, email = strings.TrimSpace(subject), strings.TrimSpace(displayName), strings.TrimSpace(email)
-	if subject == "" || len(subject) > 255 || displayName == "" || len(displayName) > 128 || len(email) > 320 || (status != MemberActive && status != MemberDisabled) {
+	subject, displayName, email, departmentID = strings.TrimSpace(subject), strings.TrimSpace(displayName), strings.TrimSpace(email), strings.TrimSpace(departmentID)
+	if subject == "" || len(subject) > 255 || displayName == "" || len(displayName) > 128 || len(email) > 320 || len(departmentID) > 128 || (status != MemberActive && status != MemberDisabled) {
 		return TenantMember{}, fmt.Errorf("%w: invalid tenant member", ErrInvalidArgument)
 	}
 	if email != "" {
@@ -24,7 +21,48 @@ func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displa
 			return TenantMember{}, fmt.Errorf("%w: invalid member email", ErrInvalidArgument)
 		}
 	}
-	return s.repo.PutMember(ctx, TenantMember{TenantID: tenantID, Subject: subject, DisplayName: displayName, Email: email, Status: status})
+	var member TenantMember
+	record := newAuditRecord(ctx, tenantID, "tenant_member_upserted", "tenant_member", subject)
+	record.Detail["status"] = status
+	record.Detail["has_department"] = departmentID != ""
+	record.PolicyChanged = true
+	err := s.writes.Run(ctx, record, func(repo *Repository) error {
+		if departmentID != "" {
+			departmentStatus, err := repo.departmentStatus(ctx, tenantID, departmentID)
+			if err != nil {
+				return err
+			}
+			if departmentStatus == "" {
+				return ErrMemberDepartmentMissing
+			}
+			if departmentStatus != "active" {
+				return ErrMemberDepartmentInactive
+			}
+		}
+		var verify func() error
+		var err error
+		if status == MemberDisabled {
+			verify, err = s.administrators.Protect(ctx, repo.executor, repo.dialect, tenantID)
+			if err != nil {
+				return err
+			}
+		}
+		member, err = repo.PutMember(ctx, TenantMember{TenantID: tenantID, Subject: subject, DisplayName: displayName, Email: email, Status: status})
+		if err != nil {
+			return err
+		}
+		if err = repo.setMemberDepartment(ctx, tenantID, subject, departmentID); err != nil {
+			return err
+		}
+		if verify != nil {
+			if err = verify(); err != nil {
+				return err
+			}
+		}
+		member, err = repo.GetMember(ctx, tenantID, subject)
+		return err
+	})
+	return member, err
 }
 
 func (s *Service) GetTenantMember(ctx context.Context, tenantID, subject string) (TenantMember, error) {
@@ -51,7 +89,26 @@ func (s *Service) SetTenantMemberStatus(ctx context.Context, tenantID, subject s
 	if status != MemberActive && status != MemberDisabled {
 		return TenantMember{}, fmt.Errorf("%w: invalid member status", ErrInvalidArgument)
 	}
-	return s.repo.SetMemberStatus(ctx, tenantID, subject, status)
+	var member TenantMember
+	record := newAuditRecord(ctx, tenantID, "tenant_member_status_changed", "tenant_member", subject)
+	record.Detail["status"] = status
+	record.PolicyChanged = true
+	err := s.writes.Run(ctx, record, func(repo *Repository) error {
+		var err error
+		var verify func() error
+		if status == MemberDisabled {
+			verify, err = s.administrators.Protect(ctx, repo.executor, repo.dialect, tenantID)
+			if err != nil {
+				return err
+			}
+		}
+		member, err = repo.SetMemberStatus(ctx, tenantID, subject, status)
+		if err != nil || verify == nil {
+			return err
+		}
+		return verify()
+	})
+	return member, err
 }
 
 func (s *Service) ListTenantMemberRoles(ctx context.Context, tenantID, subject string) ([]string, error) {
@@ -66,10 +123,19 @@ func (s *Service) ListTenantMemberRoles(ctx context.Context, tenantID, subject s
 
 func (s *Service) CreateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	menu.ID = ""
-	if err := s.validateMenu(ctx, menu); err != nil {
-		return Menu{}, err
-	}
-	return s.repo.CreateMenu(ctx, menu)
+	var created Menu
+	record := newAuditRecord(ctx, menu.TenantID, "menu_created", "menu", "")
+	record.PolicyChanged = true
+	err := s.writes.Run(ctx, record, func(repo *Repository) error {
+		if err := s.validateMenu(ctx, repo, menu); err != nil {
+			return err
+		}
+		var err error
+		created, err = repo.CreateMenu(ctx, menu)
+		record.TargetID = created.ID
+		return err
+	})
+	return created, err
 }
 
 func (s *Service) ListMenus(ctx context.Context, tenantID string) ([]Menu, error) {
@@ -90,41 +156,53 @@ func (s *Service) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	if err := validateMenuRef(menu.TenantID, menu.ID); err != nil {
 		return Menu{}, err
 	}
-	if _, err := s.repo.GetMenu(ctx, menu.TenantID, menu.ID); err != nil {
-		return Menu{}, err
-	}
-	if err := s.validateMenu(ctx, menu); err != nil {
-		return Menu{}, err
-	}
-	if menu.ParentID != "" {
-		seen := map[string]bool{menu.ID: true}
-		parentID := menu.ParentID
-		for depth := 0; parentID != "" && depth < 100; depth++ {
-			if seen[parentID] {
-				return Menu{}, fmt.Errorf("%w: menu hierarchy cycle", ErrInvalidArgument)
-			}
-			seen[parentID] = true
-			parent, err := s.repo.GetMenu(ctx, menu.TenantID, parentID)
-			if err != nil {
-				return Menu{}, fmt.Errorf("%w: parent menu", ErrInvalidArgument)
-			}
-			parentID = parent.ParentID
+	var updated Menu
+	record := newAuditRecord(ctx, menu.TenantID, "menu_updated", "menu", menu.ID)
+	record.PolicyChanged = true
+	err := s.writes.Run(ctx, record, func(repo *Repository) error {
+		if _, err := repo.GetMenu(ctx, menu.TenantID, menu.ID); err != nil {
+			return err
 		}
-		if parentID != "" {
-			return Menu{}, fmt.Errorf("%w: menu hierarchy too deep", ErrInvalidArgument)
+		if err := s.validateMenu(ctx, repo, menu); err != nil {
+			return err
 		}
-	}
-	return s.repo.UpdateMenu(ctx, menu)
+		if menu.ParentID != "" {
+			seen := map[string]bool{menu.ID: true}
+			parentID := menu.ParentID
+			for depth := 0; parentID != "" && depth < 100; depth++ {
+				if seen[parentID] {
+					return fmt.Errorf("%w: menu hierarchy cycle", ErrInvalidArgument)
+				}
+				seen[parentID] = true
+				parent, err := repo.GetMenu(ctx, menu.TenantID, parentID)
+				if err != nil {
+					return fmt.Errorf("%w: parent menu", ErrInvalidArgument)
+				}
+				parentID = parent.ParentID
+			}
+			if parentID != "" {
+				return fmt.Errorf("%w: menu hierarchy too deep", ErrInvalidArgument)
+			}
+		}
+		var err error
+		updated, err = repo.UpdateMenu(ctx, menu)
+		return err
+	})
+	return updated, err
 }
 
 func (s *Service) DeleteMenu(ctx context.Context, tenantID, menuID string) error {
 	if err := validateMenuRef(tenantID, menuID); err != nil {
 		return err
 	}
-	return s.repo.DeleteMenu(ctx, tenantID, menuID)
+	record := newAuditRecord(ctx, tenantID, "menu_deleted", "menu", menuID)
+	record.PolicyChanged = true
+	return s.writes.Run(ctx, record, func(repo *Repository) error {
+		return repo.DeleteMenu(ctx, tenantID, menuID)
+	})
 }
 
-func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) ([]iamapi.MenuItem, error) {
+func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) ([]MenuItem, error) {
 	if err := validateMemberRef(tenantID, subject); err != nil {
 		return nil, err
 	}
@@ -150,7 +228,7 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 	allowed := map[string]bool{}
 	for start := 0; start < len(codes); start += 100 {
 		end := min(start+100, len(codes))
-		result, err := s.checker.CheckBulk(ctx, spicedbx.ObjectRef{Type: "tenant", ID: tenantID}, codes[start:end], spicedbx.SubjectRef{Object: spicedbx.ObjectRef{Type: "user", ID: subject}}, "")
+		result, err := s.checker.CheckBulk(ctx, tenantID, codes[start:end], subject)
 		if err != nil {
 			return nil, fmt.Errorf("check effective menu permissions: %w", err)
 		}
@@ -162,9 +240,9 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 	for _, menu := range menus {
 		children[menu.ParentID] = append(children[menu.ParentID], menu)
 	}
-	var build func(string, map[string]bool) []iamapi.MenuItem
-	build = func(parent string, visiting map[string]bool) []iamapi.MenuItem {
-		var result []iamapi.MenuItem
+	var build func(string, map[string]bool) []MenuItem
+	build = func(parent string, visiting map[string]bool) []MenuItem {
+		result := make([]MenuItem, 0, len(children[parent]))
 		for _, menu := range children[parent] {
 			if visiting[menu.ID] {
 				continue
@@ -178,14 +256,14 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 			if menu.PermissionCode != "" && !allowed[menu.PermissionCode] && len(nodes) == 0 {
 				continue
 			}
-			result = append(result, iamapi.MenuItem{ID: menu.ID, Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
+			result = append(result, MenuItem{ID: menu.ID, Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
 		}
 		return result
 	}
 	return build("", map[string]bool{}), nil
 }
 
-func (s *Service) validateMenu(ctx context.Context, menu Menu) error {
+func (s *Service) validateMenu(ctx context.Context, repo *Repository, menu Menu) error {
 	if err := validateTenant(menu.TenantID); err != nil {
 		return err
 	}
@@ -202,7 +280,7 @@ func (s *Service) validateMenu(ctx context.Context, menu Menu) error {
 		}
 	}
 	if menu.ParentID != "" {
-		if _, err := s.repo.GetMenu(ctx, menu.TenantID, menu.ParentID); err != nil {
+		if _, err := repo.GetMenu(ctx, menu.TenantID, menu.ParentID); err != nil {
 			return fmt.Errorf("%w: parent menu", ErrInvalidArgument)
 		}
 	}

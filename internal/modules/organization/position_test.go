@@ -1,0 +1,67 @@
+package organization
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPositionNormalization(t *testing.T) {
+	tenant, input, err := normalizePositionCreate(" tenant ", CreatePosition{Code: " Platform.Engineer ", Name: " Platform Engineer "})
+	require.NoError(t, err)
+	assert.Equal(t, "tenant", tenant)
+	assert.Equal(t, "platform.engineer", input.Code)
+	assert.Equal(t, "Platform Engineer", input.Name)
+	assert.Equal(t, StatusActive, input.Status)
+
+	for _, candidate := range []CreatePosition{
+		{},
+		{Code: "1invalid", Name: "Name"},
+		{Code: "invalid code", Name: "Name"},
+		{Code: strings.Repeat("a", maxPositionCodeLength+1), Name: "Name"},
+		{Code: "valid", Name: " "},
+		{Code: "valid", Name: "bad\nname"},
+		{Code: "valid", Name: "Name", Status: "archived"},
+		{Code: "valid", Name: "Name", SortOrder: -1},
+	} {
+		_, _, err := normalizePositionCreate("tenant", candidate)
+		assert.ErrorIs(t, err, ErrPositionInvalid)
+	}
+
+	_, _, _, err = normalizePositionUpdate("tenant", "position", UpdatePosition{Version: 1})
+	assert.ErrorIs(t, err, ErrPositionInvalid)
+	code := "Updated_Code"
+	name := "Updated"
+	status := StatusDisabled
+	sortOrder := 20
+	_, _, update, err := normalizePositionUpdate("tenant", "position", UpdatePosition{Code: &code, Name: &name, Status: &status, SortOrder: &sortOrder, Version: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "updated_code", *update.Code)
+}
+
+func TestPositionMemberWindowNormalization(t *testing.T) {
+	start := time.Date(2026, 8, 2, 12, 0, 0, 123456789, time.FixedZone("test", 3600))
+	end := start.Add(time.Hour)
+	_, _, _, window, err := normalizePositionMember(" tenant ", " position ", " principal ", PositionMemberWindow{StartsAt: &start, EndsAt: &end})
+	require.NoError(t, err)
+	assert.Equal(t, time.UTC, window.StartsAt.Location())
+	assert.Equal(t, int64(123000000), int64(window.StartsAt.Nanosecond()))
+
+	for _, item := range []struct {
+		tenant, position, principal string
+		window                      PositionMemberWindow
+	}{
+		{"", "position", "principal", PositionMemberWindow{}},
+		{"tenant", "", "principal", PositionMemberWindow{}},
+		{"tenant", "position", "", PositionMemberWindow{}},
+		{"tenant", "position", strings.Repeat("p", 256), PositionMemberWindow{}},
+		{"tenant", "position", "principal", PositionMemberWindow{StartsAt: &end, EndsAt: &start}},
+		{"tenant", "position", "principal", PositionMemberWindow{StartsAt: &start, EndsAt: &start}},
+	} {
+		_, _, _, _, err := normalizePositionMember(item.tenant, item.position, item.principal, item.window)
+		assert.ErrorIs(t, err, ErrPositionInvalid)
+	}
+}

@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -9,12 +10,13 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
 )
 
 func TestNewRepositoryNormalizesPostgresDialect(t *testing.T) {
@@ -31,10 +33,19 @@ func newIAMRepository(t *testing.T) *Repository {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
 	var id atomic.Int64
 	repo := NewRepository(db, func() (string, error) { return fmt.Sprint(id.Add(1)), nil })
 	repo.now = func() time.Time { return time.UnixMilli(1_700_000_000_000).UTC() }
 	return repo
+}
+
+func putTestMember(t *testing.T, repo *Repository, member TenantMember) TenantMember {
+	t.Helper()
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, member.TenantID))
+	stored, err := repo.PutMember(t.Context(), member)
+	require.NoError(t, err)
+	return stored
 }
 
 func createTestRole(t *testing.T, repo *Repository, tenant, name string) Role {
@@ -42,6 +53,128 @@ func createTestRole(t *testing.T, repo *Repository, tenant, name string) Role {
 	role, err := repo.CreateRole(context.Background(), tenant, name, "description")
 	require.NoError(t, err)
 	return role
+}
+
+// TestRepositoryPropagatesDatabaseFailures drops real tables to produce real
+// driver errors, so the error branches are exercised against the actual engine
+// rather than a substituted failure. These paths are otherwise unreached.
+func TestRepositoryPropagatesDatabaseFailures(t *testing.T) {
+	dropAndAssert := func(t *testing.T, tables []string, call func(repo *Repository) error) {
+		t.Helper()
+		repo := newIAMRepository(t)
+		require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "tenant"))
+		for _, table := range tables {
+			_, err := repo.db.ExecContext(t.Context(), "DROP TABLE "+table)
+			require.NoError(t, err)
+		}
+		assert.Error(t, call(repo))
+	}
+
+	t.Run("roles", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.ListRoles(t.Context(), "tenant")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, _, err := repo.ListRolesPage(t.Context(), "tenant", 0, 10)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.CreateRole(t.Context(), "tenant", "Broken", "")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_roles"}, func(repo *Repository) error {
+			_, err := repo.GetRole(t.Context(), "tenant", "missing")
+			return err
+		})
+	})
+
+	t.Run("entities", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := repo.ListEntities(t.Context(), "tenant")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, _, err := repo.ListEntitiesPage(t.Context(), "tenant", 0, 10)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := repo.CreateEntity(t.Context(), iamdomain.Entity{TenantID: "tenant", Type: "store", Name: "Broken", Status: iamdomain.EntityActive})
+			return err
+		})
+	})
+
+	t.Run("platform authorization", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.ListPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.ListPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.SetPlatformAdministrator(t.Context(), "someone", true, nil)
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.SetPlatformAdministrator(t.Context(), "someone", false, []string{"tenant_view"})
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.DeletePlatformAdministrator(t.Context(), "someone")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_grants"}, func(repo *Repository) error {
+			_, err := repo.DeletePlatformAdministrator(t.Context(), "someone")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			_, err := repo.CountFullPlatformAdministrators(t.Context())
+			return err
+		})
+		dropAndAssert(t, []string{"iam_platform_administrators"}, func(repo *Repository) error {
+			return repo.assertPlatformAdministratorRemains(t.Context())
+		})
+	})
+
+	t.Run("permissions and members", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_role_permissions"}, func(repo *Repository) error {
+			_, err := repo.ListPermissionGrants(t.Context(), "tenant", "role")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_role_members"}, func(repo *Repository) error {
+			_, err := repo.ListMembers(t.Context(), "tenant", "role")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
+			_, err := repo.IsMemberActive(t.Context(), "tenant", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_role_members", "iam_temporary_role_grants"}, func(repo *Repository) error {
+			_, err := repo.ListMemberRoleIDs(t.Context(), "tenant", "root")
+			return err
+		})
+	})
+
+	t.Run("authorizer", func(t *testing.T) {
+		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).Constraint(t.Context(), "tenant", "store_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_principals"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).CheckPlatform(t.Context(), "tenant_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
+			_, err := NewAuthorizer(repo.db).Check(t.Context(), "tenant", "store_view", "root")
+			return err
+		})
+		dropAndAssert(t, []string{"iam_groups"}, func(repo *Repository) error {
+			_, err := matchingDynamicGroupIDs(t.Context(), repo.db, "tenant", "root")
+			return err
+		})
+	})
 }
 
 func TestRepositoryRoleCRUDAndTenantIsolation(t *testing.T) {
@@ -87,16 +220,34 @@ func TestRepositoryPermissionAndMemberBindings(t *testing.T) {
 	codes, err := repo.ListPermissions(ctx, "t1", role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"store_view"}, codes)
-
-	changed, err = repo.AddMember(ctx, "t1", role.ID, "zitadel-user")
+	condition := json.RawMessage(`{"version":1,"gte":[{"context":"auth.acr"},{"value":2}]}`)
+	grant, changed, err := repo.SetPermissionCondition(ctx, "t1", role.ID, "store_view", condition)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	changed, err = repo.AddMember(ctx, "t1", role.ID, "zitadel-user")
+	assert.JSONEq(t, string(condition), string(grant.Condition))
+	grants, err := repo.ListPermissionGrants(ctx, "t1", role.ID)
+	require.NoError(t, err)
+	require.Len(t, grants, 1)
+	assert.JSONEq(t, string(condition), string(grants[0].Condition))
+	_, changed, err = repo.SetPermissionCondition(ctx, "t1", role.ID, "store_view", condition)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	_, _, err = repo.SetPermissionCondition(ctx, "t1", role.ID, "missing", condition)
+	assert.ErrorIs(t, err, ErrRolePermissionNotGranted)
+	grant, changed, err = repo.SetPermissionCondition(ctx, "t1", role.ID, "store_view", nil)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, grant.Condition)
+
+	changed, err = repo.AddMember(ctx, "t1", role.ID, "local-principal")
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = repo.AddMember(ctx, "t1", role.ID, "local-principal")
 	require.NoError(t, err)
 	assert.False(t, changed)
 	members, err := repo.ListMembers(ctx, "t1", role.ID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"zitadel-user"}, members)
+	assert.Equal(t, []string{"local-principal"}, members)
 
 	_, err = repo.GrantPermission(ctx, "wrong", role.ID, "store_view")
 	assert.ErrorIs(t, err, ErrRoleNotFound)
@@ -106,7 +257,7 @@ func TestRepositoryPermissionAndMemberBindings(t *testing.T) {
 	changed, err = repo.RevokePermission(ctx, "t1", role.ID, "store_view")
 	require.NoError(t, err)
 	assert.True(t, changed)
-	changed, err = repo.RemoveMember(ctx, "t1", role.ID, "zitadel-user")
+	changed, err = repo.RemoveMember(ctx, "t1", role.ID, "local-principal")
 	require.NoError(t, err)
 	assert.True(t, changed)
 	codes, err = repo.ListPermissions(ctx, "t1", role.ID)
@@ -117,7 +268,7 @@ func TestRepositoryPermissionAndMemberBindings(t *testing.T) {
 	assert.Empty(t, members)
 }
 
-func TestRepositoryDeleteRoleEnqueuesRevocations(t *testing.T) {
+func TestRepositoryDeleteRoleRemovesBindings(t *testing.T) {
 	repo := newIAMRepository(t)
 	ctx := context.Background()
 	role := createTestRole(t, repo, "t1", "role")
@@ -130,12 +281,9 @@ func TestRepositoryDeleteRoleEnqueuesRevocations(t *testing.T) {
 	_, err = repo.GetRole(ctx, "t1", role.ID)
 	assert.ErrorIs(t, err, ErrRoleNotFound)
 
-	messages, err := repo.ClaimOutbox(ctx, "worker", OutboxConfig{})
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	for _, message := range messages {
-		assert.Equal(t, spicedbx.RelationshipDelete, message.Operation)
-	}
+	codes, err := repo.ListPermissions(ctx, "t1", role.ID)
+	assert.ErrorIs(t, err, ErrRoleNotFound)
+	assert.Nil(t, codes)
 	assert.ErrorIs(t, repo.DeleteRole(ctx, "t1", role.ID), ErrRoleNotFound)
 }
 
@@ -147,15 +295,11 @@ func TestRepositoryIDAndDialectErrors(t *testing.T) {
 	_, err = repo.CreateRole(context.Background(), "t", "r", "")
 	assert.ErrorContains(t, err, "id failed")
 
-	assert.Empty(t, outboxUpsertSQL("oracle"))
-	assert.NotEmpty(t, outboxUpsertSQL("mysql"))
-	assert.NotEmpty(t, outboxUpsertSQL("postgres"))
-	assert.NotEmpty(t, outboxUpsertSQL("sqlite"))
 	assert.Panics(t, func() { NewRepository(nil, func() (string, error) { return "1", nil }) })
 	assert.Panics(t, func() { NewRepository(db, nil) })
 }
 
-func TestRepositoryConflictAndOutboxErrors(t *testing.T) {
+func TestRepositoryConflict(t *testing.T) {
 	repo := newIAMRepository(t)
 	ctx := context.Background()
 	first := createTestRole(t, repo, "t1", "first")
@@ -163,19 +307,6 @@ func TestRepositoryConflictAndOutboxErrors(t *testing.T) {
 	_, err := repo.UpdateRole(ctx, "t1", second.ID, first.Name, "")
 	assert.ErrorIs(t, err, ErrRoleNameConflict)
 
-	repo.nextID = func() (string, error) { return "", errors.New("outbox id failed") }
-	_, err = repo.GrantPermission(ctx, "t1", first.ID, "store_view")
-	assert.ErrorContains(t, err, "outbox id failed")
-	codes, listErr := repo.ListPermissions(ctx, "t1", first.ID)
-	require.NoError(t, listErr)
-	assert.Empty(t, codes, "business mutation rolls back when outbox enqueue fails")
-
-	repo.nextID = func() (string, error) { return "99", nil }
-	repo.dialect = "oracle"
-	_, err = repo.AddMember(ctx, "t1", first.ID, "u1")
-	assert.ErrorContains(t, err, "unsupported iam database dialect")
-	_, _, err = repo.OutboxStatus(ctx, "t1", memberRelationship(first.ID, "missing"))
-	assert.Error(t, err)
 }
 
 func TestRepositoryReportsClosedDatabaseErrors(t *testing.T) {
@@ -188,20 +319,8 @@ func TestRepositoryReportsClosedDatabaseErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = repo.ListPermissions(ctx, "t1", "r1")
 	assert.Error(t, err)
+	_, err = repo.ListPermissionGrants(ctx, "t1", "r1")
+	assert.Error(t, err)
 	_, err = repo.ListMembers(ctx, "t1", "r1")
 	assert.Error(t, err)
-	_, _, err = repo.OutboxStatus(ctx, "t1", memberRelationship("r1", "u1"))
-	assert.Error(t, err)
-	message := OutboxMessage{ID: "1", Version: 1}
-	assert.Error(t, repo.CompleteOutbox(ctx, message, "worker", "token"))
-	assert.Error(t, repo.FailOutbox(ctx, message, "worker", errors.New("fail"), OutboxConfig{}))
-}
-
-func TestRelationshipMappingAndKey(t *testing.T) {
-	permission := permissionRelationship("t1", "r1", "store_view")
-	assert.Equal(t, "tenant:t1#store_view_role@role:r1#member", permission.String())
-	member := memberRelationship("r1", "u1")
-	assert.Equal(t, "role:r1#member@user:u1", member.String())
-	assert.Len(t, relationshipKey("t1", member), 64)
-	assert.NotEqual(t, relationshipKey("t1", member), relationshipKey("t2", member))
 }

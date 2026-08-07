@@ -12,7 +12,7 @@ import (
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
 	return p
 }
 

@@ -1,0 +1,71 @@
+---
+import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.astro';
+import {
+	AppWindow,
+	Bot,
+	Boxes,
+	FileText,
+	KeyRound,
+	LayoutDashboard,
+	Network,
+	Rocket,
+	ShieldCheck,
+	TestTube2,
+} from 'lucide-astro';
+
+const icons: Record<string, typeof FileText> = {
+	'/': LayoutDashboard,
+	'/overview/': LayoutDashboard,
+	'/skills/': Bot,
+	'/architecture/iam-platform/': Network,
+	'/architecture/modules/': Boxes,
+	'/iam/authorization/': ShieldCheck,
+	'/iam/authorization-writes/': KeyRound,
+	'/frontend/admin-console/': AppWindow,
+	'/operations/deployment/': Rocket,
+	'/quality/admin-acceptance/': TestTube2,
+};
+const iconFor = (href: string) => icons[href] ?? FileText;
+const { sidebar } = Astro.locals.starlightRoute;
+---
+
+<nav class="nav sl-flex" aria-label="侧边导航">
+	{sidebar.map((entry) =>
+		entry.type === 'link' ? (
+			<a href={entry.href} aria-current={entry.isCurrent ? 'page' : undefined}>
+				{(() => { const Icon = iconFor(entry.href); return <Icon />; })()}
+				<span>{entry.label}</span>
+			</a>
+		) : (
+			<div class="group">
+				<span class="group-label"><span class="large">{entry.label}</span></span>
+				<ul>
+					{entry.entries.map((item) => item.type === 'link' ? (
+						<li>
+							<a href={item.href} aria-current={item.isCurrent ? 'page' : undefined}>
+								{(() => { const Icon = iconFor(item.href); return <Icon />; })()}
+								<span>{item.label}</span>
+							</a>
+						</li>
+					) : null)}
+				</ul>
+			</div>
+		)
+	)}
+</nav>
+
+<div class="md:sl-hidden"><MobileMenuFooter /></div>
+
+<script is:inline>
+	(() => {
+		if (window.__SidebarScroll) return;
+		window.__SidebarScroll = true;
+		const key = 'sidebar-scroll';
+		const pane = () => document.getElementById('starlight__sidebar');
+		const save = () => { const element = pane(); if (element) sessionStorage.setItem(key, element.scrollTop); };
+		const restore = () => { const element = pane(); const value = sessionStorage.getItem(key); if (element && value) element.scrollTop = Number(value); };
+		document.addEventListener('astro:before-swap', save);
+		document.addEventListener('astro:after-swap', restore);
+		document.addEventListener('scroll', (event) => { if (event.target === pane()) save(); }, true);
+	})();
+</script>

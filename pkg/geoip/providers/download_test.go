@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,7 +38,7 @@ func TestWorkDir_CreatesDir(t *testing.T) {
 }
 
 func TestDownloadFile_Success(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello-db"))
 	}))
 	defer ts.Close()
@@ -56,7 +57,7 @@ func TestDownloadFile_Success(t *testing.T) {
 }
 
 func TestDownloadFile_Non200(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
@@ -125,7 +126,7 @@ func TestUnzipFile_NoBin(t *testing.T) {
 	dir := t.TempDir()
 	zipPath := makeZip(t, dir, map[string]string{"readme.txt": "nope"})
 	err := unzipFile(zipPath, filepath.Join(dir, "out"))
-	if err != os.ErrNotExist {
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected ErrNotExist, got %v", err)
 	}
 }
@@ -133,7 +134,7 @@ func TestUnzipFile_NoBin(t *testing.T) {
 func TestUnzipFile_BadArchive(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.zip")
-	if err := os.WriteFile(bad, []byte("not a zip"), 0644); err != nil {
+	if err := os.WriteFile(bad, []byte("not a zip"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if err := unzipFile(bad, filepath.Join(dir, "out")); err == nil {
@@ -141,8 +142,21 @@ func TestUnzipFile_BadArchive(t *testing.T) {
 	}
 }
 
+func TestUnzipFileRejectsOversizedDatabase(t *testing.T) {
+	dir := t.TempDir()
+	archive := makeZip(t, dir, map[string]string{"database.bin": "too large"})
+	dest := filepath.Join(dir, "out")
+	err := unzipFileLimit(archive, dest, 3)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 3 bytes") {
+		t.Fatalf("expected archive size error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "database.bin")); !os.IsNotExist(err) {
+		t.Fatalf("partial database must be removed, got %v", err)
+	}
+}
+
 func TestGetGitHubLatestRelease_Success(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"tag_name": "v1.2.3",
 			"assets": [
@@ -152,10 +166,7 @@ func TestGetGitHubLatestRelease_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Point at the test server via a transport that ignores the URL host.
-	c := ts.Client()
-	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-	rel, err := getGitHubLatestRelease(c, "owner", "repo")
+	rel, err := getGitHubLatestRelease(ts.Client(), ts.URL, "owner", "repo")
 	if err != nil {
 		t.Fatalf("getGitHubLatestRelease: %v", err)
 	}
@@ -168,28 +179,22 @@ func TestGetGitHubLatestRelease_Success(t *testing.T) {
 }
 
 func TestGetGitHubLatestRelease_Non200(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer ts.Close()
-	c := ts.Client()
-	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-
-	if _, err := getGitHubLatestRelease(c, "o", "r"); err == nil ||
+	if _, err := getGitHubLatestRelease(ts.Client(), ts.URL, "o", "r"); err == nil ||
 		!strings.Contains(err.Error(), "github api status") {
 		t.Fatalf("expected github api status error, got %v", err)
 	}
 }
 
 func TestGetGitHubLatestRelease_BadJSON(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{bad`))
 	}))
 	defer ts.Close()
-	c := ts.Client()
-	c.Transport = &fixedURLTransport{base: ts.URL, inner: c.Transport}
-
-	if _, err := getGitHubLatestRelease(c, "o", "r"); err == nil {
+	if _, err := getGitHubLatestRelease(ts.Client(), ts.URL, "o", "r"); err == nil {
 		t.Fatal("expected decode error")
 	}
 }
@@ -207,10 +212,10 @@ func TestFindLatestFile(t *testing.T) {
 	}
 	oldFile := filepath.Join(older, "a.mmdb")
 	newFile := filepath.Join(newer, "b.mmdb")
-	if err := os.WriteFile(oldFile, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(oldFile, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(newFile, []byte("y"), 0644); err != nil {
+	if err := os.WriteFile(newFile, []byte("y"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Make "new" subdir modified more recently.
@@ -234,7 +239,7 @@ func TestFindLatestFile_NoMatch(t *testing.T) {
 	if err := os.MkdirAll(sub, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sub, "x.txt"), []byte("z"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(sub, "x.txt"), []byte("z"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := findLatestFile(root, ".mmdb"); err == nil {
@@ -252,7 +257,7 @@ func TestVerifyFileDigest(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.bin")
 	content := "geoip-db-bytes"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -291,7 +296,7 @@ func TestVerifyFileDigest(t *testing.T) {
 
 func TestDownloadVerifiedFile_ChecksumMatch(t *testing.T) {
 	content := "verified-db"
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(content))
 	}))
 	defer ts.Close()
@@ -310,7 +315,7 @@ func TestDownloadVerifiedFile_ChecksumMatch(t *testing.T) {
 }
 
 func TestDownloadVerifiedFile_ChecksumMismatchDeletes(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Serve content that does NOT match the digest we'll pass — simulating a
 		// compromised/poisoned release asset.
 		_, _ = w.Write([]byte("malicious-payload"))
@@ -330,7 +335,7 @@ func TestDownloadVerifiedFile_ChecksumMismatchDeletes(t *testing.T) {
 
 func TestDownloadVerifiedFile_NoDigestAccepts(t *testing.T) {
 	content := "unverified-db"
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(content))
 	}))
 	defer ts.Close()
@@ -345,21 +350,58 @@ func TestDownloadVerifiedFile_NoDigestAccepts(t *testing.T) {
 	}
 }
 
-// fixedURLTransport rewrites every request to point at base, preserving the path,
-// so provider code that builds api.github.com URLs hits the test server instead.
-type fixedURLTransport struct {
-	base  string
-	inner http.RoundTripper
-}
-
-func (t *fixedURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	host := strings.TrimPrefix(t.base, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	req.URL.Scheme = "http"
-	req.URL.Host = host
-	inner := t.inner
-	if inner == nil {
-		inner = http.DefaultTransport
+func TestDownloadHelperAdditionalFilesystemAndNetworkFailures(t *testing.T) {
+	assertMissing := filepath.Join(t.TempDir(), "missing.bin")
+	if err := verifyFileDigest(assertMissing, sha256Digest("value")); err == nil {
+		t.Fatal("expected missing digest source to fail")
 	}
-	return inner.RoundTrip(req)
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	client := server.Client()
+	url := server.URL
+	server.Close()
+	if err := downloadVerifiedFile(client, url, filepath.Join(t.TempDir(), "out.bin"), ""); err == nil {
+		t.Fatal("expected verified download transport failure")
+	}
+
+	directory := t.TempDir()
+	archive := filepath.Join(directory, "directory-only.zip")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	header := &zip.FileHeader{Name: "nested/"}
+	header.SetMode(os.ModeDir | 0o755)
+	if _, err := writer.CreateHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := unzipFile(archive, filepath.Join(directory, "valid-destination")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no database entry, got %v", err)
+	}
+	blockedDestination := filepath.Join(directory, "blocked")
+	if err := os.WriteFile(blockedDestination, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := unzipFile(archive, blockedDestination); err == nil {
+		t.Fatal("expected destination creation failure")
+	}
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "root.mmdb"), []byte("ignored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subdir := filepath.Join(root, "version")
+	if err := os.MkdirAll(filepath.Join(subdir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := findLatestFile(root, ".mmdb"); err == nil {
+		t.Fatal("expected no matching database file")
+	}
 }

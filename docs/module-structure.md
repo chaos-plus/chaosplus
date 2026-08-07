@@ -52,13 +52,14 @@ internal/infra/guid/
 ```
 internal/modules/order/
   module.go
+  i18n.go               # embed + register this module's locale catalogs
   domain.go              # entities, value objects, domain errors, Repository port
   service.go             # application/use-case logic
   repository.go          # bun implementation of the domain Repository port
   api/  rest.go  grpc.go
   proto/  api/v1/*.proto  gen/go/...
   sql/{sqlite,mysql,postgres}/*.sql   # goose migrations (goosex convention)
-  i18n/locales/*.json
+  i18n/locales/{en-US,zh-CN,ms-MY}.json
 ```
 
 ### C. Domain module, grown — DDD as directories (sub-packages)
@@ -119,6 +120,7 @@ for both the import path and the on-disk location of generated code.
 - [ ] proto (if any): sources at `proto/api/v1/`, listed in both `buf.yaml`
       `modules:` and `buf.gen.yaml` `inputs:`; `go_package` points to `proto/gen/go/…`.
 - [ ] Migrations (if any) under `sql/<dialect>/`.
-- [ ] i18n keys (if any) under `i18n/locales/`.
+- [ ] `i18n.go` and complete `i18n/locales/{en-US,zh-CN,ms-MY}.json`; every public
+      error has a stable owning key, a clear reason, and a recovery action.
 - [ ] Domain layers present only if the module has a domain; files first, packages
       when they grow.

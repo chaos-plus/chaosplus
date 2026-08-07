@@ -2,114 +2,110 @@ package app
 
 import (
 	"context"
-	"errors"
 	"testing"
+	"time"
 
-	"github.com/danielgtaylor/huma/v2"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
+	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
+	"github.com/chaos-plus/chaosplus/internal/modules/governance"
+	"github.com/chaos-plus/chaosplus/internal/modules/iam"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
+	"github.com/chaos-plus/chaosplus/internal/modules/provisioning"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc"
-
-	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
-	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
-	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 )
 
-// fakeModule implements every capability interface, with configurable errors and
-// spies, so the phase runners can be exercised in isolation.
-type fakeModule struct {
-	name       string
-	migrateErr error
-	startErr   error
-	stopErr    error
+func TestRealModuleLifecycle(t *testing.T) {
+	db, err := bunxtest.Memory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	registry := authz.DefaultRegistry()
+	registrar := authz.NewDeclarationOnlyRegistrar(registry)
+	module := iam.NewDeclarationOnlyModule(registrar)
+	application := &App{mods: []any{module}}
 
-	migrated bool
-	started  bool
-	stopped  bool
-	restReg  bool
-	grpcReg  bool
-
-	stopOrder *[]string
-}
-
-func (f *fakeModule) Migrate(context.Context) error { f.migrated = true; return f.migrateErr }
-func (f *fakeModule) Start(context.Context) error   { f.started = true; return f.startErr }
-func (f *fakeModule) RegisterREST(huma.API)         { f.restReg = true }
-func (f *fakeModule) RegisterGRPC(*grpc.Server)     { f.grpcReg = true }
-func (f *fakeModule) Stop(context.Context) error {
-	f.stopped = true
-	if f.stopOrder != nil {
-		*f.stopOrder = append(*f.stopOrder, f.name)
-	}
-	return f.stopErr
-}
-
-// inert has none of the capabilities, proving the runners skip non-participants.
-type inert struct{}
-
-func TestMigrateModules(t *testing.T) {
-	f := &fakeModule{}
-	a := &App{mods: []any{f, inert{}}}
-	require.NoError(t, a.migrateModules(context.Background()))
-	assert.True(t, f.migrated)
-
-	bad := &fakeModule{migrateErr: errors.New("boom")}
-	a = &App{mods: []any{bad}}
-	assert.ErrorContains(t, a.migrateModules(context.Background()), "boom")
-}
-
-func TestStartModules(t *testing.T) {
-	f := &fakeModule{}
-	a := &App{mods: []any{f, inert{}}}
-	require.NoError(t, a.startModules(context.Background()))
-	assert.True(t, f.started)
-
-	bad := &fakeModule{startErr: errors.New("nope")}
-	a = &App{mods: []any{bad}}
-	assert.ErrorContains(t, a.startModules(context.Background()), "nope")
-}
-
-func TestRegisterPhases(t *testing.T) {
-	f := &fakeModule{}
-	a := &App{mods: []any{f, inert{}}}
-	a.registerREST(nil)
-	a.registerGRPC(nil)
-	assert.True(t, f.restReg)
-	assert.True(t, f.grpcReg)
-}
-
-func TestStopModules_ReverseOrderAndJoinsErrors(t *testing.T) {
-	var order []string
-	a := &App{mods: []any{
-		&fakeModule{name: "a", stopOrder: &order},
-		inert{},
-		&fakeModule{name: "b", stopOrder: &order, stopErr: errors.New("b-fail")},
-		&fakeModule{name: "c", stopOrder: &order},
-	}}
-
-	err := a.stopModules(context.Background())
-	assert.ErrorContains(t, err, "b-fail")
-	// Reverse registration order, skipping the inert module.
-	assert.Equal(t, []string{"c", "b", "a"}, order)
+	require.NoError(t, application.migrateModules(context.Background()))
+	require.NoError(t, application.startModules(context.Background()))
+	_, api := humatest.New(t)
+	application.registerREST(api)
+	require.NoError(t, authz.ValidateOperations(api, registry))
+	require.NoError(t, application.stopModules(context.Background()))
 }
 
 func TestBuildModules(t *testing.T) {
-	// No writable database → geoip + health (nil db).
-	a := &App{}
-	mods := a.buildModules()
-	require.Len(t, mods, 2)
-	_, isGeoip := mods[0].(*geoip.Module)
-	assert.True(t, isGeoip)
+	application := &App{}
+	modules := application.buildModules()
+	require.Len(t, modules, 1)
+	_, isGeoIP := modules[0].(*geoip.Module)
+	assert.True(t, isGeoIP)
 
-	// With a writer → id generator + geoip + health.
-	a = &App{dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
-	require.Len(t, a.buildModules(), 3)
+	application = &App{dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
+	require.Len(t, application.buildModules(), 2)
 
-	a = &App{authzRegistrar: authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())}
-	mods = a.buildModules()
-	require.Len(t, mods, 3)
-	_, isIAM := mods[0].(*iam.Module)
+	application = &App{authzRegistrar: authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())}
+	modules = application.buildModules()
+	require.Len(t, modules, 7)
+	_, isAudit := modules[0].(*audit.Module)
+	assert.True(t, isAudit)
+	_, isIAM := modules[1].(*iam.Module)
 	assert.True(t, isIAM)
+	_, isOrganization := modules[2].(*organization.Module)
+	assert.True(t, isOrganization)
+	_, isProvisioning := modules[3].(*provisioning.Module)
+	assert.True(t, isProvisioning)
+	_, isGovernance := modules[4].(*governance.Module)
+	assert.True(t, isGovernance)
+	_, isFederation := modules[5].(*federation.Module)
+	assert.True(t, isFederation)
+
+	claims := &plugin.Claims{}
+	application = &App{claimPlugins: claims}
+	modules = application.buildModules()
+	require.Len(t, modules, 2)
+	assert.Same(t, claims, modules[0])
+}
+
+func TestRealModuleLifecycleErrorsArePropagated(t *testing.T) {
+	t.Run("migrate", func(t *testing.T) {
+		db, err := bunxtest.Memory()
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+		application := &App{mods: []any{guid.NewModule(db, time.Minute)}}
+		assert.ErrorContains(t, application.migrateModules(t.Context()), "migrate")
+	})
+
+	t.Run("start", func(t *testing.T) {
+		db, err := bunxtest.Memory()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		application := &App{mods: []any{guid.NewModule(db, time.Minute)}}
+		assert.ErrorContains(t, application.startModules(t.Context()), "start")
+	})
+
+	t.Run("stop", func(t *testing.T) {
+		db, err := bunxtest.Memory()
+		require.NoError(t, err)
+		module := guid.NewModule(db, time.Minute)
+		require.NoError(t, module.Migrate(t.Context()))
+		require.NoError(t, module.Start(t.Context()))
+		require.NoError(t, db.Close())
+		application := &App{mods: []any{module}}
+		assert.ErrorContains(t, application.stopModules(t.Context()), "stop")
+	})
+}
+
+func TestRegisterGRPCWithRealModule(t *testing.T) {
+	application := &App{mods: []any{guid.NewModule(nil, 0)}}
+	server := grpc.NewServer()
+	application.registerGRPC(server)
+	assert.Contains(t, server.GetServiceInfo(), "chaosplus.guid.v1.GuidService")
 }

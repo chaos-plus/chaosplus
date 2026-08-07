@@ -1,0 +1,1046 @@
+/* Docs theme ported to Starlight: indigo accent (hue 260) + cool-tinted
+   neutral grays, for both light and dark modes. */
+
+/* --- Dark mode (Starlight default) --- */
+:root {
+	--sl-content-width: 56rem; /* only feeds Starlight's right-rail formula; content itself is uncapped below */
+	--radius: 0.625rem; /* Docs corner radius */
+
+	/* Accent = --primary (dark) */
+	--sl-color-accent-low: oklch(0.28 0.08 260);
+	--sl-color-accent: oklch(0.65 0.18 260);
+	--sl-color-accent-high: oklch(0.85 0.08 260);
+
+	--sl-color-white: oklch(0.98 0.005 260);
+	--sl-color-gray-1: oklch(0.96 0.005 260);
+	--sl-color-gray-2: oklch(0.88 0.008 260);
+	--sl-color-gray-3: oklch(0.72 0.02 260);
+	--sl-color-gray-4: oklch(0.52 0.02 260);
+	--sl-color-gray-5: oklch(0.3 0.02 260);
+	--sl-color-gray-6: oklch(0.22 0.02 260);
+	--sl-color-black: oklch(0.13 0.015 260);
+}
+
+/* Layout: the left menu and the right TOC are equal-width rails; the article
+   fills the fluid middle with no max-width cap. Collapsing the TOC (header
+   button) hands its rail to the article too. State shared across all articles
+   via <html.toc-collapsed> (see Head.astro). */
+.right-sidebar-container {
+	width: var(--sl-sidebar-width); /* match the left menu width */
+	flex-shrink: 0;
+}
+.main-pane {
+	flex-grow: 1; /* article takes all the remaining middle width */
+	min-width: 0; /* shrink instead of overflowing */
+}
+.main-frame,
+.content-panel,
+.content-panel > .sl-container,
+.sl-markdown-content {
+	min-width: 0;
+}
+.sl-container,
+.sl-markdown-content {
+	max-width: none; /* no cap — the article uses the full middle column */
+}
+html.toc-collapsed .right-sidebar-container {
+	display: none;
+}
+
+/* Header "toggle TOC" button. */
+.nav-header .toc-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	inline-size: 2rem;
+	block-size: 2rem;
+	padding: 0;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	background: transparent;
+	color: var(--sl-color-gray-2);
+	cursor: pointer;
+	transition:
+		color 0.15s ease,
+		background-color 0.15s ease,
+		border-color 0.15s ease;
+}
+.nav-header .toc-toggle:hover {
+	color: var(--sl-color-white);
+	border-color: var(--sl-color-gray-2);
+}
+.nav-header .toc-toggle svg {
+	inline-size: 1.1rem;
+	block-size: 1.1rem;
+}
+/* Accent the button while the TOC is showing (i.e. button is "on"). */
+html:not(.toc-collapsed) .nav-header .toc-toggle {
+	color: var(--sl-color-text-accent);
+	border-color: var(--sl-color-text-accent);
+}
+/* No TOC on the page (e.g. splash home) → no button. */
+body:not(:has(.right-sidebar-container)) .nav-header .toc-toggle {
+	display: none;
+}
+
+.docs-update-notice {
+	position: fixed;
+	right: 1rem;
+	bottom: 1rem;
+	z-index: 100;
+	display: flex;
+	align-items: center;
+	gap: 0.875rem;
+	max-width: calc(100vw - 2rem);
+	padding: 0.75rem 0.75rem 0.75rem 1rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	background: var(--sl-color-black);
+	box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 18%);
+	color: var(--sl-color-white);
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+}
+
+.docs-update-notice[hidden] {
+	display: none;
+}
+
+.docs-update-notice button {
+	display: inline-flex;
+	min-height: 2rem;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+	padding-inline: 0.75rem;
+	border: 0;
+	border-radius: 0.375rem;
+	background: var(--sl-color-text-accent);
+	color: var(--sl-color-text-invert);
+	font: inherit;
+	cursor: pointer;
+}
+
+.docs-update-notice button:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+
+.docs-update-notice svg {
+	width: 1rem;
+	height: 1rem;
+}
+
+/* --- Light mode --- */
+:root[data-theme='light'] {
+	--sl-color-accent-low: oklch(0.9 0.05 260);
+	--sl-color-accent: oklch(0.398 0.14 260); /* --primary (light) */
+	--sl-color-accent-high: oklch(0.32 0.12 260);
+
+	--sl-color-white: oklch(0.145 0.015 260);
+	--sl-color-gray-1: oklch(0.22 0.015 260);
+	--sl-color-gray-2: oklch(0.35 0.015 260);
+	--sl-color-gray-3: oklch(0.52 0.02 260);
+	--sl-color-gray-4: oklch(0.68 0.015 260);
+	--sl-color-gray-5: oklch(0.86 0.01 260);
+	--sl-color-gray-6: oklch(0.94 0.006 260);
+	--sl-color-gray-7: oklch(0.97 0.004 260);
+	--sl-color-black: oklch(0.995 0.002 260);
+}
+
+/* Single-row header: title | nav | ...spacer... | search (right-aligned).
+   Scoped to .nav-header so it never leaks onto PageFrame's outer .header. */
+.nav-header {
+	gap: var(--sl-nav-gap);
+	align-items: center;
+	width: 100%;
+	height: 100%;
+}
+
+.nav-header .title-wrapper {
+	overflow: clip;
+	padding: 0.25rem;
+	margin: -0.25rem;
+	min-width: 0;
+}
+
+/* Push the search box to the far right; nav stays left next to the title. */
+.nav-header .search-cell {
+	min-width: 0;
+	margin-inline-start: auto;
+}
+
+.nav-header .header-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	min-height: 2rem;
+	gap: 0.4rem;
+	padding-inline: 0.65rem;
+	border: 1px solid transparent;
+	border-radius: 0.5rem;
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-sm);
+	font-weight: 550;
+	line-height: 1;
+	text-decoration: none;
+	white-space: nowrap;
+	transition:
+		color 0.15s ease,
+		background-color 0.15s ease,
+		border-color 0.15s ease;
+}
+
+.nav-header .header-link:hover {
+	color: var(--sl-color-white);
+	background: var(--sl-color-gray-6);
+}
+
+.nav-header .header-link:focus-visible {
+	outline: 2px solid var(--sl-color-text-accent);
+	outline-offset: 2px;
+}
+
+.nav-header .changelog-link[aria-current='page'] {
+	color: var(--sl-color-text-accent);
+	border-color: var(--sl-color-text-accent);
+}
+
+.nav-header .header-link svg {
+	inline-size: 1rem;
+	block-size: 1rem;
+}
+
+/* Persistent top nav, inline with the search box. */
+.top-nav {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.top-nav::-webkit-scrollbar {
+	display: none;
+}
+
+.top-nav a {
+	color: var(--sl-color-gray-2);
+	text-decoration: none;
+	font-size: var(--sl-text-sm);
+	white-space: nowrap;
+	padding: 0.3rem 0.7rem;
+	border-radius: 999px;
+	transition:
+		color 0.15s ease,
+		background-color 0.15s ease;
+}
+
+.top-nav a:hover {
+	color: var(--sl-color-white);
+	background-color: var(--sl-color-gray-6);
+}
+
+.top-nav a[aria-current='page'] {
+	color: var(--sl-color-text-invert);
+	background-color: var(--sl-color-text-accent);
+	font-weight: 600;
+}
+
+.mobile-navigation {
+	display: none;
+}
+
+@media (max-width: 50rem) {
+	.top-nav {
+		display: none;
+	}
+
+	.nav-header .repository-link,
+	.nav-header .toc-toggle {
+		display: none;
+	}
+
+	.mobile-navigation {
+		position: relative;
+		display: block;
+		flex-shrink: 0;
+	}
+
+	.mobile-navigation summary {
+		display: grid;
+		width: 2rem;
+		height: 2rem;
+		place-items: center;
+		border: 1px solid transparent;
+		border-radius: 0.5rem;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.mobile-navigation summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.mobile-navigation summary:hover,
+	.mobile-navigation[open] summary {
+		border-color: var(--sl-color-gray-5);
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-white);
+	}
+
+	.mobile-navigation summary:focus-visible {
+		outline: 2px solid var(--sl-color-text-accent);
+		outline-offset: 2px;
+	}
+
+	.mobile-navigation summary svg {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	.mobile-navigation nav {
+		position: absolute;
+		top: calc(100% + 0.75rem);
+		right: 0;
+		z-index: calc(var(--sl-z-index-navbar) + 1);
+		display: grid;
+		min-width: 11rem;
+		padding: 0.4rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: var(--sl-color-bg-nav);
+		box-shadow: var(--sl-shadow-lg);
+	}
+
+	.mobile-navigation nav a {
+		padding: 0.55rem 0.75rem;
+		border-radius: 0.375rem;
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		font-weight: 550;
+		text-decoration: none;
+	}
+
+	.mobile-navigation nav a:hover {
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-white);
+	}
+
+	.mobile-navigation nav a[aria-current='page'] {
+		background: var(--sl-color-accent-low);
+		color: var(--sl-color-text-accent);
+	}
+}
+
+@media (max-width: 34rem) {
+	.nav-header .header-link {
+		inline-size: 2rem;
+		min-height: 2.75rem;
+		padding: 0;
+	}
+
+	.nav-header .header-link span {
+		display: none;
+	}
+}
+
+/* ===== Docs look: radius, scrollbar, prose, tables, code ===== */
+
+/* Thin scrollbar. */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--sl-color-gray-5);
+	border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--sl-color-gray-4);
+}
+
+/* Article rhythm and hierarchy. */
+.main-pane:not(:has(.home)) .content-panel:first-child {
+	padding-bottom: 1.25rem;
+}
+
+.main-pane:not(:has(.home)) .content-panel + .content-panel {
+	padding-top: 0.75rem;
+	border-top: 0;
+}
+
+.main-pane:not(:has(.home)) .content-panel > .sl-container > h1 {
+	margin: 0;
+	font-size: 2.35rem;
+	line-height: 1.2;
+	letter-spacing: 0;
+}
+
+.sl-markdown-content {
+	color: var(--sl-color-gray-2);
+	font-size: 1rem;
+	line-height: 1.78;
+}
+
+.sl-markdown-content .sl-heading-wrapper {
+	letter-spacing: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+	margin-top: 3.25rem;
+	padding-top: 2.25rem;
+	border-top: 1px solid var(--sl-color-gray-6);
+}
+
+.sl-markdown-content > .sl-heading-wrapper.level-h2:first-child {
+	margin-top: 0;
+	padding-top: 0.5rem;
+	border-top: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h3 {
+	margin-top: 2.5rem;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4 {
+	margin-top: 2rem;
+}
+
+.sl-markdown-content h2 {
+	font-size: 1.75rem;
+	line-height: 1.3;
+	letter-spacing: 0;
+}
+
+.sl-markdown-content h3 {
+	font-size: 1.3rem;
+	line-height: 1.4;
+	letter-spacing: 0;
+}
+
+.sl-markdown-content h4 {
+	font-size: 1.05rem;
+	line-height: 1.5;
+	letter-spacing: 0;
+}
+
+.sl-markdown-content p {
+	max-width: 82ch;
+}
+
+.sl-markdown-content strong {
+	color: var(--sl-color-gray-1);
+	font-weight: 650;
+}
+
+.sl-markdown-content ul,
+.sl-markdown-content ol {
+	padding-inline-start: 1.4rem;
+}
+
+.sl-markdown-content li + li {
+	margin-top: 0.35rem;
+}
+
+.sl-markdown-content li::marker {
+	color: var(--sl-color-text-accent);
+	font-weight: 600;
+}
+
+/* Component contracts are scan-first specifications, not prose dumps. */
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) {
+	margin-top: 1.5rem;
+	padding-inline-start: 0.75rem;
+	border-inline-start: 3px solid var(--sl-color-text-accent);
+}
+
+.sl-markdown-content h4[id^='生成契约'] {
+	font-size: 0.95rem;
+	font-weight: 650;
+	color: var(--sl-color-gray-1);
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	padding: 0;
+	margin-block: 0.75rem 1.75rem;
+	list-style: none;
+	border-block: 1px solid var(--sl-color-gray-6);
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li {
+	min-width: 0;
+	margin: 0;
+	padding: 1rem 1.25rem 1rem 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li:nth-child(even) {
+	padding-inline: 1.25rem 0;
+	border-inline-start: 1px solid var(--sl-color-gray-6);
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li:nth-child(n + 3) {
+	border-top: 1px solid var(--sl-color-gray-6);
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li:last-child:nth-child(odd) {
+	grid-column: 1 / -1;
+	padding-inline-end: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > p {
+	max-width: none;
+	margin: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > p:first-child:has(> strong:only-child) {
+	margin-bottom: 0.35rem;
+	font-size: 0.75rem;
+	line-height: 1.4;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > p:first-child > strong:only-child {
+	color: var(--sl-color-text-accent);
+	font-weight: 650;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > strong:first-child {
+	display: block;
+	margin-bottom: 0.35rem;
+	color: var(--sl-color-text-accent);
+	font-size: 0.75rem;
+	line-height: 1.4;
+	font-weight: 650;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > ul {
+	display: block;
+	padding-inline-start: 1.1rem;
+	margin: 0;
+	border: 0;
+	font-size: 0.9rem;
+	line-height: 1.62;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li > ul > li + li {
+	margin-top: 0.22rem;
+}
+
+@media (max-width: 52rem) {
+	.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li,
+	.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li:nth-child(even) {
+		grid-column: auto;
+		padding-inline: 0;
+		border-inline-start: 0;
+	}
+
+	.sl-markdown-content .sl-heading-wrapper.level-h4:has(> h4[id^='生成契约']) + ul > li:nth-child(n + 2) {
+		border-top: 1px solid var(--sl-color-gray-6);
+	}
+}
+
+/* Rounded corners on code blocks, images and asides. */
+.sl-markdown-content pre,
+.sl-markdown-content img,
+.card,
+.starlight-aside {
+	border-radius: var(--radius);
+}
+
+/* Blockquotes act as restrained PRD decision notes. */
+.sl-markdown-content blockquote {
+	max-width: 82ch;
+	margin-block: 1.25rem 1.75rem;
+	padding: 0.8rem 1rem;
+	border-inline-start: 3px solid var(--sl-color-accent);
+	border-radius: 0 0.375rem 0.375rem 0;
+	background: color-mix(in oklch, var(--sl-color-accent-low) 55%, transparent);
+	color: var(--sl-color-gray-2);
+	font-style: normal;
+}
+
+/* Tables are dense enough for specifications but keep clear row scanning. */
+.sl-markdown-content table {
+	display: block;
+	width: 100%;
+	max-width: 100%;
+	margin-block: 1.25rem 2rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-spacing: 0;
+	border-radius: 0.5rem;
+	overflow-x: auto;
+	font-size: 0.925rem;
+	line-height: 1.55;
+	font-variant-numeric: tabular-nums;
+}
+
+.sl-markdown-content th,
+.sl-markdown-content td {
+	padding: 0.65rem 0.75rem;
+	vertical-align: top;
+	border-bottom: 1px solid var(--sl-color-gray-6);
+}
+
+.sl-markdown-content th {
+	background: var(--sl-color-gray-6);
+	font-weight: 600;
+	color: var(--sl-color-gray-1);
+}
+
+.sl-markdown-content tbody tr:last-child > * {
+	border-bottom: 0;
+}
+
+.sl-markdown-content tbody tr:hover {
+	background: color-mix(in oklch, var(--sl-color-gray-6) 60%, transparent);
+}
+
+/* Inline code: muted chip, weight 600. */
+.sl-markdown-content :not(pre) > code {
+	background: var(--sl-color-gray-6);
+	font-weight: 600;
+	border-radius: 0.25rem;
+	padding: 0.1rem 0.32rem;
+	border: 1px solid color-mix(in oklch, var(--sl-color-gray-5) 72%, transparent);
+}
+
+.sl-markdown-content pre {
+	margin-block: 1.25rem 2rem;
+	border: 1px solid var(--sl-color-gray-5);
+	overflow-x: auto;
+}
+
+.sl-markdown-content hr {
+	margin-block: 3rem;
+	border: 0;
+	border-top: 1px solid var(--sl-color-gray-6);
+}
+
+/* Links: accent, underline on hover only. */
+.sl-markdown-content a {
+	color: var(--sl-color-text-accent);
+	font-weight: 500;
+	text-decoration: none;
+}
+.sl-markdown-content a:hover {
+	text-decoration: underline;
+}
+
+/* ===== Home splash: minimal business landing =====
+   Flat and light — one restrained business-blue accent, no decorative
+   3D / orbs / parallax. Theme-aware via Starlight semantic tokens. */
+
+.home {
+	width: 100%;
+	max-width: 76rem;
+	min-width: 0;
+	margin-inline: auto;
+	padding-inline: clamp(1rem, 4vw, 2.5rem);
+	padding-block: clamp(1rem, 3vw, 2rem);
+	box-sizing: border-box;
+	/* Single business-blue accent (homepage-only; docs elsewhere keep indigo). */
+	--accent: oklch(0.55 0.13 250);
+	--accent-solid: oklch(0.5 0.14 250); /* button/icon bg — white text passes AA */
+	--accent-ink: oklch(0.99 0.01 250); /* text/icon on --accent-solid */
+}
+
+/* Splash emits its own <h1> from the title — we supply our own hero h1. */
+.main-pane:has(.home) .content-panel > .sl-container > h1 {
+	display: none;
+}
+
+/* --- Hero: calm light panel, text + image --- */
+.hero {
+	position: relative;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	gap: clamp(1.5rem, 4vw, 3.5rem);
+	padding: clamp(2.25rem, 5vw, 3.75rem) clamp(1.5rem, 5vw, 3.5rem);
+	border-radius: 1.25rem;
+	border: 1px solid var(--sl-color-gray-5);
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklch, var(--accent) 5%, var(--sl-color-gray-7, var(--sl-color-gray-6))),
+		var(--sl-color-gray-6)
+	);
+	box-shadow: 0 20px 50px -40px color-mix(in oklch, var(--sl-color-black) 45%, transparent);
+}
+.hero__inner {
+	position: relative;
+	flex: 1 1 52%;
+	min-width: 0;
+	text-align: start;
+}
+.hero__media {
+	flex: 1 1 44%;
+	min-width: 0;
+}
+.hero__media img {
+	display: block;
+	width: 100%;
+	max-height: 21rem;
+	object-fit: cover;
+	border-radius: 1rem;
+	border: 1px solid var(--sl-color-gray-5);
+	box-shadow: 0 24px 50px -34px color-mix(in oklch, var(--sl-color-black) 55%, transparent);
+}
+.hero__eyebrow {
+	display: inline-block;
+	margin-bottom: 1.1rem;
+	padding: 0.35rem 0.85rem;
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	letter-spacing: 0.14em;
+	color: var(--accent);
+	background: color-mix(in oklch, var(--accent) 10%, transparent);
+	border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
+	border-radius: 999px;
+}
+.hero__title {
+	margin: 0;
+	font-size: 3.75rem;
+	line-height: 1.1;
+	font-weight: 700;
+	letter-spacing: 0;
+	color: var(--sl-color-white);
+}
+.hero__tagline {
+	max-width: 34rem;
+	margin: 1.15rem 0 0;
+	font-size: 1.15rem;
+	line-height: 1.6;
+	color: var(--sl-color-gray-2);
+}
+.hero__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	justify-content: flex-start;
+	margin-top: 1.9rem;
+}
+
+/* --- Buttons --- */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.68rem 1.35rem;
+	border-radius: 0.7rem;
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+	text-decoration: none !important;
+	transition:
+		transform 0.15s ease,
+		box-shadow 0.2s ease,
+		background 0.2s ease,
+		border-color 0.2s ease,
+		color 0.2s ease;
+}
+.sl-markdown-content .btn--primary {
+	color: var(--accent-ink);
+	background: var(--accent-solid);
+}
+.sl-markdown-content .btn--primary:hover {
+	transform: translateY(-1px);
+	box-shadow: 0 12px 26px -14px color-mix(in oklch, var(--accent-solid) 70%, transparent);
+}
+.btn--primary span {
+	transition: transform 0.15s ease;
+}
+.btn--primary:hover span {
+	transform: translateX(3px);
+}
+.sl-markdown-content .btn--ghost {
+	color: var(--sl-color-white);
+	border: 1px solid var(--sl-color-gray-4);
+	background: transparent;
+}
+.sl-markdown-content .btn--ghost:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+/* --- Full-link flow strip --- */
+.flow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 0.6rem 1.2rem;
+	margin: 2rem 0 2.5rem;
+}
+.flow__node {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-2);
+}
+.flow__node em {
+	font-style: normal;
+	font-weight: 700;
+	font-size: var(--sl-text-xs);
+	letter-spacing: 0.06em;
+	padding: 0.3rem 0.5rem;
+	border-radius: 0.5rem;
+	color: var(--accent);
+	background: color-mix(in oklch, var(--accent) 10%, transparent);
+	border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.flow__node:not(:last-child)::after {
+	content: '→';
+	margin-inline-start: 1.2rem;
+	color: var(--sl-color-gray-4);
+}
+
+/* --- Section title --- */
+.section-title {
+	text-align: center;
+	margin: 0.5rem 0 1.75rem;
+	font-size: 2rem;
+	font-weight: 700;
+	color: var(--sl-color-white);
+}
+
+/* --- Module cards: flat, bordered --- */
+.home-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+	gap: 1rem;
+	text-align: start;
+}
+.home-card {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 0.45rem;
+	padding: 1.4rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.9rem;
+	text-decoration: none !important;
+	background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+	transition:
+		transform 0.15s ease,
+		border-color 0.2s ease,
+		box-shadow 0.2s ease;
+}
+.home-card:hover {
+	transform: translateY(-2px);
+	border-color: color-mix(in oklch, var(--accent) 55%, var(--sl-color-gray-5));
+	box-shadow: 0 16px 34px -22px color-mix(in oklch, var(--sl-color-black) 55%, transparent);
+}
+.home-ico {
+	width: 2.6rem;
+	height: 2.6rem;
+	display: grid;
+	place-items: center;
+	border-radius: 0.7rem;
+	color: var(--accent);
+	background: color-mix(in oklch, var(--accent) 12%, transparent);
+	border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.home-ico svg {
+	width: 1.4rem;
+	height: 1.4rem;
+}
+.home-badge {
+	position: absolute;
+	top: 1.2rem;
+	right: 1.2rem;
+	font-size: var(--sl-text-xs);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	padding: 0.15rem 0.5rem;
+	border-radius: 999px;
+	color: var(--accent);
+	background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.home-card strong {
+	margin-top: 0.35rem;
+	font-size: var(--sl-text-lg);
+	color: var(--sl-color-white);
+}
+.home-desc {
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+	line-height: 1.5;
+}
+.home-arrow {
+	position: absolute;
+	right: 1.3rem;
+	bottom: 1.2rem;
+	color: var(--accent);
+	opacity: 0;
+	transform: translateX(-6px);
+	transition:
+		opacity 0.2s ease,
+		transform 0.2s ease;
+}
+.home-card:hover .home-arrow {
+	opacity: 1;
+	transform: translateX(0);
+}
+
+/* --- Reduced motion: drop the small hover shifts --- */
+@media (prefers-reduced-motion: reduce) {
+	.home-card:hover,
+	.btn--primary:hover,
+	.btn--primary:hover span,
+	.home-card:hover .home-arrow {
+		transform: none;
+	}
+}
+
+/* --- Stack hero on narrow screens: image below centered text --- */
+@media (max-width: 52rem) {
+	.hero {
+		flex-direction: column;
+		text-align: center;
+	}
+	.hero__inner {
+		flex: none;
+	}
+	.hero__tagline {
+		margin-inline: auto;
+		font-size: 1rem;
+	}
+	.hero__title {
+		font-size: 2.75rem;
+	}
+	.section-title {
+		font-size: 1.75rem;
+	}
+	.hero__actions {
+		justify-content: center;
+	}
+	.hero__media {
+		width: 100%;
+		flex: none;
+	}
+	.hero__media img {
+		max-height: 15rem;
+	}
+}
+@media (max-width: 34rem) {
+	.hero {
+		padding-inline: 1.25rem;
+	}
+	.hero__title {
+		font-size: 2.25rem;
+	}
+	.section-title {
+		font-size: 1.5rem;
+	}
+}
+
+/* ===== Docs sidebar menu: soft rounded items, tinted active state ===== */
+
+/* Custom sidebar layout (src/components/Sidebar.astro). */
+.nav {
+	flex-direction: column;
+	/* Same tight rhythm for the top-level standalone links as for in-group
+	   items; section separation comes from `.group` margin below. */
+	gap: 0.125rem;
+}
+.nav ul {
+	list-style: none;
+	padding: 0;
+	margin: 0.25rem 0 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+}
+/* Breathing room above each section, not between every top-level link. */
+.group {
+	margin-top: 0.5rem;
+}
+.nav ul {
+	margin-top: 0.1rem;
+}
+
+/* Section title: small, uppercase, tracked, muted. */
+.sidebar-content .group-label {
+	display: block;
+	padding: 0 0.75rem;
+}
+.sidebar-content .group-label > .large {
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--sl-color-gray-3);
+}
+
+/* Nested sub-group: one level deeper than a section (设计系统 → per-端).
+   Rendered as <li class="subgroup"> with a mini label + an indented rail. */
+.sidebar-content .subgroup {
+	margin-top: 0.35rem;
+}
+.sidebar-content .subgroup-label {
+	display: block;
+	padding: 0.15rem 0.75rem;
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	color: var(--sl-color-gray-4);
+}
+.sidebar-content .subgroup > ul {
+	margin: 0.1rem 0 0 0.75rem;
+	padding-inline-start: 0.55rem;
+	border-inline-start: 1px solid var(--sl-color-gray-6);
+}
+
+/* Menu items: rounded, padded, medium weight, muted. */
+.sidebar-content a {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	border-radius: 0.5rem;
+	padding: 0.3rem 0.75rem;
+	font-size: var(--sl-text-sm);
+	font-weight: 500;
+	color: var(--sl-color-gray-3);
+	transition:
+		color 0.15s ease,
+		background-color 0.15s ease;
+}
+
+.sidebar-content a:hover {
+	background: var(--sl-color-gray-6);
+	color: var(--sl-color-white);
+}
+
+/* Active: primary tint bg + primary text + trailing dot (bg-primary/10). */
+.sidebar-content a[aria-current='page'] {
+	background: color-mix(in oklch, var(--sl-color-accent) 14%, transparent);
+	color: var(--sl-color-text-accent);
+	font-weight: 600;
+}
+.sidebar-content a[aria-current='page']::after {
+	content: '';
+	margin-inline-start: auto;
+	width: 0.375rem;
+	height: 0.375rem;
+	border-radius: 999px;
+	background: var(--sl-color-text-accent);
+}
+
+/* Lucide icon per menu item (rendered inline by src/components/Sidebar.astro). */
+.sidebar-content a svg {
+	width: 1rem;
+	height: 1rem;
+	flex-shrink: 0;
+}

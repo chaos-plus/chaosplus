@@ -1,0 +1,19 @@
+{
+  "federation_invalid_request": "联合登录请求无效，或登录状态已丢失、过期或被重放。请重新开始登录并在同一个浏览器会话中完成。",
+  "federation_provider_not_found": "指定的身份提供方不存在。请刷新提供方列表并选择现有提供方。",
+  "federation_provider_issuer_exists": "当前租户已存在相同发行方的身份提供方。请更换发行方或直接更新已有提供方。",
+  "federation_provider_role_missing": "提供方的默认角色在当前租户中不存在。请选择一个有效角色，或清空默认角色配置。",
+  "federation_provider_disabled": "该身份提供方已被停用。需要管理员重新启用后才能使用其登录。",
+  "federation_provisioning_disabled": "该身份提供方不允许自动创建账号。需要管理员先创建账号并关联该身份提供方。",
+  "federation_identity_unavailable": "关联账号或其租户成员已被停用。请联系管理员恢复访问权限。",
+  "federation_email_unverified": "自动创建账号需要身份提供方返回已验证的邮箱。请联系管理员检查提供方声明，或手动开通账号。",
+  "federation_oidc_failed": "身份提供方拒绝或未能完成本次登录。请重新开始登录；若问题持续，请联系管理员。",
+  "federation_unavailable": "联合登录服务暂时无法完成请求。请稍后重试；若问题持续，请联系管理员。",
+  "federation_saml_invalid_request": "SAML 请求格式错误、已过期或发送到了错误的目标地址。请从应用重新开始登录或注销流程。",
+  "federation_saml_invalid_sp": "SAML 服务提供方元数据无效。请检查 XML、实体 ID 和断言消费绑定，然后重新注册。",
+  "federation_saml_sp_not_found": "SAML 服务提供方不存在。请刷新注册表并选择现有的提供方。",
+  "federation_saml_sp_entity_id_exists": "已存在使用此实体 ID 注册的 SAML 服务提供方。请选择其他实体 ID，或更新现有提供方。",
+  "federation_saml_sp_disabled": "此 SAML 服务提供方已被禁用。管理员必须先启用它，才能使用身份提供方。",
+  "federation_saml_unavailable": "SAML 身份提供方不可用。请启用 SAML 联合配置后重试。",
+  "federation_saml_key_managed_externally": "SAML 签名密钥通过配置文件管理。请通过替换密钥和证书文件来轮换密钥。"
+}

@@ -2,9 +2,13 @@ package app
 
 import (
 	"errors"
+	"expvar"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
@@ -12,12 +16,17 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/ratex"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secure"
-	"github.com/chaos-plus/chaosplus/internal/infra/metrics"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+)
+
+var (
+	httpRequests  = expvar.NewInt("http_requests_total")
+	httpErrors4xx = expvar.NewInt("http_errors_4xx")
+	httpErrors5xx = expvar.NewInt("http_errors_5xx")
 )
 
 // readHeaderTimeout bounds how long the server waits for request headers,
@@ -32,17 +41,38 @@ const readHeaderTimeout = 10 * time.Second
 func (app *App) StartRestServer() error {
 	router := chi.NewMux()
 	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
+	router.Use(requestMetrics) // count requests by status code
+	clientIP, err := trustedProxyClientIP(app.cfg.RestServer.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	router.Use(clientIP)
 	router.Use(middleware.Recoverer)
-	app.useSecurity(router)   // security response headers
-	app.useCors(router)       // CORS (handles preflight before routing)
-	router.Use(metrics.Middleware) // request count + latency (before Timing so it covers full request)
-	router.Use(respx.Timing)  // stamp request start time for response meta
-	router.Use(respx.Locale)  // resolve request locale for message i18n
-	app.useRateLimit(router)  // per-IP / per-account limiting (after RealIP + Locale)
+	app.useSecurity(router)  // security response headers
+	app.useCors(router)      // CORS (handles preflight before routing)
+	router.Use(respx.Timing) // stamp request start time for response meta
+	router.Use(respx.Locale) // resolve request locale for message i18n
+	app.useRateLimit(router) // per-IP / per-account limiting (after RealIP + Locale)
 
-	// Prometheus metrics endpoint (before huma so it doesn't appear in OpenAPI).
-	router.Handle("/metrics", metrics.Handler())
+	// API version header on every response so clients can negotiate compatibility.
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-API-Version", "1.0.0")
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	// ponytail: basic observability via expvar (stdlib, zero deps).
+	// Prometheus/OTLP exporters deferred until ops requirements firm up.
+	router.Get("/debug/vars", expvar.Handler().ServeHTTP)
+
+	// Health and readiness probes — plain chi routes, no huma envelope.
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	router.Get("/readyz", app.readyHandler())
 
 	config := huma.DefaultConfig(app.name+" API", "1.0.0")
 	// Disable huma's built-in single-renderer /docs so our own tabbed page
@@ -66,6 +96,10 @@ func (app *App) StartRestServer() error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", app.cfg.RestServer.Host, app.cfg.RestServer.Port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("rest listen %s: %w", addr, err)
+	}
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,
@@ -75,12 +109,67 @@ func (app *App) StartRestServer() error {
 
 	go func() {
 		slog.Info("rest server listening", "addr", addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			app.serveErr <- fmt.Errorf("rest serve: %w", err)
 		}
 	}()
 
 	return nil
+}
+
+func trustedProxyClientIP(values []string) (func(http.Handler) http.Handler, error) {
+	prefixes := make([]netip.Prefix, len(values))
+	for i, value := range values {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("rest trusted proxy %q: %w", value, err)
+		}
+		prefixes[i] = prefix
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			peer, ok := remoteIP(request.RemoteAddr)
+			if ok && trustedIP(peer, prefixes) {
+				client := peer
+				for i := len(request.Header.Values("X-Forwarded-For")) - 1; i >= 0; i-- {
+					parts := strings.Split(request.Header.Values("X-Forwarded-For")[i], ",")
+					for j := len(parts) - 1; j >= 0; j-- {
+						candidate, err := netip.ParseAddr(strings.TrimSpace(parts[j]))
+						if err != nil {
+							next.ServeHTTP(writer, request)
+							return
+						}
+						client = candidate.Unmap().WithZone("")
+						if !trustedIP(client, prefixes) {
+							request.RemoteAddr = client.String()
+							next.ServeHTTP(writer, request)
+							return
+						}
+					}
+				}
+				request.RemoteAddr = client.String()
+			}
+			next.ServeHTTP(writer, request)
+		})
+	}, nil
+}
+
+func remoteIP(value string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		host = value
+	}
+	ip, err := netip.ParseAddr(host)
+	return ip.Unmap(), err == nil
+}
+
+func trustedIP(ip netip.Addr, prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // useSecurity mounts the security-headers middleware when enabled.
@@ -150,4 +239,48 @@ func (app *App) useRateLimit(router chi.Router) {
 	}
 	router.Use(ratex.New(app.redis, rl.Prefix, dims...).Handler)
 	slog.Info("rate limiting enabled", "dimensions", len(dims))
+}
+
+// readyHandler returns an HTTP handler that pings the primary database.
+// Kubernetes uses /readyz as a startup/liveness probe. Returns 503 when
+// the database is unreachable.
+func (app *App) readyHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if app.dbr.Write() == nil {
+			http.Error(w, "database not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if err := app.dbr.Write().PingContext(r.Context()); err != nil {
+			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	}
+}
+
+// requestMetrics is a chi middleware that increments expvar counters for each
+// HTTP response by status-code bucket.
+func requestMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		httpRequests.Add(1)
+		if sw.status >= 500 {
+			httpErrors5xx.Add(1)
+		} else if sw.status >= 400 {
+			httpErrors4xx.Add(1)
+		}
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }

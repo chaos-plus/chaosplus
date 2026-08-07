@@ -30,8 +30,12 @@ type yaegiRuntime struct {
 
 func newYaegiRuntime() (Runtime, error) {
 	i := interp.New(interp.Options{})
-	i.Use(stdlib.Symbols)
-	i.Use(interp.Symbols)
+	if err := i.Use(stdlib.Symbols); err != nil {
+		return nil, fmt.Errorf("interpreter/yaegi: load standard library: %w", err)
+	}
+	if err := i.Use(interp.Symbols); err != nil {
+		return nil, fmt.Errorf("interpreter/yaegi: load interpreter symbols: %w", err)
+	}
 	return &yaegiRuntime{
 		i:        i,
 		bindings: make(map[string]any),

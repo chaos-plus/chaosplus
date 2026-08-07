@@ -1,35 +1,40 @@
 package app
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
-	"github.com/chaos-plus/chaosplus/internal/modules/iam"
+	"github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
+	"github.com/chaos-plus/chaosplus/internal/modules/provisioning"
 )
 
 // 类似 springboot 的配置, 由koanf实现外部配置加载
 type Config struct {
-	Name        string                     `mapstructure:"name" description:"app name" default:""`
-	Debug       bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
-	Timezone    string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
-	WorkerLease int                        `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"3600"`
-	Log         Log                        `mapstructure:"log" group:"log"`
-	RestServer  RestServer                 `mapstructure:"rest" group:"rest"`
-	GrpcServer  GrpcServer                 `mapstructure:"grpc" group:"grpc"`
-	Redis       Redis                      `mapstructure:"redis" group:"redis"`
-	RateLimit   RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
-	Cors        Cors                       `mapstructure:"cors" group:"cors"`
-	Security    Security                   `mapstructure:"security" group:"security"`
-	Authn       authn.Config               `mapstructure:"authn" group:"authn"`
-	Authz       Authz                      `mapstructure:"authz" group:"authz"`
-	Migrations  Migrations                 `mapstructure:"migrations" group:"migrations"`
-	Bootstrap   BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
-	Database    map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
-	GeoIP       geoip.Config               `mapstructure:"geoip" group:"geoip"`
+	Name         string                     `mapstructure:"name" description:"app name" default:""`
+	Debug        bool                       `mapstructure:"debug" short:"d" description:"debug mode" default:"false"`
+	Timezone     string                     `mapstructure:"timezone" description:"timezone" default:"UTC"`
+	WorkerLease  int                        `mapstructure:"worker_lease" description:"guid worker-id lease seconds; heartbeat renews at a third of this" default:"3600"`
+	Log          Log                        `mapstructure:"log" group:"log"`
+	RestServer   RestServer                 `mapstructure:"rest" group:"rest"`
+	GrpcServer   GrpcServer                 `mapstructure:"grpc" group:"grpc"`
+	Redis        Redis                      `mapstructure:"redis" group:"redis"`
+	RateLimit    RateLimit                  `mapstructure:"ratelimit" group:"ratelimit"`
+	Cors         Cors                       `mapstructure:"cors" group:"cors"`
+	Security     Security                   `mapstructure:"security" group:"security"`
+	Authn        authn.Config               `mapstructure:"authn" group:"authn"`
+	Audit        audit.Config               `mapstructure:"audit" group:"audit"`
+	Federation   federation.Config          `mapstructure:"federation" group:"federation"`
+	Provisioning provisioning.Config        `mapstructure:"provisioning" group:"provisioning"`
+	Authz        Authz                      `mapstructure:"authz" group:"authz"`
+	Plugins      plugin.Config              `mapstructure:"plugins" group:"plugins"`
+	Migrations   Migrations                 `mapstructure:"migrations" group:"migrations"`
+	Bootstrap    BootstrapConfig            `mapstructure:"bootstrap" group:"bootstrap"`
+	Database     map[string]bunx.Datasource `mapstructure:"database" group:"database" mapkey:"<dbkey>"`
+	GeoIP        geoip.Config               `mapstructure:"geoip" group:"geoip"`
 }
 
 type Migrations struct {
@@ -37,36 +42,23 @@ type Migrations struct {
 }
 
 type BootstrapConfig struct {
-	Auto         bool                  `mapstructure:"auto" description:"provision external Zitadel/SpiceDB resources before server startup" default:"false"`
+	Auto         bool                  `mapstructure:"auto" description:"provision the local initial administrator before server startup" default:"false"`
 	LockTimeout  time.Duration         `mapstructure:"lock_timeout" description:"maximum wait for the deployment advisory lock" default:"30s"`
 	Database     bunx.Datasource       `mapstructure:"database" group:"database"`
-	Zitadel      BootstrapZitadel      `mapstructure:"zitadel" group:"zitadel"`
 	InitialAdmin BootstrapInitialAdmin `mapstructure:"initial_admin" group:"initial_admin"`
 }
 
-type BootstrapZitadel struct {
-	Enabled             bool          `mapstructure:"enabled" description:"provision the Chaosplus project and Native OIDC app" default:"false"`
-	MachineKeyFile      string        `mapstructure:"machine_key_file" description:"Zitadel service-user JWT profile key file" default:""`
-	ProjectName         string        `mapstructure:"project_name" description:"Zitadel project name" default:"Chaosplus API"`
-	ApplicationName     string        `mapstructure:"application_name" description:"Zitadel Native OIDC application name" default:"Chaosplus Admin"`
-	RedirectURIs        []string      `mapstructure:"redirect_uris" description:"exact OIDC callback URI list"`
-	PostLogoutURIs      []string      `mapstructure:"post_logout_uris" description:"exact post-logout redirect URI list"`
-	DevMode             bool          `mapstructure:"dev_mode" description:"allow HTTP redirect URIs for local evaluation only" default:"false"`
-	ResourcesOutputFile string        `mapstructure:"resources_output_file" description:"path for generated project/client ID JSON" default:""`
-	Timeout             time.Duration `mapstructure:"timeout" description:"timeout for Zitadel provisioning" default:"30s"`
-}
-
 type BootstrapInitialAdmin struct {
-	TenantID    string `mapstructure:"tenant_id" description:"initial tenant receiving the first administrator" default:""`
-	LoginName   string `mapstructure:"login_name" description:"exact Zitadel login name to resolve when subject is empty" default:""`
-	Subject     string `mapstructure:"subject" description:"existing identity subject for external Zitadel" default:""`
-	DisplayName string `mapstructure:"display_name" description:"display name used when subject is configured directly" default:""`
-	Email       string `mapstructure:"email" description:"email used when subject is configured directly" default:""`
+	TenantID     string `mapstructure:"tenant_id" description:"initial tenant receiving the first administrator" default:""`
+	LoginName    string `mapstructure:"login_name" description:"initial local administrator login name" default:""`
+	Password     string `mapstructure:"password" description:"initial password; prefer password_file" default:""`
+	PasswordFile string `mapstructure:"password_file" description:"file containing the initial password" default:""`
+	DisplayName  string `mapstructure:"display_name" description:"initial administrator display name" default:""`
+	Email        string `mapstructure:"email" description:"initial administrator email" default:""`
 }
 
 type Authz struct {
-	SpiceDB spicedbx.Config  `mapstructure:"spicedb" group:"spicedb"`
-	Outbox  iam.OutboxConfig `mapstructure:"outbox" group:"outbox"`
+	Enabled bool `mapstructure:"enabled" description:"enable local database-backed authorization" default:"true"`
 }
 
 // Cors configures cross-origin resource sharing on the REST server. Disabled by
@@ -90,9 +82,9 @@ type Security struct {
 
 // Redis configures the shared Redis client, supporting standalone, sentinel, and
 // cluster deployments via go-redis's universal client:
-//   - one Addrs entry, no MasterName     → standalone
-//   - MasterName set (Addrs = sentinels) → sentinel / failover
-//   - multiple Addrs, no MasterName      → cluster
+//   - one Addrs entry, no MasterName     -> standalone
+//   - MasterName set (Addrs = sentinels) -> sentinel / failover
+//   - multiple Addrs, no MasterName      -> cluster
 //
 // Empty Addrs disables Redis (and therefore rate limiting).
 type Redis struct {
@@ -104,9 +96,10 @@ type Redis struct {
 	DB           int      `mapstructure:"db" description:"redis database index" default:"0"`
 }
 
-// RateLimit configures the Redis-backed rate limiter. It enforces per-IP and
-// per-account dimensions independently; each is applied only when enabled with a
-// positive rate. Requires a configured Redis; disabled otherwise.
+// RateLimit configures the Redis-backed rate limiter. It enforces per-IP
+// dimensions; per-account limiting should only be enabled behind a trusted
+// reverse proxy that authenticates the caller and sets the account header.
+// Requires a configured Redis; disabled otherwise.
 type RateLimit struct {
 	Enabled bool        `mapstructure:"enabled" description:"enable rate limiting (requires redis)" default:"false"`
 	Prefix  string      `mapstructure:"prefix" description:"redis key prefix" default:"rl"`
@@ -123,14 +116,16 @@ type RateRule struct {
 	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
 }
 
-// AccountRule is a RateRule plus the header carrying the account id. When auth is
-// added, the account key can move from this header to the request context.
+// AccountRule is a RateRule plus the header carrying the account id.
+// IMPORTANT: only enable this dimension when a trusted reverse proxy
+// authenticates the caller and sets this header. Client-supplied headers
+// are trivially rotated to bypass per-account limits.
 type AccountRule struct {
 	Enabled bool          `mapstructure:"enabled" description:"enable this dimension" default:"false"`
 	Rate    int           `mapstructure:"rate" description:"allowed requests per period" default:"0"`
 	Period  time.Duration `mapstructure:"period" description:"rate window, e.g. 1m" default:"1m"`
 	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
-	Header  string        `mapstructure:"header" description:"header carrying the account id" default:"X-Account-Id"`
+	Header  string        `mapstructure:"header" description:"header carrying the account id; only trust this when the proxy sets it after authentication" default:"X-Account-Id"`
 }
 
 type Log struct {
@@ -154,25 +149,12 @@ type Log struct {
 }
 
 type RestServer struct {
-	Host string `mapstructure:"host" description:"host" default:"0.0.0.0"`
-	Port int    `mapstructure:"port" description:"http/rest port" default:"8080"`
+	Host           string   `mapstructure:"host" description:"host" default:"0.0.0.0"`
+	Port           int      `mapstructure:"port" description:"http/rest port" default:"8080"`
+	TrustedProxies []string `mapstructure:"trusted_proxies" description:"CIDRs allowed to supply X-Forwarded-For; empty trusts no proxy"`
 }
 
 type GrpcServer struct {
 	Host string `mapstructure:"host" description:"host" default:"0.0.0.0"`
 	Port int    `mapstructure:"port" description:"grpc port" default:"9090"`
-}
-
-// logLevel parses c.Log.Level into a slog.Level; invalid values default to Info.
-func (c Config) logLevel() slog.Level {
-	switch c.Log.Level {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }

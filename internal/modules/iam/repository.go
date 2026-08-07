@@ -2,17 +2,15 @@ package iam
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
-
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type roleRow struct {
@@ -30,6 +28,7 @@ type permissionRow struct {
 	TenantID       string `bun:"tenant_id,pk"`
 	RoleID         string `bun:"role_id,pk"`
 	PermissionCode string `bun:"permission_code,pk"`
+	ConditionJSON  string `bun:"condition_json"`
 	CreatedAt      int64
 }
 
@@ -41,45 +40,19 @@ type memberRow struct {
 	CreatedAt     int64
 }
 
-type outboxRow struct {
-	bun.BaseModel    `bun:"table:authz_outbox"`
-	ID               string `bun:"id,pk"`
-	TenantID         string
-	RelationshipKey  string
-	ResourceType     string
-	ResourceID       string
-	ResourceRelation string
-	SubjectType      string
-	SubjectID        string
-	SubjectRelation  string
-	Operation        string
-	Version          int64
-	Status           string
-	Attempts         int
-	AvailableAt      int64
-	LockedBy         string
-	LockedAt         int64
-	LastError        string
-	ZedToken         string
-	CreatedAt        int64
-	UpdatedAt        int64
-	DeliveredAt      int64
-}
-
-type OutboxMessage struct {
-	ID           string
-	TenantID     string
-	Operation    spicedbx.RelationshipOperation
-	Relationship spicedbx.Relationship
-	Version      int64
-	Attempts     int
+type platformAdministratorRow struct {
+	bun.BaseModel `bun:"table:iam_platform_administrators"`
+	PrincipalID   string `bun:"principal_id,pk"`
+	CreatedAt     int64
 }
 
 type Repository struct {
-	db      *bun.DB
-	nextID  IDGenerator
-	dialect string
-	now     func() time.Time
+	db            *bun.DB
+	executor      bun.IDB
+	inTransaction bool
+	nextID        IDGenerator
+	dialect       string
+	now           func() time.Time
 }
 
 func NewRepository(db *bun.DB, nextID IDGenerator) *Repository {
@@ -90,7 +63,23 @@ func NewRepository(db *bun.DB, nextID IDGenerator) *Repository {
 	if dialect == "pg" {
 		dialect = "postgres"
 	}
-	return &Repository{db: db, nextID: nextID, dialect: dialect, now: time.Now}
+	return &Repository{db: db, executor: db, nextID: nextID, dialect: dialect, now: time.Now}
+}
+
+func (r *Repository) withExecutor(executor bun.IDB) *Repository {
+	transactional := *r
+	transactional.executor = executor
+	transactional.inTransaction = true
+	return &transactional
+}
+
+func (r *Repository) runInTx(ctx context.Context, fn func(context.Context, bun.IDB) error) error {
+	if r.inTransaction {
+		return fn(ctx, r.executor)
+	}
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return fn(ctx, tx)
+	})
 }
 
 func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description string) (Role, error) {
@@ -100,8 +89,8 @@ func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description
 	}
 	now := r.now().UTC().UnixMilli()
 	row := roleRow{TenantID: tenantID, ID: id, Name: name, Description: description, CreatedAt: now, UpdatedAt: now}
-	if _, err := r.db.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+	if _, err := r.executor.NewInsert().Model(&row).Exec(ctx); err != nil {
+		if bunx.IsUniqueViolation(err) {
 			return Role{}, ErrRoleNameConflict
 		}
 		return Role{}, fmt.Errorf("insert role: %w", err)
@@ -109,9 +98,25 @@ func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description
 	return roleFromRow(row), nil
 }
 
+// GrantPlatformAdministrator idempotently grants the built-in platform role.
+// Platform permissions are deliberately not stored in tenant role tables.
+func (r *Repository) GrantPlatformAdministrator(ctx context.Context, principalID string) (bool, error) {
+	principalID = strings.TrimSpace(principalID)
+	if principalID == "" || len(principalID) > 64 {
+		return false, fmt.Errorf("invalid platform administrator principal")
+	}
+	row := platformAdministratorRow{PrincipalID: principalID, CreatedAt: r.now().UTC().UnixMilli()}
+	result, err := r.executor.NewInsert().Model(&row).Ignore().Exec(ctx)
+	if err != nil {
+		return false, fmt.Errorf("grant platform administrator: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return affected > 0, nil
+}
+
 func (r *Repository) ListRoles(ctx context.Context, tenantID string) ([]Role, error) {
 	var rows []roleRow
-	if err := r.db.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name ASC", "id ASC").Scan(ctx); err != nil {
+	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list roles: %w", err)
 	}
 	roles := make([]Role, 0, len(rows))
@@ -122,7 +127,7 @@ func (r *Repository) ListRoles(ctx context.Context, tenantID string) ([]Role, er
 }
 
 func (r *Repository) GetRole(ctx context.Context, tenantID, roleID string) (Role, error) {
-	row, err := getRoleRow(ctx, r.db, tenantID, roleID)
+	row, err := getRoleRow(ctx, r.executor, tenantID, roleID)
 	if err != nil {
 		return Role{}, err
 	}
@@ -131,14 +136,14 @@ func (r *Repository) GetRole(ctx context.Context, tenantID, roleID string) (Role
 
 func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID, name, description string) (Role, error) {
 	now := r.now().UTC().UnixMilli()
-	result, err := r.db.NewUpdate().Model((*roleRow)(nil)).
+	result, err := r.executor.NewUpdate().Model((*roleRow)(nil)).
 		Set("name = ?", name).
 		Set("description = ?", description).
 		Set("updated_at = ?", now).
 		Where("tenant_id = ? AND id = ?", tenantID, roleID).
 		Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Role{}, ErrRoleNameConflict
 		}
 		return Role{}, fmt.Errorf("update role: %w", err)
@@ -150,33 +155,21 @@ func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID, name, des
 }
 
 func (r *Repository) DeleteRole(ctx context.Context, tenantID, roleID string) error {
-	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
 			return err
-		}
-		var permissions []permissionRow
-		if err := tx.NewSelect().Model(&permissions).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Scan(ctx); err != nil {
-			return fmt.Errorf("list role permissions for delete: %w", err)
-		}
-		var members []memberRow
-		if err := tx.NewSelect().Model(&members).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Scan(ctx); err != nil {
-			return fmt.Errorf("list role members for delete: %w", err)
-		}
-		for _, permission := range permissions {
-			if err := r.upsertOutbox(ctx, tx, tenantID, spicedbx.RelationshipDelete, permissionRelationship(tenantID, roleID, permission.PermissionCode)); err != nil {
-				return err
-			}
-		}
-		for _, member := range members {
-			if err := r.upsertOutbox(ctx, tx, tenantID, spicedbx.RelationshipDelete, memberRelationship(roleID, member.UserSubject)); err != nil {
-				return err
-			}
 		}
 		if _, err := tx.NewDelete().Model((*permissionRow)(nil)).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Exec(ctx); err != nil {
 			return fmt.Errorf("delete role permissions: %w", err)
 		}
 		if _, err := tx.NewDelete().Model((*memberRow)(nil)).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Exec(ctx); err != nil {
 			return fmt.Errorf("delete role members: %w", err)
+		}
+		if _, err := tx.NewDelete().Model((*groupRoleBindingRow)(nil)).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Exec(ctx); err != nil {
+			return fmt.Errorf("delete group role bindings: %w", err)
+		}
+		if _, err := tx.NewDelete().Model((*positionRoleBindingRow)(nil)).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Exec(ctx); err != nil {
+			return fmt.Errorf("delete position role bindings: %w", err)
 		}
 		if _, err := tx.NewDelete().Model((*roleRow)(nil)).Where("tenant_id = ? AND id = ?", tenantID, roleID).Exec(ctx); err != nil {
 			return fmt.Errorf("delete role: %w", err)
@@ -186,21 +179,21 @@ func (r *Repository) DeleteRole(ctx context.Context, tenantID, roleID string) er
 }
 
 func (r *Repository) GrantPermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
-	return r.changePermission(ctx, tenantID, roleID, code, spicedbx.RelationshipTouch)
+	return r.changePermission(ctx, tenantID, roleID, code, true)
 }
 
 func (r *Repository) RevokePermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
-	return r.changePermission(ctx, tenantID, roleID, code, spicedbx.RelationshipDelete)
+	return r.changePermission(ctx, tenantID, roleID, code, false)
 }
 
-func (r *Repository) changePermission(ctx context.Context, tenantID, roleID, code string, operation spicedbx.RelationshipOperation) (bool, error) {
+func (r *Repository) changePermission(ctx context.Context, tenantID, roleID, code string, grant bool) (bool, error) {
 	var changed bool
-	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
 			return err
 		}
 		now := r.now().UTC().UnixMilli()
-		if operation == spicedbx.RelationshipTouch {
+		if grant {
 			row := permissionRow{TenantID: tenantID, RoleID: roleID, PermissionCode: code, CreatedAt: now}
 			result, err := tx.NewInsert().Model(&row).Ignore().Exec(ctx)
 			if err != nil {
@@ -218,38 +211,91 @@ func (r *Repository) changePermission(ctx context.Context, tenantID, roleID, cod
 				changed = true
 			}
 		}
-		return r.upsertOutbox(ctx, tx, tenantID, operation, permissionRelationship(tenantID, roleID, code))
+		return nil
 	})
 	return changed, err
 }
 
 func (r *Repository) ListPermissions(ctx context.Context, tenantID, roleID string) ([]string, error) {
-	if err := ensureRole(ctx, r.db, tenantID, roleID); err != nil {
+	grants, err := r.ListPermissionGrants(ctx, tenantID, roleID)
+	if err != nil {
 		return nil, err
 	}
-	codes := make([]string, 0)
-	if err := r.db.NewSelect().Model((*permissionRow)(nil)).Column("permission_code").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("permission_code ASC").Scan(ctx, &codes); err != nil {
-		return nil, fmt.Errorf("list role permissions: %w", err)
+	codes := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		codes = append(codes, grant.PermissionCode)
 	}
 	return codes, nil
 }
 
+func (r *Repository) ListPermissionGrants(ctx context.Context, tenantID, roleID string) ([]RolePermissionGrant, error) {
+	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
+		return nil, err
+	}
+	rows := make([]permissionRow, 0)
+	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("permission_code ASC").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("list role permissions: %w", err)
+	}
+	grants := make([]RolePermissionGrant, 0, len(rows))
+	for _, row := range rows {
+		grants = append(grants, rolePermissionGrantFromRow(row))
+	}
+	return grants, nil
+}
+
+func (r *Repository) SetPermissionCondition(ctx context.Context, tenantID, roleID, code string, condition json.RawMessage) (RolePermissionGrant, bool, error) {
+	var grant RolePermissionGrant
+	var changed bool
+	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
+		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
+			return err
+		}
+		var row permissionRow
+		if err := tx.NewSelect().Model(&row).Where("tenant_id = ? AND role_id = ? AND permission_code = ?", tenantID, roleID, code).Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrRolePermissionNotGranted
+			}
+			return fmt.Errorf("get role permission: %w", err)
+		}
+		if row.ConditionJSON == string(condition) {
+			grant = rolePermissionGrantFromRow(row)
+			return nil
+		}
+		if _, err := tx.NewUpdate().Model((*permissionRow)(nil)).Set("condition_json = ?", string(condition)).
+			Where("tenant_id = ? AND role_id = ? AND permission_code = ?", tenantID, roleID, code).Exec(ctx); err != nil {
+			return fmt.Errorf("update role permission condition: %w", err)
+		}
+		row.ConditionJSON = string(condition)
+		grant, changed = rolePermissionGrantFromRow(row), true
+		return nil
+	})
+	return grant, changed, err
+}
+
+func rolePermissionGrantFromRow(row permissionRow) RolePermissionGrant {
+	var condition json.RawMessage
+	if row.ConditionJSON != "" {
+		condition = json.RawMessage(row.ConditionJSON)
+	}
+	return RolePermissionGrant{PermissionCode: row.PermissionCode, Condition: condition, CreatedAt: time.UnixMilli(row.CreatedAt).UTC()}
+}
+
 func (r *Repository) AddMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return r.changeMember(ctx, tenantID, roleID, subject, spicedbx.RelationshipTouch)
+	return r.changeMember(ctx, tenantID, roleID, subject, true)
 }
 
 func (r *Repository) RemoveMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return r.changeMember(ctx, tenantID, roleID, subject, spicedbx.RelationshipDelete)
+	return r.changeMember(ctx, tenantID, roleID, subject, false)
 }
 
-func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject string, operation spicedbx.RelationshipOperation) (bool, error) {
+func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject string, add bool) (bool, error) {
 	var changed bool
-	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
 			return err
 		}
 		now := r.now().UTC().UnixMilli()
-		if operation == spicedbx.RelationshipTouch {
+		if add {
 			row := memberRow{TenantID: tenantID, RoleID: roleID, UserSubject: subject, CreatedAt: now}
 			result, err := tx.NewInsert().Model(&row).Ignore().Exec(ctx)
 			if err != nil {
@@ -267,66 +313,20 @@ func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject
 				changed = true
 			}
 		}
-		return r.upsertOutbox(ctx, tx, tenantID, operation, memberRelationship(roleID, subject))
+		return nil
 	})
 	return changed, err
 }
 
 func (r *Repository) ListMembers(ctx context.Context, tenantID, roleID string) ([]string, error) {
-	if err := ensureRole(ctx, r.db, tenantID, roleID); err != nil {
+	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
 		return nil, err
 	}
 	subjects := make([]string, 0)
-	if err := r.db.NewSelect().Model((*memberRow)(nil)).Column("user_subject").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("user_subject ASC").Scan(ctx, &subjects); err != nil {
+	if err := r.executor.NewSelect().Model((*memberRow)(nil)).Column("user_subject").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("user_subject ASC").Scan(ctx, &subjects); err != nil {
 		return nil, fmt.Errorf("list role members: %w", err)
 	}
 	return subjects, nil
-}
-
-func (r *Repository) upsertOutbox(ctx context.Context, db bun.IDB, tenantID string, operation spicedbx.RelationshipOperation, rel spicedbx.Relationship) error {
-	id, err := r.nextID()
-	if err != nil {
-		return fmt.Errorf("generate outbox id: %w", err)
-	}
-	now := r.now().UTC().UnixMilli()
-	args := []any{id, tenantID, relationshipKey(tenantID, rel), rel.Resource.Type, rel.Resource.ID, rel.Relation, rel.Subject.Object.Type, rel.Subject.Object.ID, rel.Subject.Relation, operation, 1, OutboxPending, 0, now, "", 0, "", "", now, now, 0}
-	query := outboxUpsertSQL(r.dialect)
-	if query == "" {
-		return fmt.Errorf("unsupported iam database dialect %q", r.dialect)
-	}
-	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("upsert authz outbox: %w", err)
-	}
-	return nil
-}
-
-func outboxUpsertSQL(dialect string) string {
-	const insert = `INSERT INTO authz_outbox
- (id, tenant_id, relationship_key, resource_type, resource_id, resource_relation, subject_type, subject_id, subject_relation, operation, version, status, attempts, available_at, locked_by, locked_at, last_error, zed_token, created_at, updated_at, delivered_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if dialect == "mysql" {
-		return insert + ` ON DUPLICATE KEY UPDATE
- operation = VALUES(operation), version = version + 1, updated_at = VALUES(updated_at),
- status = IF(status = 'processing', status, 'pending'),
- attempts = IF(status = 'processing', attempts, 0),
- available_at = IF(status = 'processing', available_at, VALUES(available_at)),
- locked_by = IF(status = 'processing', locked_by, ''),
- locked_at = IF(status = 'processing', locked_at, 0),
- last_error = IF(status = 'processing', last_error, ''),
- delivered_at = IF(status = 'processing', delivered_at, 0)`
-	}
-	if dialect == "sqlite" || dialect == "postgres" {
-		return insert + ` ON CONFLICT (tenant_id, relationship_key) DO UPDATE SET
- operation = excluded.operation, version = authz_outbox.version + 1, updated_at = excluded.updated_at,
- status = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.status ELSE 'pending' END,
- attempts = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.attempts ELSE 0 END,
- available_at = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.available_at ELSE excluded.available_at END,
- locked_by = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.locked_by ELSE '' END,
- locked_at = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.locked_at ELSE 0 END,
- last_error = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.last_error ELSE '' END,
- delivered_at = CASE WHEN authz_outbox.status = 'processing' THEN authz_outbox.delivered_at ELSE 0 END`
-	}
-	return ""
 }
 
 func getRoleRow(ctx context.Context, db bun.IDB, tenantID, roleID string) (roleRow, error) {
@@ -352,26 +352,3 @@ func roleFromRow(row roleRow) Role {
 	}
 }
 
-func permissionRelationship(tenantID, roleID, code string) spicedbx.Relationship {
-	return spicedbx.Relationship{
-		Resource: spicedbx.ObjectRef{Type: "tenant", ID: tenantID}, Relation: code + "_role",
-		Subject: spicedbx.SubjectRef{Object: spicedbx.ObjectRef{Type: "role", ID: roleID}, Relation: "member"},
-	}
-}
-
-func memberRelationship(roleID, subject string) spicedbx.Relationship {
-	return spicedbx.Relationship{
-		Resource: spicedbx.ObjectRef{Type: "role", ID: roleID}, Relation: "member",
-		Subject: spicedbx.SubjectRef{Object: spicedbx.ObjectRef{Type: "user", ID: subject}},
-	}
-}
-
-func relationshipKey(tenantID string, rel spicedbx.Relationship) string {
-	sum := sha256.Sum256([]byte(tenantID + "\x00" + rel.String()))
-	return hex.EncodeToString(sum[:])
-}
-
-func isUniqueViolation(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate entry") || strings.Contains(message, "duplicate key")
-}

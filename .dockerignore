@@ -2,7 +2,9 @@
 .local
 deploy/compose/.env
 deploy/compose/secrets
-web/admin/node_modules
-web/admin/dist
+**/node_modules
+**/dist
+**/.astro
+**/.turbo
 **/*.cover
 **/coverage

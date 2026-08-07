@@ -1,0 +1,13 @@
+{
+  "invalid_audit_time": "审计时间范围无效。请使用 RFC 3339 时间格式，并确保结束时间晚于开始时间。",
+  "audit_event_not_found": "当前租户中不存在指定的审计事件，请核对事件标识符和租户后重试。",
+  "invalid_audit_query": "审计查询条件无效，请检查租户、筛选条件和分页参数。",
+  "audit_integrity_failed": "审计完整性校验失败，事件链已被改动或数据不完整。请停止依赖本次导出并联系管理员。",
+  "audit_unavailable": "审计服务无法完成该请求，请稍后重试；若问题持续，请联系管理员。",
+  "audit_anchor_not_enabled": "当前部署未启用外部审计锚定。请在服务配置中启用 audit.anchor 后重试。",
+  "audit_anchor_empty": "当前租户还没有可锚定的审计事件。",
+  "audit_anchor_already_exists": "该链头序列已存在审计锚定记录。锚定记录只写一次，不可替换。",
+  "audit_anchor_unavailable": "无法连接外部审计锚定存储。请检查 S3 兼容端点与凭据后重试。",
+  "audit_retention_invalid": "审计保留策略无效。最小保留时长必须至少为 1 天，且归档阈值不得早于最小保留时长。",
+  "audit_root_signing_not_enabled": "审计根签名未启用。请使用 base64 编码的 32 字节 Ed25519 种子配置 audit.anchor.signing_key，然后重试。"
+}

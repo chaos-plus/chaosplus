@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
@@ -41,7 +44,7 @@ func TestShutdownNoServersIsNoop(t *testing.T) {
 // ListenAndServe/Serve returns http.ErrServerClosed after shutdown.
 func TestShutdownStopsRestServer(t *testing.T) {
 	ln := listen(t)
-	srv := &http.Server{Handler: http.NewServeMux()}
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: 5 * time.Second}
 
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(ln) }()
@@ -110,7 +113,7 @@ func TestAwaitShutdownReturnsServeError(t *testing.T) {
 // all down).
 func TestAwaitShutdownStopsServersOnServeError(t *testing.T) {
 	ln := listen(t)
-	srv := &http.Server{Handler: http.NewServeMux()}
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: 5 * time.Second}
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(ln) }()
 
@@ -132,4 +135,56 @@ func TestAwaitShutdownStopsServersOnServeError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("rest server was not stopped after peer failure")
 	}
+}
+
+func TestNewAppNormalizesName(t *testing.T) {
+	assert.Equal(t, "CHAOSPLUS", NewApp(Config{Name: "chaosplus"}).name)
+	assert.NotEmpty(t, NewApp(Config{}).name)
+}
+
+func TestRunReturnsBootstrapFailure(t *testing.T) {
+	application := NewApp(Config{Timezone: "Invalid/Timezone"})
+	assert.ErrorContains(t, application.Run(), "bootstrap")
+}
+
+func TestRunRealServersStopsOnServeFailure(t *testing.T) {
+	application := NewApp(Config{
+		Name: "lifecycle", Timezone: "UTC",
+		RestServer: RestServer{Host: "127.0.0.1", Port: 0},
+		GrpcServer: GrpcServer{Host: "127.0.0.1", Port: 0},
+	})
+	expected := errors.New("real server termination")
+	application.serveErr <- expected
+	assert.ErrorIs(t, application.Run(), expected)
+}
+
+func TestRunStopsAfterGRPCBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+	application := NewApp(Config{
+		Timezone: "UTC", Database: map[string]bunx.Datasource{"primary": {Type: "sqlite", Dsn: ":memory:", Writable: true}},
+		Migrations: Migrations{Auto: true},
+		GrpcServer: GrpcServer{Host: "127.0.0.1", Port: port},
+	})
+	assert.ErrorContains(t, application.Run(), "start grpc server")
+}
+
+func TestRunStopsAfterRESTBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+	application := NewApp(Config{
+		Timezone:   "UTC",
+		GrpcServer: GrpcServer{Host: "127.0.0.1", Port: 0},
+		RestServer: RestServer{Host: "127.0.0.1", Port: port},
+	})
+	assert.ErrorContains(t, application.Run(), "start rest server")
+}
+
+func TestRunDebugModePropagatesBootstrapFailure(t *testing.T) {
+	application := NewApp(Config{Debug: true, Timezone: "Invalid/Timezone"})
+	assert.ErrorContains(t, application.Run(), "bootstrap")
 }

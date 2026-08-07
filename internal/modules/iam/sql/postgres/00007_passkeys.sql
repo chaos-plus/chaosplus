@@ -1,0 +1,35 @@
+-- +goose Up
+CREATE TABLE iam_passkey_users (
+    principal_id TEXT NOT NULL PRIMARY KEY REFERENCES iam_principals (id) ON DELETE CASCADE,
+    user_handle TEXT NOT NULL UNIQUE,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE iam_passkeys (
+    id_hash TEXT NOT NULL PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    credential_ciphertext TEXT NOT NULL,
+    sign_count BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    last_used_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_iam_passkeys_principal ON iam_passkeys (principal_id, created_at);
+
+CREATE TABLE iam_passkey_challenges (
+    id_hash TEXT NOT NULL PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('registration', 'login')),
+    principal_id TEXT NOT NULL DEFAULT '',
+    return_url TEXT NOT NULL DEFAULT '',
+    session_data TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    consumed_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_iam_passkey_challenges_expiry ON iam_passkey_challenges (expires_at, consumed_at);
+
+-- +goose Down
+DROP TABLE IF EXISTS iam_passkey_challenges;
+DROP TABLE IF EXISTS iam_passkeys;
+DROP TABLE IF EXISTS iam_passkey_users;

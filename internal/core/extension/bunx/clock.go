@@ -26,7 +26,7 @@ func NowMillisExpr(dialect string) string {
 	case "mysql":
 		// NOW(3) carries millisecond precision; UNIX_TIMESTAMP yields seconds.
 		return "CAST(ROUND(UNIX_TIMESTAMP(NOW(3)) * 1000) AS SIGNED)"
-	case "pg", "postgres", "postgresql":
+	case "pg", "pgsql", "postgres", "postgresql":
 		// clock_timestamp() is the real wall clock (it advances within a
 		// transaction), unlike now()/transaction_timestamp().
 		return "CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)"

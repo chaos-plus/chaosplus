@@ -1,0 +1,12 @@
+{
+  "principal_not_found": "当前租户中不存在指定的身份主体，请核对主体标识符和租户后重试。",
+  "login_name_exists": "该登录名已被使用，请选择其他登录名。",
+  "invalid_principal": "身份主体数据无效，请检查登录名、资料、邮箱和密码要求。",
+  "last_tenant_administrator": "不能移除或停用租户中最后一个有效管理员，请先分配另一个有效管理员。",
+  "identity_unavailable": "身份服务无法完成该请求，请稍后重试；若问题持续，请联系管理员。",
+  "service_account_not_found": "当前租户中未找到指定的服务账号，请核对账号标识和租户后重试。",
+  "service_account_credential_not_found": "未找到指定的服务账号凭据，请刷新凭据列表后重试。",
+  "service_account_version_conflict": "服务账号已被其他操作修改，请刷新账号后重新提交变更。",
+  "service_account_credential_limit": "该服务账号的有效凭据数量已达上限，请先撤销不再使用的凭据。",
+  "invalid_service_account": "服务账号数据无效，请检查名称、状态、有效期、凭据作用域和租户状态。"
+}

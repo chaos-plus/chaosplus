@@ -16,6 +16,10 @@
 coverage.*
 *.prof
 
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 *.db
 
 # Runtime logs
@@ -47,10 +51,6 @@ configs/.env
 .DS_Store
 Thumbs.db
 
-
-
-/.github/*
-!/.github/workflows/
 
 
 /*.png

@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
-	guidapi "github.com/chaos-plus/chaosplus/internal/infra/guid/api"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 )
 
@@ -110,10 +109,10 @@ func (m *Module) Stop(ctx context.Context) error {
 // RegisterREST mounts the guid HTTP endpoints, injecting the package-level id
 // source so the transport layer stays decoupled from the generator.
 func (m *Module) RegisterREST(api huma.API) {
-	guidapi.RegisterREST(api, Next)
+	RegisterREST(api, Next)
 }
 
 // RegisterGRPC registers the guid gRPC service, injecting the same id source.
 func (m *Module) RegisterGRPC(server *grpc.Server) {
-	guidapi.RegisterGRPC(server, Next)
+	RegisterGRPC(server, Next)
 }

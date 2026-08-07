@@ -1,0 +1,35 @@
+# build output
+dist/
+# generated types
+.astro/
+
+.vscode/
+
+# dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# logs
+*.log*
+
+.playwright*/
+
+
+# environment variables
+.env
+.env.production
+
+# macOS-specific files
+.DS_Store
+
+*.png
+!public/img/*.png
+*.pdf
+
+# Durable design-source and Figma QA evidence.
+!docs/superpowers/assets/screenshots/**/*.png
+.tmp
+.tmp/*
+.tmp/**/*
+.stitch*/

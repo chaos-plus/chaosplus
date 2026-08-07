@@ -169,6 +169,7 @@ func NewModuleI18n(fallback, dir string) *I18n {
 	if err := inst.LoadDir(dir); err != nil {
 		// Non-fatal: fallback to key passthrough when locale files are missing.
 		// This is common during unit tests that run without locale file paths.
+		slog.Warn("module i18n locales unavailable", "dir", dir, "error", err)
 	}
 	return inst
 }
@@ -187,6 +188,63 @@ func NewModuleI18nFS(fallback string, fsys fs.FS, dir string) *I18n {
 		slog.Error("i18n: failed to load module locales", "dir", dir, "error", err)
 	}
 	return inst
+}
+
+// RegisterFS merges an embedded module locale bundle into the global
+// translator. Every supported locale must define the same non-empty keys as
+// en-US, and conflicting translations fail startup instead of being silently
+// overwritten.
+func RegisterFS(fsys fs.FS, dir string) error {
+	if defaultI18n == nil {
+		return fmt.Errorf("register locales: i18n is not initialized")
+	}
+	bundle := New(Base)
+	if err := bundle.LoadFS(fsys, dir); err != nil {
+		return err
+	}
+	bundle.mu.RLock()
+	defer bundle.mu.RUnlock()
+	base := bundle.messages[Base]
+	if len(base) == 0 {
+		return fmt.Errorf("register locales: %s is missing or empty", Base)
+	}
+	for _, locale := range Supported() {
+		messages := bundle.messages[locale.Code]
+		if len(messages) == 0 {
+			return fmt.Errorf("register locales: %s is missing or empty", locale.Code)
+		}
+		for key, value := range base {
+			if key == "" || value == "" || messages[key] == "" {
+				return fmt.Errorf("register locales: %s is missing key %q", locale.Code, key)
+			}
+		}
+		for key := range messages {
+			if base[key] == "" {
+				return fmt.Errorf("register locales: %s has key %q missing from %s", locale.Code, key, Base)
+			}
+		}
+	}
+
+	defaultI18n.mu.Lock()
+	defer defaultI18n.mu.Unlock()
+	for locale, messages := range bundle.messages {
+		target := defaultI18n.messages[locale]
+		if target == nil {
+			target = make(map[string]string, len(messages))
+			defaultI18n.messages[locale] = target
+		}
+		for key, value := range messages {
+			if current, ok := target[key]; ok && current != value {
+				return fmt.Errorf("register locales: conflicting %s translation for %q", locale, key)
+			}
+		}
+	}
+	for locale, messages := range bundle.messages {
+		for key, value := range messages {
+			defaultI18n.messages[locale][key] = value
+		}
+	}
+	return nil
 }
 
 // default global instance

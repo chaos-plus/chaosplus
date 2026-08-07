@@ -14,8 +14,6 @@ random_hex() {
   od -An -N "${1:-24}" -tx1 /dev/urandom | tr -d ' \n'
 }
 
-# 32 raw random bytes, base64-encoded: chaosplus decodes this to a full-entropy
-# 256-bit AES key (a 32-char hex string would only carry 128 bits).
 random_key_base64() {
   head -c 32 /dev/urandom | base64 | tr -d '\n'
 }
@@ -36,32 +34,20 @@ write_secret() {
 }
 
 POSTGRES=$(random_hex 24)
-ZITADEL_DB=$(random_hex 24)
-SPICEDB_DB=$(random_hex 24)
 MIGRATOR=$(random_hex 24)
 RUNTIME=$(random_hex 24)
 REDIS=$(random_hex 24)
-SPICEDB_TOKEN=$(random_hex 32)
 ADMIN="Cp!$(random_hex 16)"
-MASTER_KEY=$(random_hex 16)
-SESSION_KEY=$(random_key_base64)
-EXPIRATION=$(date -u -d '+1 year' '+%Y-%m-%dT%H:%M:%SZ')
 
 set_env POSTGRES_ADMIN_PASSWORD "$POSTGRES"
-set_env ZITADEL_DB_PASSWORD "$ZITADEL_DB"
-set_env SPICEDB_DB_PASSWORD "$SPICEDB_DB"
 set_env CHAOSPLUS_MIGRATOR_PASSWORD "$MIGRATOR"
 set_env CHAOSPLUS_RUNTIME_PASSWORD "$RUNTIME"
 set_env REDIS_PASSWORD "$REDIS"
-set_env SPICEDB_TOKEN "$SPICEDB_TOKEN"
-set_env ZITADEL_FIRST_ADMIN_PASSWORD "$ADMIN"
-set_env ZITADEL_MACHINE_KEY_EXPIRATION "$EXPIRATION"
-set_env ZITADEL_LOGIN_PAT_EXPIRATION "$EXPIRATION"
 
-write_secret zitadel_masterkey "$MASTER_KEY"
 write_secret redis_password "$REDIS"
-write_secret spicedb_token "$SPICEDB_TOKEN"
-write_secret session_encryption_key "$SESSION_KEY"
+write_secret authn_signing_key "$(random_key_base64)"
+write_secret authn_mfa_key "$(random_key_base64)"
+write_secret initial_admin_password "$ADMIN"
 write_secret chaosplus_migration_dsn "postgres://chaosplus_migrator:${MIGRATOR}@postgres:5432/chaosplus?sslmode=disable"
 write_secret chaosplus_runtime_dsn "postgres://chaosplus_app:${RUNTIME}@postgres:5432/chaosplus?sslmode=disable"
 

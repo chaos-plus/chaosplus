@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip"
@@ -18,6 +19,8 @@ import (
 // under this 64 KiB ceiling.
 const maxResponseBytes = 64 * 1024
 
+const defaultIPAPIBaseURL = "https://ipapi.co"
+
 func init() {
 	geoip.RegisterGeoIpProvider("ipapi", &IPAPI{})
 }
@@ -28,18 +31,13 @@ var defaultLookupClient = &http.Client{Timeout: 3 * time.Second}
 
 // IPAPIProvider uses ipapi.co free tier for lookups.
 type IPAPI struct {
-	// client overrides the HTTP client used for lookups; nil uses the shared
-	// defaultLookupClient. Unexported so tests can inject without exposing it.
-	client *http.Client
+	BaseURL string `mapstructure:"base_url" description:"ipapi-compatible lookup endpoint"`
 }
 
-// httpClient returns the provider's HTTP client, falling back to the shared
-// read-only default when none was injected.
-func (p *IPAPI) httpClient() *http.Client {
-	if p.client != nil {
-		return p.client
+func (p *IPAPI) Configure(c geoip.GeoIpConfig) {
+	if baseURL := strings.TrimRight(c.Ipapi.BaseURL, "/"); baseURL != "" {
+		p.BaseURL = baseURL
 	}
-	return defaultLookupClient
 }
 
 func (p *IPAPI) GetIpInfo(ip string) (*geoip.GeoIp, error) {
@@ -53,8 +51,12 @@ func (p *IPAPI) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 		return nil, fmt.Errorf("invalid IP address: %s", ip)
 	}
 
-	url := fmt.Sprintf("https://ipapi.co/%s/json/", ip)
-	resp, err := p.httpClient().Get(url)
+	baseURL := strings.TrimRight(p.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = defaultIPAPIBaseURL
+	}
+	lookupURL := fmt.Sprintf("%s/%s/json/", baseURL, ip)
+	resp, err := defaultLookupClient.Get(lookupURL)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}

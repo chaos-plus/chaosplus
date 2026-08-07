@@ -1,0 +1,8 @@
+---
+import Default from '@astrojs/starlight/components/TableOfContents.astro';
+
+const { toc } = Astro.locals.starlightRoute;
+if (toc?.items[0]?.slug === '_top') toc.items = toc.items.slice(1);
+---
+
+<Default />

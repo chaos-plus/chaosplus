@@ -1,13 +1,7 @@
-// Package authn verifies Zitadel/OIDC bearer tokens and stores the authenticated
-// subject in request context. Authorization remains separate and is checked
-// against SpiceDB.
+// Package authn stores the authenticated local subject in request context.
 package authn
 
-import (
-	"context"
-
-	"github.com/chaos-plus/chaosplus/internal/core/extension/spicedbx"
-)
+import "context"
 
 type contextKey struct{}
 
@@ -22,11 +16,12 @@ func FromContext(ctx context.Context) (*Claims, bool) {
 	return claims, ok
 }
 
-// SubjectFromContext returns the SpiceDB subject represented by the token.
-func SubjectFromContext(ctx context.Context) (spicedbx.SubjectRef, bool) {
+// SubjectFromContext returns the verified token subject. Callers that require
+// a human principal must also check Claims.SubjectType.
+func SubjectFromContext(ctx context.Context) (string, bool) {
 	claims, ok := FromContext(ctx)
 	if !ok {
-		return spicedbx.SubjectRef{}, false
+		return "", false
 	}
-	return claims.SubjectRef(), true
+	return claims.Subject, true
 }

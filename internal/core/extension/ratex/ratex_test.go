@@ -4,24 +4,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis_rate/v10"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newRedis starts an in-memory Redis and returns a client pointed at it.
-func newRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
+func realRedis(t *testing.T) *redis.Client {
 	t.Helper()
-	mr, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(mr.Close)
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	address := os.Getenv("TEST_REDIS_ADDR")
+	if address == "" {
+		t.Skip("TEST_REDIS_ADDR is required for the real Redis integration test")
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: address})
 	t.Cleanup(func() { _ = rdb.Close() })
-	return rdb, mr
+	require.NoError(t, rdb.FlushDB(t.Context()).Err())
+	return rdb
 }
 
 // okHandler is the downstream handler; it records whether it was reached.
@@ -52,8 +54,28 @@ func TestIPKey(t *testing.T) {
 	assert.Equal(t, "203.0.113.9", IPKey(r))
 }
 
+func TestHeaderKey(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Account-Id", "account-42")
+
+	assert.Equal(t, "account-42", HeaderKey("X-Account-Id")(r))
+	assert.Empty(t, HeaderKey("X-Missing")(r))
+}
+
+func TestSetRateHeaders(t *testing.T) {
+	rr := httptest.NewRecorder()
+	setRateHeaders(rr, Limit(5, time.Minute, 5), &redis_rate.Result{
+		Remaining:  3,
+		ResetAfter: 1500 * time.Millisecond,
+	})
+
+	assert.Equal(t, "5", rr.Header().Get("X-RateLimit-Limit"))
+	assert.Equal(t, "3", rr.Header().Get("X-RateLimit-Remaining"))
+	assert.Equal(t, "2", rr.Header().Get("X-RateLimit-Reset"))
+}
+
 func TestHandler_IPLimit(t *testing.T) {
-	rdb, _ := newRedis(t)
+	rdb := realRedis(t)
 	// rate 2 / minute, burst 2 → third request in the same minute is blocked.
 	lim := New(rdb, "rl", Dimension{Name: "ip", Key: IPKey, Limit: Limit(2, time.Minute, 2)})
 
@@ -90,7 +112,7 @@ func TestHandler_IPLimit(t *testing.T) {
 }
 
 func TestHandler_PerKeyIsolation(t *testing.T) {
-	rdb, _ := newRedis(t)
+	rdb := realRedis(t)
 	lim := New(rdb, "rl", Dimension{Name: "ip", Key: IPKey, Limit: Limit(1, time.Minute, 1)})
 
 	mk := func(ip string) *http.Request {
@@ -114,7 +136,7 @@ func TestHandler_PerKeyIsolation(t *testing.T) {
 }
 
 func TestHandler_AccountDimension(t *testing.T) {
-	rdb, _ := newRedis(t)
+	rdb := realRedis(t)
 	lim := New(rdb, "rl", Dimension{Name: "account", Key: HeaderKey("X-Account-Id"), Limit: Limit(1, time.Minute, 1)})
 
 	withAcct := func(id string) *http.Request {
@@ -140,7 +162,7 @@ func TestHandler_AccountDimension(t *testing.T) {
 }
 
 func TestHandler_AnonymousSkipsAccountDimension(t *testing.T) {
-	rdb, _ := newRedis(t)
+	rdb := realRedis(t)
 	// Account limit of 1 with no header present: the dimension is skipped, so
 	// repeated anonymous requests are never blocked by it.
 	lim := New(rdb, "rl", Dimension{Name: "account", Key: HeaderKey("X-Account-Id"), Limit: Limit(1, time.Minute, 1)})
@@ -154,8 +176,8 @@ func TestHandler_AnonymousSkipsAccountDimension(t *testing.T) {
 }
 
 func TestHandler_FailsOpenWhenRedisDown(t *testing.T) {
-	rdb, mr := newRedis(t)
-	mr.Close() // take Redis down before any request
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 20 * time.Millisecond, ReadTimeout: 20 * time.Millisecond, WriteTimeout: 20 * time.Millisecond})
+	t.Cleanup(func() { _ = rdb.Close() })
 
 	lim := New(rdb, "rl", Dimension{Name: "ip", Key: IPKey, Limit: Limit(1, time.Minute, 1)})
 
@@ -168,8 +190,19 @@ func TestHandler_FailsOpenWhenRedisDown(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
+func TestHandlerSkipsEmptyDimensionWithoutRedis(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	t.Cleanup(func() { _ = rdb.Close() })
+	lim := New(rdb, "rl", Dimension{Name: "account", Key: HeaderKey("X-Account-Id"), Limit: Limit(1, time.Minute, 1)})
+
+	var reached bool
+	response := serve(lim.Handler(okHandler(&reached)), httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.True(t, reached)
+	assert.Equal(t, http.StatusOK, response.Code)
+}
+
 func TestHandler_MultiDimensionBothEnforced(t *testing.T) {
-	rdb, _ := newRedis(t)
+	rdb := realRedis(t)
 	lim := New(rdb, "rl",
 		Dimension{Name: "ip", Key: IPKey, Limit: Limit(10, time.Minute, 10)},
 		Dimension{Name: "account", Key: HeaderKey("X-Account-Id"), Limit: Limit(1, time.Minute, 1)},

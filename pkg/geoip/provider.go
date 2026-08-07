@@ -19,26 +19,34 @@ type Startable interface {
 	Start(ctx context.Context) error
 }
 
+// Stoppable joins background provider work before application resources are
+// released. Providers without background work do not implement it.
+type Stoppable interface {
+	Stop(ctx context.Context) error
+}
+
 // GeoIpConfig holds optional per-provider configuration, one section per
-// provider. Each provider reads only its own section (IP2Location uses
-// Ip2location.Token; Geolite2 uses Geolite2.Owner/Repo/Db).
+// provider. Endpoint overrides support trusted internal mirrors while keeping
+// the public service defaults.
 type GeoIpConfig struct {
 	Geolite2 struct {
-		Owner string `mapstructure:"owner" description:"geolite2 github owner"`
-		Repo  string `mapstructure:"repo" description:"geolite2 github repo"`
-		Db    string `mapstructure:"db" description:"geolite2 db asset name"`
+		Owner      string `mapstructure:"owner" description:"geolite2 github owner"`
+		Repo       string `mapstructure:"repo" description:"geolite2 github repo"`
+		Db         string `mapstructure:"db" description:"geolite2 db asset name"`
+		APIBaseURL string `mapstructure:"api_base_url" description:"github-compatible release API base URL"`
 	} `mapstructure:"geolite2" group:"geolite2"`
 
 	Ip2region struct {
-		//
+		Enabled bool `mapstructure:"enabled" description:"enable ip2region database maintenance (clones and builds the xdb from source)" default:"false"`
 	} `mapstructure:"ip2region" group:"ip2region"`
 
 	Ip2location struct {
-		Token string `mapstructure:"token" description:"ip2location token"`
+		Token           string `mapstructure:"token" description:"ip2location token"`
+		DownloadBaseURL string `mapstructure:"download_base_url" description:"ip2location download endpoint"`
 	} `mapstructure:"ip2location" group:"ip2location"`
 
 	Ipapi struct {
-		//
+		BaseURL string `mapstructure:"base_url" description:"ipapi-compatible lookup endpoint"`
 	} `mapstructure:"ipapi" group:"ipapi"`
 }
 

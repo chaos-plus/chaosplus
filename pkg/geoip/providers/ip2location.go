@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip"
@@ -13,31 +12,23 @@ import (
 
 // IP2Location uses IP2Location database.
 type IP2Location struct {
-	Token string `mapstructure:"token" description:"ip2location token"`
+	Token           string `mapstructure:"token" description:"ip2location token"`
+	DownloadBaseURL string `mapstructure:"download_base_url" description:"ip2location download endpoint"`
 
-	// client overrides the HTTP client used for downloads; nil uses the shared
-	// defaultDownloadClient. Kept unexported so it can be injected in tests
-	// without becoming public API.
-	client *http.Client
+	worker maintenanceWorker
 }
 
 func init() {
 	geoip.RegisterGeoIpProvider("ip2location", &IP2Location{})
 }
 
-// httpClient returns the provider's HTTP client, falling back to the shared
-// read-only default when none was injected.
-func (m *IP2Location) httpClient() *http.Client {
-	if m.client != nil {
-		return m.client
-	}
-	return defaultDownloadClient
-}
-
 // Configure applies provider settings: Ip2location.Token enables downloads.
 func (m *IP2Location) Configure(c geoip.GeoIpConfig) {
 	if c.Ip2location.Token != "" {
 		m.Token = c.Ip2location.Token
+	}
+	if c.Ip2location.DownloadBaseURL != "" {
+		m.DownloadBaseURL = c.Ip2location.DownloadBaseURL
 	}
 }
 
@@ -49,9 +40,13 @@ func (m *IP2Location) Start(ctx context.Context) error {
 		slog.Info("geoip ip2location disabled: no token configured")
 		return nil
 	}
-	maintainDB(ctx, "ip2location", m.GetDbPath, func() error { return m.DownloadDb() })
+	m.worker.start(ctx, func(ctx context.Context) {
+		maintainDB(ctx, "ip2location", m.GetDbPath, func() error { return m.DownloadDb() })
+	})
 	return nil
 }
+
+func (m *IP2Location) Stop(ctx context.Context) error { return m.worker.stop(ctx) }
 
 func (m *IP2Location) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {

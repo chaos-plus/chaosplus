@@ -3,6 +3,7 @@ package geoip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 )
@@ -14,6 +15,19 @@ type GeoIp struct {
 	Country  string `json:"country"`
 	Province string `json:"province"`
 	City     string `json:"city"`
+}
+
+// StopProviders waits for every background provider to exit.
+func StopProviders(ctx context.Context) error {
+	var errs []error
+	for name, provider := range GeoIpProviders {
+		if stoppable, ok := provider.(Stoppable); ok {
+			if err := stoppable.Stop(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Configure hands the loaded config to every registered provider that implements

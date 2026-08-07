@@ -1,0 +1,19 @@
+{
+  "federation_invalid_request": "Permintaan gabungan tidak sah atau keadaan log masuk hilang, tamat tempoh, atau diulang semula. Mulakan semula log masuk dan lengkapkannya dalam sesi penyemak imbas yang sama.",
+  "federation_provider_not_found": "Pembekal identiti yang diminta tidak wujud. Muat semula senarai pembekal dan pilih pembekal yang wujud.",
+  "federation_provider_issuer_exists": "Pembekal identiti untuk penerbit ini sudah wujud dalam penyewa. Gunakan penerbit lain atau kemas kini pembekal sedia ada.",
+  "federation_provider_role_missing": "Peranan lalai pembekal tidak wujud dalam penyewa ini. Pilih peranan yang wujud atau kosongkan peranan lalai.",
+  "federation_provider_disabled": "Pembekal identiti ini dinyahdayakan. Pentadbir mesti menghidupkannya sebelum anda boleh log masuk dengannya.",
+  "federation_provisioning_disabled": "Pembekal identiti ini tidak boleh menyediakan akaun baharu. Pentadbir mesti mencipta akaun anda dan memautkannya ke pembekal terlebih dahulu.",
+  "federation_identity_unavailable": "Akaun atau keahlian penyewa yang dipautkan telah dinyahdayakan. Hubungi pentadbir untuk memulihkan akses.",
+  "federation_email_unverified": "Penyediaan akaun automatik memerlukan e-mel yang disahkan daripada pembekal identiti. Minta pentadbir menyemak tuntutan pembekal atau menyediakan akaun secara manual.",
+  "federation_oidc_failed": "Pembekal identiti menolak atau tidak dapat melengkapkan log masuk. Mulakan semula log masuk dan cuba lagi; hubungi pentadbir jika masalah berterusan.",
+  "federation_unavailable": "Perkhidmatan gabungan tidak dapat melengkapkan permintaan. Cuba lagi kemudian; hubungi pentadbir jika masalah berterusan.",
+  "federation_saml_invalid_request": "Permintaan SAML tidak sah, telah tamat tempoh, atau dihantar ke destinasi yang salah. Mulakan semula aliran log masuk atau log keluar daripada aplikasi.",
+  "federation_saml_invalid_sp": "Metadata penyedia perkhidmatan SAML tidak sah. Semak XML, ID entiti, dan pengikatan pengguna asertion, kemudian daftarkannya semula.",
+  "federation_saml_sp_not_found": "Penyedia perkhidmatan SAML tidak wujud. Muat semula pendaftaran dan pilih penyedia yang sedia ada.",
+  "federation_saml_sp_entity_id_exists": "Penyedia perkhidmatan SAML dengan ID entiti ini sudah didaftarkan. Pilih ID entiti lain atau kemas kini penyedia sedia ada.",
+  "federation_saml_sp_disabled": "Penyedia perkhidmatan SAML ini dilumpuhkan. Pentadbir mesti membolehkannya sebelum ia boleh menggunakan pembekal identiti.",
+  "federation_saml_unavailable": "Pembekal identiti SAML tidak tersedia. Dayakan konfigurasi kesatuan SAML dan cuba semula.",
+  "federation_saml_key_managed_externally": "Kunci tandatangan SAML diuruskan melalui fail konfigurasi. Pusingkannya dengan menggantikan fail kunci dan sijil."
+}

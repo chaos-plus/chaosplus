@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/http"
+	"strings"
 
 	"github.com/chaos-plus/chaosplus/pkg/geoip"
 	"github.com/oschwald/geoip2-golang"
@@ -12,26 +12,16 @@ import (
 
 // Geolite2 uses MaxMind GeoLite2-City database.
 type Geolite2 struct {
-	Owner string `mapstructure:"owner" description:"geolite2 github owner"`
-	Repo  string `mapstructure:"repo" description:"geolite2 github repo"`
-	Db    string `mapstructure:"db" description:"geolite2 db asset name"`
+	Owner      string `mapstructure:"owner" description:"geolite2 github owner"`
+	Repo       string `mapstructure:"repo" description:"geolite2 github repo"`
+	Db         string `mapstructure:"db" description:"geolite2 db asset name"`
+	APIBaseURL string `mapstructure:"api_base_url" description:"github-compatible release API base URL"`
 
-	// client overrides the HTTP client used for downloads; nil uses the shared
-	// defaultDownloadClient. Unexported so tests can inject without exposing it.
-	client *http.Client
+	worker maintenanceWorker
 }
 
 func init() {
 	geoip.RegisterGeoIpProvider("geolite2", &Geolite2{})
-}
-
-// httpClient returns the provider's HTTP client, falling back to the shared
-// read-only default when none was injected.
-func (m *Geolite2) httpClient() *http.Client {
-	if m.client != nil {
-		return m.client
-	}
-	return defaultDownloadClient
 }
 
 // Configure applies provider settings: Geolite2.Owner/Repo/Db override the GitHub
@@ -46,13 +36,20 @@ func (m *Geolite2) Configure(c geoip.GeoIpConfig) {
 	if c.Geolite2.Db != "" {
 		m.Db = c.Geolite2.Db
 	}
+	if c.Geolite2.APIBaseURL != "" {
+		m.APIBaseURL = strings.TrimRight(c.Geolite2.APIBaseURL, "/")
+	}
 }
 
 // Start begins background maintenance of the GeoLite2 database, bound to ctx.
 func (m *Geolite2) Start(ctx context.Context) error {
-	maintainDB(ctx, "geolite2", m.GetDbPath, func() error { return m.DownloadDb() })
+	m.worker.start(ctx, func(ctx context.Context) {
+		maintainDB(ctx, "geolite2", m.GetDbPath, func() error { return m.DownloadDb() })
+	})
 	return nil
 }
+
+func (m *Geolite2) Stop(ctx context.Context) error { return m.worker.stop(ctx) }
 
 func (m *Geolite2) GetIpInfo(ip string) (*geoip.GeoIp, error) {
 	if ip == "" {

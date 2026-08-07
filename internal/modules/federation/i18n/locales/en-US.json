@@ -1,0 +1,19 @@
+{
+  "federation_invalid_request": "The federation request is invalid or its login state is missing, expired, or replayed. Restart sign-in and complete it in one browser session.",
+  "federation_provider_not_found": "The requested identity provider does not exist. Refresh the provider list and choose an existing provider.",
+  "federation_provider_issuer_exists": "An identity provider for this issuer already exists in the tenant. Choose a different issuer or update the existing provider.",
+  "federation_provider_role_missing": "The provider default role does not exist in this tenant. Choose a role that exists or clear the default role.",
+  "federation_provider_disabled": "This identity provider is disabled. An administrator must enable it before you can sign in with it.",
+  "federation_provisioning_disabled": "This identity provider cannot provision new accounts. An administrator must create your account and link it to the identity provider first.",
+  "federation_identity_unavailable": "The linked account or its tenant membership is disabled. Contact an administrator to restore access.",
+  "federation_email_unverified": "Automatic account provisioning requires a verified email address from the identity provider. Ask an administrator to check the provider claims or provision the account manually.",
+  "federation_oidc_failed": "The identity provider rejected or could not complete the sign-in. Restart sign-in and try again; contact an administrator if the problem continues.",
+  "federation_unavailable": "The federation service could not complete the request. Retry later; contact an administrator if the problem continues.",
+  "federation_saml_invalid_request": "The SAML request is malformed, expired, or was sent to the wrong destination. Restart the sign-in or logout flow from the application.",
+  "federation_saml_invalid_sp": "The SAML service provider metadata is invalid. Check the XML, entity ID, and assertion consumer binding, then register it again.",
+  "federation_saml_sp_not_found": "The SAML service provider does not exist. Refresh the registry and choose an existing provider.",
+  "federation_saml_sp_entity_id_exists": "A SAML service provider with this entity ID is already registered. Choose a different entity ID or update the existing provider.",
+  "federation_saml_sp_disabled": "This SAML service provider is disabled. An administrator must enable it before it can use the identity provider.",
+  "federation_saml_unavailable": "The SAML identity provider is not available. Enable the SAML federation configuration and retry.",
+  "federation_saml_key_managed_externally": "The SAML signing key is managed through configuration files. Rotate it by replacing the key and certificate files instead."
+}

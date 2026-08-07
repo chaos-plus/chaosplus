@@ -1,0 +1,4 @@
+{
+  "guid.next.failed": "Gagal menjana GUID",
+  "guid.batch.invalid_count": "Parameter kiraan tidak sah, julat 1-100"
+}

@@ -1,0 +1,165 @@
+---
+// Render Starlight's default page title, then a metadata bar directly under it:
+// word count / reading time / created / updated / author / git commit hash,
+// plus a collapsible git history table. All computed at build time.
+// Splash / non-article pages (home, section landings) get no meta bar.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { getPageMeta } from '../lib/page-meta';
+
+const { entry } = Astro.locals.starlightRoute;
+const isSplash = entry.data.template === 'splash';
+const m = isSplash ? null : getPageMeta(entry.filePath);
+const hasGit = m ? Boolean(m.updated || m.created) : false;
+// Per-doc changelog comes from frontmatter `updates` (authored, doc-scoped),
+// not raw git commit subjects. Newest first.
+const updates = isSplash ? [] : entry.data.updates ?? [];
+const top = updates.slice(0, 3);
+const rest = updates.slice(3);
+---
+
+<Default />
+
+{
+	m && (
+		<div class="meta not-content">
+			<div class="meta__row">
+				<span><strong>{m.words}</strong> 字</span>
+				<span>约 <strong>{m.minutes}</strong> 分钟</span>
+				{m.created && <span>创建 <time>{m.created}</time></span>}
+				{m.updated && <span>更新 <time>{m.updated}</time></span>}
+				{m.author && <span>维护者 <strong>{m.author}</strong></span>}
+				{m.hash && <span class="meta__secondary">版本 <code>{m.hash}</code></span>}
+				{!hasGit && <span class="meta__muted">未提交 · 待纳入 git</span>}
+			</div>
+			{updates.length > 0 && (
+				<div class="meta__history">
+					<div class="meta__history-head">更新记录 <span>{updates.length}</span></div>
+					<div class="meta__table-wrap">
+						<table class="meta__table">
+							<thead>
+								<tr>
+									<th>日期</th>
+									<th>更新内容</th>
+								</tr>
+							</thead>
+							<tbody>
+								{top.map((u) => (
+									<tr>
+										<td class="meta__hash">{u.date}</td>
+										<td>{u.note}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+					{rest.length > 0 && (
+						<details class="meta__more">
+							<summary>更早 <span>{rest.length}</span> 条</summary>
+							<div class="meta__table-wrap">
+								<table class="meta__table">
+									<tbody>
+										{rest.map((u) => (
+											<tr>
+												<td class="meta__hash">{u.date}</td>
+												<td>{u.note}</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</details>
+					)}
+				</div>
+			)}
+		</div>
+	)
+}
+
+<style>
+	.meta {
+		margin: 0.75rem 0 0;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.meta__row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.35rem 1rem;
+	}
+	.meta__row strong {
+		color: var(--sl-color-gray-2);
+		font-weight: 600;
+	}
+	.meta__row code {
+		padding: 0.1rem 0.3rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-gray-2);
+		font-size: 0.75rem;
+	}
+	.meta__muted {
+		color: var(--sl-color-gray-4);
+	}
+	.meta__history {
+		margin-top: 0.65rem;
+		padding-top: 0.6rem;
+		border-top: 1px solid var(--sl-color-gray-6);
+	}
+	.meta__history-head {
+		color: var(--sl-color-gray-3);
+		font-weight: 500;
+	}
+	.meta__more {
+		margin-top: 0.4rem;
+	}
+	.meta__more summary {
+		width: fit-content;
+		color: var(--sl-color-gray-3);
+		cursor: pointer;
+		font-weight: 500;
+	}
+	.meta__history span {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.25rem;
+		height: 1.25rem;
+		margin-inline-start: 0.25rem;
+		padding-inline: 0.3rem;
+		border-radius: 999px;
+		background: var(--sl-color-gray-6);
+		font-variant-numeric: tabular-nums;
+	}
+	.meta__table-wrap {
+		overflow-x: auto;
+	}
+	.meta__table {
+		width: 100%;
+		margin: 0.65rem 0 0;
+		border-collapse: collapse;
+		font-variant-numeric: tabular-nums;
+	}
+	.meta__table th,
+	.meta__table td {
+		padding: 0.2rem 0.5rem;
+		text-align: left;
+		border-bottom: 1px solid var(--sl-color-gray-6);
+		vertical-align: top;
+	}
+	.meta__table th {
+		color: var(--sl-color-gray-3);
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.meta__hash {
+		font-family: var(--sl-font-mono, monospace);
+		white-space: nowrap;
+	}
+	@media (max-width: 34rem) {
+		.meta__secondary {
+			display: none;
+		}
+	}
+</style>

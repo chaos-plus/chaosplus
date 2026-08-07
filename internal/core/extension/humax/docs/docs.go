@@ -15,11 +15,14 @@ import (
 // htmlContentType is used for every custom docs page served here.
 const htmlContentType = "text/html; charset=utf-8"
 
-// Register mounts the tabbed docs page and each standalone renderer page on the
-// chi router, and returns a copy of config with huma's built-in /docs disabled
-// (DocsPath cleared) so it does not overwrite the tabbed page. The spec URLs are
-// derived from config.OpenAPIPath (the same value huma uses to serve
-// /openapi.json and /openapi.yaml), so custom OpenAPI paths keep working.
+// Register mounts the tabbed docs page at /docs plus each standalone renderer
+// page on the chi router, and returns a copy of config with huma's built-in
+// /docs disabled (DocsPath cleared) so it does not overwrite the tabbed page.
+// The root path "/" is reserved for a lightweight API landing page (indexHTML)
+// so the service does not conflate the API entry point with its documentation.
+// The spec URLs are derived from config.OpenAPIPath (the same value huma uses
+// to serve /openapi.json and /openapi.yaml), so custom OpenAPI paths keep
+// working.
 func Register(r chi.Router, config huma.Config, name string) huma.Config {
 
 	config.DocsPath = ""
@@ -39,9 +42,19 @@ func Register(r chi.Router, config huma.Config, name string) huma.Config {
 		{"/docs/openapi-ui", func() []byte { return openapiUIHTML(name, specJSON) }},
 	}
 
+	// Root landing page: a plain API status page, not the docs renderer. It
+	// links to the docs and the machine-readable spec.
+	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", htmlContentType)
+		_, _ = w.Write(indexHTML(name, specJSON))
+	})
+
 	for _, page := range pages {
 		html := page.html // capture per iteration
 		r.Get(page.path, func(w http.ResponseWriter, _ *http.Request) {
+			// These pages are intentionally embedded: /docs embeds the renderer
+			// pages, and development tools may embed the docs shell itself.
+			w.Header().Del("X-Frame-Options")
 			w.Header().Set("Content-Type", htmlContentType)
 			_, _ = w.Write(html())
 		})

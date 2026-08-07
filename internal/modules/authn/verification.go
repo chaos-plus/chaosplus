@@ -1,0 +1,182 @@
+package authn
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/uptrace/bun"
+)
+
+const (
+	emailVerificationNotification = "email_verification"
+	emailVerificationTokenPrefix  = "cpe1_"
+)
+
+type emailVerificationRow struct {
+	bun.BaseModel `bun:"table:iam_email_verification_tokens"`
+	TokenHMAC     string `bun:"token_hmac,pk"`
+	PrincipalID   string
+	Email         string
+	CreatedAt     int64
+	ExpiresAt     int64
+	ConsumedAt    int64
+}
+
+func (s *WebService) configureEmailVerification() error {
+	if !s.cfg.EmailVerification.Enabled {
+		return nil
+	}
+	if !s.web.Enabled || s.cfg.EmailVerification.TokenTTL < 5*time.Minute ||
+		s.cfg.EmailVerification.TokenTTL > 7*24*time.Hour {
+		return errors.New("authn email verification configuration exceeds security limits")
+	}
+	return validateAuthnURL("email_verification.verify_url", s.cfg.EmailVerification.VerifyURL)
+}
+
+func (s *WebService) EmailVerificationEnabled() bool {
+	return s != nil && s.cfg.Enabled && s.web.Enabled && s.cfg.EmailVerification.Enabled && s.db != nil
+}
+
+func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, cookieHeader string) error {
+	if !s.EmailVerificationEnabled() {
+		return authnext.ErrEmailVerificationDisabled
+	}
+	claims, err := s.Authenticate(ctx, authorization, cookieHeader)
+	if err != nil {
+		return err
+	}
+
+	now := s.now().UTC()
+	expires := now.Add(s.cfg.EmailVerification.TokenTTL)
+	auditService := auditmod.NewService(s.db)
+
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var principal principalRow
+		query := tx.NewSelect().Model(&principal).Where("id = ? AND status = 'active'", claims.Subject)
+		if s.db.Dialect().Name().String() != "sqlite" {
+			query = query.For("UPDATE")
+		}
+		if err := query.Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return authnext.ErrInvalidSession
+			}
+			return err
+		}
+		if principal.EmailVerified {
+			return nil
+		}
+		if principal.Email == "" {
+			return authnext.ErrEmailRequired
+		}
+		secret, err := randomToken(32)
+		if err != nil {
+			return fmt.Errorf("generate email verification credential: %w", err)
+		}
+		token := emailVerificationTokenPrefix + secret
+
+		row := emailVerificationRow{
+			TokenHMAC: s.emailVerificationHMAC(token), PrincipalID: principal.ID, Email: principal.Email,
+			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(),
+		}
+		verificationURL, err := credentialURL(s.cfg.EmailVerification.VerifyURL, token)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).Set("consumed_at = ?", now.UnixMilli()).
+			Where("principal_id = ? AND consumed_at = 0", principal.ID).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
+			return err
+		}
+		if err := s.enqueueNotification(ctx, tx, notificationPayload{
+			Type: emailVerificationNotification, Recipient: principal.Email, VerificationURL: verificationURL,
+			OccurredAt: now, ExpiresAt: expires,
+		}); err != nil {
+			return err
+		}
+		_, err = auditService.AppendTo(ctx, tx, auditmod.EventInput{
+			TenantID: authnAuditTenant, PrincipalID: principal.ID,
+			EventType: "email_verification_requested", TargetType: "principal", TargetID: principal.ID,
+			Outcome: "success", Detail: map[string]any{"email_snapshot_bound": true},
+		})
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, authnext.ErrInvalidSession) || errors.Is(err, authnext.ErrEmailRequired) {
+			return err
+		}
+		return fmt.Errorf("begin email verification: %w", err)
+	}
+	return nil
+}
+
+func (s *WebService) CompleteEmailVerification(ctx context.Context, token string) error {
+	if !s.EmailVerificationEnabled() {
+		return authnext.ErrEmailVerificationDisabled
+	}
+	if !strings.HasPrefix(token, emailVerificationTokenPrefix) || len(token) > 128 {
+		return authnext.ErrInvalidEmailVerification
+	}
+	now := s.now().UTC().UnixMilli()
+	computedHMAC := s.emailVerificationHMAC(token)
+	var verification emailVerificationRow
+	if err := s.db.NewSelect().Model(&verification).
+		Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return authnext.ErrInvalidEmailVerification
+		}
+		return fmt.Errorf("load email verification credential: %w", err)
+	}
+	if subtle.ConstantTimeCompare([]byte(verification.TokenHMAC), []byte(computedHMAC)) != 1 {
+		return authnext.ErrInvalidEmailVerification
+	}
+	auditService := auditmod.NewService(s.db)
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		result, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).Set("consumed_at = ?", now).
+			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now).Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return authnext.ErrInvalidEmailVerification
+		}
+		result, err = tx.NewUpdate().Model((*principalRow)(nil)).Set("email_verified = ?", true).Set("activation_required = ?", false).Set("updated_at = ?", now).
+			Where("id = ? AND status = 'active' AND email = ? AND email_verified = ?", verification.PrincipalID, verification.Email, false).Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return authnext.ErrInvalidEmailVerification
+		}
+		_, err = auditService.AppendTo(ctx, tx, auditmod.EventInput{
+			TenantID: authnAuditTenant, PrincipalID: verification.PrincipalID,
+			EventType: "email_verification_completed", TargetType: "principal", TargetID: verification.PrincipalID,
+			Outcome: "success", Detail: map[string]any{"email_snapshot_matched": true},
+		})
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, authnext.ErrInvalidEmailVerification) {
+			return err
+		}
+		return fmt.Errorf("complete email verification: %w", err)
+	}
+	return nil
+}
+
+func (s *WebService) emailVerificationHMAC(token string) string {
+	mac := hmac.New(sha256.New, s.mfaPurposeKey("email-verification:v1"))
+	_, _ = mac.Write([]byte("chaosplus:email-verification:v1\x00" + token))
+	return hex.EncodeToString(mac.Sum(nil))
+}

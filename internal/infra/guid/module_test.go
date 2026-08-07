@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
+	"google.golang.org/grpc"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 )
@@ -26,13 +28,14 @@ func TestModule_FullChain(t *testing.T) {
 	ctx := context.Background()
 	db := newDB(t)
 
-	m := NewModule(db, 0)
+	m := NewModule(db, time.Minute)
 	require.NoError(t, m.Migrate(ctx))
 	require.NoError(t, m.Start(ctx))
 
 	// Start installed the process-wide generator, so the REST endpoint mints ids.
 	_, api := humatest.New(t)
 	m.RegisterREST(api)
+	m.RegisterGRPC(grpc.NewServer())
 
 	resp := api.Get("/guid")
 	require.Equal(t, http.StatusOK, resp.Code)
@@ -63,9 +66,25 @@ func TestModule_MigrateError_OnClosedDB(t *testing.T) {
 	assert.Error(t, m.Migrate(context.Background()))
 }
 
+func TestModule_MigrateWUIDFailure(t *testing.T) {
+	db := newDB(t)
+	_, err := db.ExecContext(t.Context(), "CREATE TABLE goose_wuid (bad TEXT)")
+	require.NoError(t, err)
+	assert.ErrorContains(t, NewModule(db, 0).Migrate(t.Context()), "wuid migrate")
+}
+
 func TestModule_StopWithoutStart_IsNoop(t *testing.T) {
 	m := NewModule(newDB(t), 0)
 	assert.NoError(t, m.Stop(context.Background()))
+}
+
+func TestModule_StopPropagatesDatabaseFailure(t *testing.T) {
+	db := newDB(t)
+	module := NewModule(db, time.Minute)
+	require.NoError(t, module.Migrate(t.Context()))
+	require.NoError(t, module.Start(t.Context()))
+	require.NoError(t, db.Close())
+	assert.Error(t, module.Stop(t.Context()))
 }
 
 func TestModule_WorkerLostSuspends_ReacquireResumes(t *testing.T) {

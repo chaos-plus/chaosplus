@@ -18,7 +18,7 @@ func ValidateOperations(api huma.API, registry *Registry) error {
 	var violations []string
 	for path, item := range api.OpenAPI().Paths {
 		for method, op := range operations(item) {
-			if op == nil || isPublic(op) {
+			if op == nil || isPublic(op) || isTenantMember(op) {
 				continue
 			}
 			code, guarded := guardOf(op)

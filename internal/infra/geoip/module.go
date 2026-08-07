@@ -17,7 +17,7 @@ import (
 type Config = geoiplib.GeoIpConfig
 
 // Module wires the geoip providers to the application lifecycle. It implements
-// the app's Starter capability.
+// the app's Starter and Stopper capabilities.
 type Module struct {
 	cfg Config
 }
@@ -28,10 +28,15 @@ func NewModule(cfg Config) *Module {
 }
 
 // Start applies the provider configuration and starts each provider's background
-// database maintenance, tied to ctx. The refresh stops when ctx is cancelled on
-// shutdown, so no separate Stop is needed.
+// database maintenance, tied to ctx.
 func (m *Module) Start(ctx context.Context) error {
 	geoiplib.Configure(m.cfg)
 	geoiplib.StartProviders(ctx)
 	return nil
+}
+
+// Stop waits for provider maintenance to exit before application resources are
+// released or another application instance is bootstrapped in the same process.
+func (m *Module) Stop(ctx context.Context) error {
+	return geoiplib.StopProviders(ctx)
 }

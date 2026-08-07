@@ -34,7 +34,7 @@ func TestWriteError(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &env))
 		assert.Equal(t, http.StatusTooManyRequests, env.Code)
-		assert.Equal(t, "请求过于频繁，请稍后再试", env.Message)
+		assert.Equal(t, "已达到请求频率限制，请等待一段时间后重试。", env.Message)
 		assert.JSONEq(t, "null", string(env.Data))
 		assert.NotEmpty(t, env.Meta)
 	})
@@ -49,6 +49,6 @@ func TestWriteError(t *testing.T) {
 			Message string `json:"message"`
 		}
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &env))
-		assert.Equal(t, "Forbidden", env.Message, "unset locale falls back to base")
+		assert.Equal(t, "You do not have permission to perform this operation. Request access or use an authorized account.", env.Message, "unset locale falls back to base")
 	})
 }

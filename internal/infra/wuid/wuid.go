@@ -144,7 +144,13 @@ type Worker struct {
 }
 
 // ID returns the worker id, ready to use as a Sonyflake machine id.
-func (w *Worker) ID() uint16 { return uint16(w.id.Load()) }
+func (w *Worker) ID() uint16 {
+	id := w.id.Load()
+	if id < 0 || id > MaxWorkerID {
+		panic(fmt.Sprintf("wuid: stored worker id %d is outside 0..%d", id, MaxWorkerID))
+	}
+	return uint16(id)
+}
 
 // Alive reports whether the worker id is still valid to generate with. It is
 // always true for static workers, and becomes false for a leased worker while
@@ -385,7 +391,7 @@ func (w *Worker) reacquire(ctx context.Context) error {
 	fn := w.onReacquire
 	w.mu.Unlock()
 	if fn != nil {
-		fn(uint16(id))
+		fn(w.ID())
 	}
 	return nil
 }

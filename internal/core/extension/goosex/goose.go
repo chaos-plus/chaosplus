@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	goosev3 "github.com/pressly/goose/v3"
 )
@@ -12,12 +13,12 @@ import (
 // ResolveDialect maps a dialect string to a goose dialect and the SQL
 // subdirectory holding that dialect's migrations.
 func ResolveDialect(dialect string) (goosev3.Dialect, string, error) {
-	switch dialect {
+	switch strings.ToLower(strings.TrimSpace(dialect)) {
 	case "sqlite", "sqlite3":
 		return goosev3.DialectSQLite3, "sql/sqlite", nil
 	case "mysql":
 		return goosev3.DialectMySQL, "sql/mysql", nil
-	case "postgres", "postgresql", "pg":
+	case "postgres", "postgresql", "pgsql", "pg":
 		return goosev3.DialectPostgres, "sql/postgres", nil
 	default:
 		return "", "", fmt.Errorf("goose: unsupported dialect %q", dialect)
@@ -61,6 +62,20 @@ func DownTo(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName stri
 		return fmt.Errorf("goose: rollback migrations to %d: %w", version, err)
 	}
 	return nil
+}
+
+// UpToDate reports whether every migration in fsys has been applied to the
+// database. A database with no applied migrations reports false.
+func UpToDate(ctx context.Context, db *sql.DB, fsys fs.FS, dialect, tableName string) (bool, error) {
+	provider, err := newProvider(db, fsys, dialect, tableName)
+	if err != nil {
+		return false, err
+	}
+	pending, err := provider.HasPending(ctx)
+	if err != nil {
+		return false, fmt.Errorf("goose: check migrations: %w", err)
+	}
+	return !pending, nil
 }
 
 func newProvider(db *sql.DB, fsys fs.FS, dialect, tableName string) (*goosev3.Provider, error) {

@@ -2,10 +2,14 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 )
+
+const defaultIP2LocationDownloadBaseURL = "https://www.ip2location.com/download/"
 
 func (m *IP2Location) DownloadDb(codes ...string) error {
 	cacheDir, err := workDir("ip2location")
@@ -44,16 +48,33 @@ func (m *IP2Location) downloadDb(code string) (string, error) {
 
 	slog.Info("ip2location download db use cache dir", "cacheDir", cacheDir)
 
-	url := "https://www.ip2location.com/download/?token=" + m.Token + "&file=" + code
-	slog.Info("ip2location download db url", "url", url)
+	downloadURL, err := ip2locationDownloadURL(m.DownloadBaseURL, m.Token, code)
+	if err != nil {
+		return "", err
+	}
 
 	target := filepath.Join(cacheDir, code+".zip")
-	if err := downloadFile(m.httpClient(), url, target); err != nil {
+	if err := downloadFile(defaultDownloadClient, downloadURL, target); err != nil {
 		slog.Error("ip2location download db error", "code", code, "err", err)
 		return "", err
 	}
 	slog.Info("ip2location download db success", "code", code, "target", target)
 	return target, nil
+}
+
+func ip2locationDownloadURL(baseURL, token, code string) (string, error) {
+	if baseURL == "" {
+		baseURL = defaultIP2LocationDownloadBaseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse ip2location download URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("token", token)
+	query.Set("file", code)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func (m *IP2Location) GetDbPath() (string, error) {

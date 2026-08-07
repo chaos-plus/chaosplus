@@ -3,8 +3,10 @@ package deployment
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -15,9 +17,16 @@ const (
 	mysqlLockName        = "chaosplus-production-bootstrap-v1"
 )
 
+// SQLite is an embedded database and the supported deployment model has one
+// application process per database file. Serialize deployment operations in
+// that process without holding a SQLite write transaction, which would block
+// Goose when it obtains a different pooled connection.
+var sqliteDeploymentLock = make(chan struct{}, 1)
+
 type advisoryLock struct {
 	conn    *sql.Conn
 	dialect string
+	once    sync.Once
 }
 
 func acquireAdvisoryLock(ctx context.Context, db *bun.DB, dialect string, timeout time.Duration) (*advisoryLock, error) {
@@ -26,6 +35,14 @@ func acquireAdvisoryLock(ctx context.Context, db *bun.DB, dialect string, timeou
 	}
 	lockCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if dialect == "sqlite" {
+		select {
+		case sqliteDeploymentLock <- struct{}{}:
+			return &advisoryLock{dialect: dialect}, nil
+		case <-lockCtx.Done():
+			return nil, fmt.Errorf("acquire sqlite bootstrap lock: %w", lockCtx.Err())
+		}
+	}
 	conn, err := db.DB.Conn(lockCtx)
 	if err != nil {
 		return nil, fmt.Errorf("open bootstrap lock connection: %w", err)
@@ -36,14 +53,12 @@ func acquireAdvisoryLock(ctx context.Context, db *bun.DB, dialect string, timeou
 	case "postgres":
 		for !acquired {
 			if err := conn.QueryRowContext(lockCtx, "SELECT pg_try_advisory_lock($1)", postgresLockID).Scan(&acquired); err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("acquire postgres bootstrap lock: %w", err)
+				return nil, errors.Join(fmt.Errorf("acquire postgres bootstrap lock: %w", err), conn.Close())
 			}
 			if !acquired {
 				select {
 				case <-lockCtx.Done():
-					conn.Close()
-					return nil, fmt.Errorf("acquire postgres bootstrap lock: %w", lockCtx.Err())
+					return nil, errors.Join(fmt.Errorf("acquire postgres bootstrap lock: %w", lockCtx.Err()), conn.Close())
 				case <-time.After(250 * time.Millisecond):
 				}
 			}
@@ -52,23 +67,27 @@ func acquireAdvisoryLock(ctx context.Context, db *bun.DB, dialect string, timeou
 		seconds := int(math.Ceil(timeout.Seconds()))
 		var result sql.NullInt64
 		if err := conn.QueryRowContext(lockCtx, "SELECT GET_LOCK(?, ?)", mysqlLockName, seconds).Scan(&result); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("acquire mysql bootstrap lock: %w", err)
+			return nil, errors.Join(fmt.Errorf("acquire mysql bootstrap lock: %w", err), conn.Close())
 		}
 		acquired = result.Valid && result.Int64 == 1
 	default:
-		conn.Close()
-		return nil, fmt.Errorf("unsupported bootstrap database dialect %q", dialect)
+		return nil, errors.Join(fmt.Errorf("unsupported bootstrap database dialect %q", dialect), conn.Close())
 	}
 	if !acquired {
-		conn.Close()
-		return nil, fmt.Errorf("bootstrap lock was not acquired")
+		return nil, errors.Join(fmt.Errorf("bootstrap lock was not acquired"), conn.Close())
 	}
 	return lock, nil
 }
 
 func (l *advisoryLock) Close(ctx context.Context) error {
-	if l == nil || l.conn == nil {
+	if l == nil {
+		return nil
+	}
+	if l.dialect == "sqlite" {
+		l.once.Do(func() { <-sqliteDeploymentLock })
+		return nil
+	}
+	if l.conn == nil {
 		return nil
 	}
 	var err error
