@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
@@ -45,6 +46,12 @@ type Service struct {
 	key      []byte
 	http     *http.Client
 	now      func() time.Time
+
+	// ponytail: per-resource mutex serializes push/deprovision to prevent
+	// remote state drift; a distributed lock (DB advisory) replaces this
+	// when multi-process deployment is needed.
+	pushMu sync.Mutex
+	pushLocks map[string]*sync.Mutex
 }
 
 func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner, cfg Config, key []byte) *Service {
@@ -55,7 +62,23 @@ func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identitie
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	return &Service{db: db, repo: NewRepository(db), audit: audit, nextID: nextID, identity: identities, groups: groups, key: key, http: &http.Client{Timeout: timeout}, now: time.Now}
+	return &Service{db: db, repo: NewRepository(db), audit: audit, nextID: nextID, identity: identities, groups: groups, key: key, http: &http.Client{Timeout: timeout}, now: time.Now, pushLocks: make(map[string]*sync.Mutex)}
+}
+
+// lockPushResource serializes push and deprovision operations for a single
+// (target, resource_type, resource_id) key so concurrent operations on the
+// same resource cannot race to stale remote state.
+func (s *Service) lockPushResource(targetID, resourceType, resourceID string) func() {
+	key := targetID + "\x00" + resourceType + "\x00" + resourceID
+	s.pushMu.Lock()
+	mu, ok := s.pushLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.pushLocks[key] = mu
+	}
+	s.pushMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *Service) ListDirectories(ctx context.Context, tenantID string) ([]Directory, error) {

@@ -20,6 +20,9 @@ type Module struct {
 	declarationOnly bool
 }
 
+// AdministratorGuard is a consumer-side interface satisfied by
+// iam.AdministratorGuard. Defined here rather than imported to keep the
+// dependency direction organization → iam unidirectional.
 type AdministratorGuard interface {
 	Protect(context.Context, bun.IDB, string, string) (func() error, error)
 }

@@ -173,3 +173,83 @@ func TestConditionResourceContextFields(t *testing.T) {
 	attrs["region"] = "mutated"
 	assert.Equal(t, "cn-east", TrustedFromContext(ctx, now).Resource.Attrs["region"])
 }
+
+func TestConditionNegationFailsClosedOnAbsentResourceFacts(t *testing.T) {
+	// neq on resource.* must fail closed when the fact is absent.
+	// A condition like neq(resource.owner, "alice") cannot be satisfied
+	// if we don't know the resource owner.
+	neqConditions := []json.RawMessage{
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.owner"},{"value":"alice"}]}`),
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.type"},{"value":"secret"}]}`),
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.id"},{"value":"doc-1"}]}`),
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.attr.region"},{"value":"cn-east"}]}`),
+	}
+	for _, condition := range neqConditions {
+		matched, err := EvaluateCondition(condition, TrustedContext{})
+		require.NoError(t, err)
+		assert.False(t, matched, "neq on absent resource fact must fail closed: %s", string(condition))
+	}
+
+	// neq on resource.* with present facts behaves correctly.
+	matched, err := EvaluateCondition(
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.owner"},{"value":"alice"}]}`),
+		TrustedContext{Resource: ResourceContext{Owner: "bob"}},
+	)
+	require.NoError(t, err)
+	assert.True(t, matched, "neq with different owner should match")
+
+	matched, err = EvaluateCondition(
+		json.RawMessage(`{"version":1,"neq":[{"context":"resource.owner"},{"value":"alice"}]}`),
+		TrustedContext{Resource: ResourceContext{Owner: "alice"}},
+	)
+	require.NoError(t, err)
+	assert.False(t, matched, "neq with matching owner should not match")
+
+	// not wrapping eq on resource.* must fail closed when the fact is absent.
+	notConditions := []json.RawMessage{
+		json.RawMessage(`{"version":1,"not":{"eq":[{"context":"resource.owner"},{"value":"alice"}]}}`),
+		json.RawMessage(`{"version":1,"not":{"eq":[{"context":"resource.type"},{"value":"secret"}]}}`),
+		json.RawMessage(`{"version":1,"not":{"in":[{"context":"resource.attr.region"},{"value":["cn-east"]}]}}`),
+	}
+	for _, condition := range notConditions {
+		matched, err := EvaluateCondition(condition, TrustedContext{})
+		require.NoError(t, err)
+		assert.False(t, matched, "not on absent resource fact must fail closed: %s", string(condition))
+	}
+
+	// not wrapping compound expression that references resource.* fails closed
+	// when any referenced resource fact is absent.
+	matched, err = EvaluateCondition(
+		json.RawMessage(`{"version":1,"not":{"all":[
+			{"eq":[{"context":"resource.type"},{"value":"document"}]},
+			{"eq":[{"context":"client.id"},{"value":"console"}]}
+		]}}`),
+		TrustedContext{ClientID: "console"},
+	)
+	require.NoError(t, err)
+	assert.False(t, matched, "not(all(resource.*, ...)) must fail closed on absent resource fact")
+
+	// not wrapping resource.* eq with facts present works correctly.
+	matched, err = EvaluateCondition(
+		json.RawMessage(`{"version":1,"not":{"eq":[{"context":"resource.owner"},{"value":"alice"}]}}`),
+		TrustedContext{Resource: ResourceContext{Owner: "bob"}},
+	)
+	require.NoError(t, err)
+	assert.True(t, matched, "not with non-matching owner should match")
+
+	// not on non-resource fields is unaffected.
+	matched, err = EvaluateCondition(
+		json.RawMessage(`{"version":1,"not":{"eq":[{"context":"client.id"},{"value":"blocked"}]}}`),
+		TrustedContext{ClientID: "console"},
+	)
+	require.NoError(t, err)
+	assert.True(t, matched, "not on non-resource field should work normally")
+
+	// neq on non-resource fields is unaffected.
+	matched, err = EvaluateCondition(
+		json.RawMessage(`{"version":1,"neq":[{"context":"network.zone"},{"value":"public"}]}`),
+		TrustedContext{NetworkZone: "corporate"},
+	)
+	require.NoError(t, err)
+	assert.True(t, matched, "neq on network.zone should work normally")
+}

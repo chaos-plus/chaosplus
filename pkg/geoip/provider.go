@@ -37,7 +37,7 @@ type GeoIpConfig struct {
 	} `mapstructure:"geolite2" group:"geolite2"`
 
 	Ip2region struct {
-		//
+		Enabled bool `mapstructure:"enabled" description:"enable ip2region database maintenance (clones and builds the xdb from source)" default:"false"`
 	} `mapstructure:"ip2region" group:"ip2region"`
 
 	Ip2location struct {

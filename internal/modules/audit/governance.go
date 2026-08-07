@@ -66,7 +66,8 @@ func (s *Service) GetRetentionPolicy(ctx context.Context, tenantID string) (Rete
 }
 
 // SetRetentionPolicy upserts the tenant policy, refusing archive thresholds
-// earlier than the minimum retention.
+// earlier than the minimum retention. The mutation is recorded in the audit
+// chain so the compliance record is complete.
 func (s *Service) SetRetentionPolicy(ctx context.Context, tenantID string, minDays, archiveAfterDays int) (RetentionPolicy, error) {
 	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
 		return RetentionPolicy{}, ErrRetentionInvalid
@@ -74,15 +75,29 @@ func (s *Service) SetRetentionPolicy(ctx context.Context, tenantID string, minDa
 	if minDays < 1 || minDays > maxRetentionDays || archiveAfterDays < minDays || archiveAfterDays > maxRetentionDays {
 		return RetentionPolicy{}, ErrRetentionInvalid
 	}
-	row := retentionPolicyRow{TenantID: tenantID, MinDays: minDays, ArchiveAfterDays: archiveAfterDays, UpdatedAt: s.now().UTC().UnixMilli()}
-	query := s.db.NewInsert().Model(&row).
-		On("CONFLICT (tenant_id) DO UPDATE SET min_days = excluded.min_days, archive_after_days = excluded.archive_after_days, updated_at = excluded.updated_at")
-	if s.dialect == "mysql" {
-		query = s.db.NewInsert().Model(&row).
-			On("DUPLICATE KEY UPDATE min_days = VALUES(min_days), archive_after_days = VALUES(archive_after_days), updated_at = VALUES(updated_at)")
-	}
-	if _, err := query.Exec(ctx); err != nil {
-		return RetentionPolicy{}, fmt.Errorf("save audit retention policy: %w", err)
+	now := s.now().UTC().UnixMilli()
+	row := retentionPolicyRow{TenantID: tenantID, MinDays: minDays, ArchiveAfterDays: archiveAfterDays, UpdatedAt: now}
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		query := tx.NewInsert().Model(&row).
+			On("CONFLICT (tenant_id) DO UPDATE SET min_days = excluded.min_days, archive_after_days = excluded.archive_after_days, updated_at = excluded.updated_at")
+		if s.dialect == "mysql" {
+			query = tx.NewInsert().Model(&row).
+				On("DUPLICATE KEY UPDATE min_days = VALUES(min_days), archive_after_days = VALUES(archive_after_days), updated_at = VALUES(updated_at)")
+		}
+		if _, err := query.Exec(ctx); err != nil {
+			return fmt.Errorf("save audit retention policy: %w", err)
+		}
+		if _, err := s.AppendTo(ctx, tx, EventInput{
+			TenantID: tenantID, EventType: "audit_retention_policy_updated",
+			TargetType: "audit_retention_policy", TargetID: tenantID, Outcome: "success",
+			Detail: map[string]any{"min_days": minDays, "archive_after_days": archiveAfterDays},
+		}); err != nil {
+			return fmt.Errorf("audit retention policy change: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return RetentionPolicy{}, err
 	}
 	return policyFromRow(row), nil
 }

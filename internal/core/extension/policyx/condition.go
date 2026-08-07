@@ -78,7 +78,15 @@ func EvaluateCondition(raw json.RawMessage, trusted TrustedContext) (bool, error
 	if err != nil || value == nil {
 		return value == nil && err == nil, err
 	}
-	return evaluateExpression(value, trusted, true)
+	matched, err := evaluateExpression(value, trusted, true)
+	return matched, err
+}
+
+// evaluateExpression is the public entry point; it delegates to the
+// presence-tracking evaluator and discards the fact-gated flag.
+func evaluateExpression(value any, trusted TrustedContext, root bool) (bool, error) {
+	matched, _, err := evaluateWithPresence(value, trusted, root)
+	return matched, err
 }
 
 func parseCondition(raw json.RawMessage) (any, error) {
@@ -378,51 +386,77 @@ func timeArguments(argument any) (time.Duration, time.Duration, *time.Location, 
 		time.Duration(end.Hour())*time.Hour + time.Duration(end.Minute())*time.Minute, location, nil
 }
 
-func evaluateExpression(value any, trusted TrustedContext, root bool) (bool, error) {
+// evaluateWithPresence returns (matched, factGated, error).
+// factGated is true when the result is false because a resource.* field was
+// absent from the trusted context. Callers that negate a result (neq, not)
+// must fail closed when factGated is true: an absent fact cannot prove the
+// negation.
+func evaluateWithPresence(value any, trusted TrustedContext, root bool) (bool, bool, error) {
 	object := value.(map[string]any)
 	operator, argument, _ := conditionOperator(object, root)
 	switch operator {
 	case "all":
 		for _, item := range argument.([]any) {
-			matched, err := evaluateExpression(item, trusted, false)
+			matched, factGated, err := evaluateWithPresence(item, trusted, false)
 			if err != nil || !matched {
-				return false, err
+				return false, factGated, err
 			}
 		}
-		return true, nil
+		return true, false, nil
 	case "any":
+		anyFactGated := false
 		for _, item := range argument.([]any) {
-			matched, err := evaluateExpression(item, trusted, false)
+			matched, factGated, err := evaluateWithPresence(item, trusted, false)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			if matched {
-				return true, nil
+				return true, false, nil
+			}
+			if factGated {
+				anyFactGated = true
 			}
 		}
-		return false, nil
+		return false, anyFactGated, nil
 	case "not":
-		matched, err := evaluateExpression(argument, trusted, false)
-		return !matched, err
+		matched, factGated, err := evaluateWithPresence(argument, trusted, false)
+		if err != nil {
+			return false, false, err
+		}
+		// An absent resource fact cannot prove the negation of a condition;
+		// fail closed per the documented contract.
+		if factGated {
+			return false, false, nil
+		}
+		return !matched, false, nil
 	case "eq", "neq":
 		field, literal, _ := comparisonOperands(argument)
-		matched := scalarEqual(field, literal, trusted)
+		matched, factPresent := scalarEqualPresence(field, literal, trusted)
 		if operator == "neq" {
-			matched = !matched
+			// neq on an absent resource fact must fail closed: we cannot
+			// prove inequality without the fact.
+			if !factPresent {
+				return false, true, nil
+			}
+			return !matched, false, nil
 		}
-		return matched, nil
+		// eq on an absent resource fact must fail closed.
+		if !factPresent {
+			return false, true, nil
+		}
+		return matched, false, nil
 	case "gt", "gte", "lt", "lte":
 		_, literal, _ := comparisonOperands(argument)
 		expected := integerValue(literal)
 		switch operator {
 		case "gt":
-			return trusted.ACR > expected, nil
+			return trusted.ACR > expected, false, nil
 		case "gte":
-			return trusted.ACR >= expected, nil
+			return trusted.ACR >= expected, false, nil
 		case "lt":
-			return trusted.ACR < expected, nil
+			return trusted.ACR < expected, false, nil
 		default:
-			return trusted.ACR <= expected, nil
+			return trusted.ACR <= expected, false, nil
 		}
 	case "in":
 		field, literal, _ := comparisonOperands(argument)
@@ -430,46 +464,52 @@ func evaluateExpression(value any, trusted TrustedContext, root bool) (bool, err
 		if field == "network.zone" {
 			actual = trusted.NetworkZone
 		} else if isResourceContextField(field) {
-			actual, _ = resourceFieldValue(field, trusted)
+			var factPresent bool
+			actual, factPresent = resourceFieldValue(field, trusted)
+			if !factPresent {
+				return false, true, nil
+			}
 		}
 		for _, item := range literal.([]any) {
 			if actual == item.(string) {
-				return true, nil
+				return true, false, nil
 			}
 		}
-		return false, nil
+		return false, false, nil
 	case "contains":
 		_, literal, _ := comparisonOperands(argument)
-		return slices.Contains(trusted.AMR, literal.(string)), nil
+		return slices.Contains(trusted.AMR, literal.(string)), false, nil
 	case "between_time":
 		start, end, location, err := timeArguments(argument)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		local := trusted.Time.In(location)
 		current := time.Duration(local.Hour())*time.Hour + time.Duration(local.Minute())*time.Minute
 		if start < end {
-			return current >= start && current < end, nil
+			return current >= start && current < end, false, nil
 		}
-		return current >= start || current < end, nil
+		return current >= start || current < end, false, nil
 	default:
-		return false, fmt.Errorf("unknown authorization condition operator %q", operator)
+		return false, false, fmt.Errorf("unknown authorization condition operator %q", operator)
 	}
 }
 
-func scalarEqual(field string, expected any, trusted TrustedContext) bool {
+// scalarEqualPresence returns (matched, factPresent). factPresent is false only
+// when a resource.* field is referenced but absent from the trusted context.
+func scalarEqualPresence(field string, expected any, trusted TrustedContext) (bool, bool) {
 	switch field {
 	case "auth.acr":
-		return trusted.ACR == integerValue(expected)
+		return trusted.ACR == integerValue(expected), true
 	case "client.id":
-		return trusted.ClientID == expected.(string)
+		return trusted.ClientID == expected.(string), true
 	case "network.zone":
-		return trusted.NetworkZone == expected.(string)
+		return trusted.NetworkZone == expected.(string), true
 	default:
 		if isResourceContextField(field) {
 			actual, ok := resourceFieldValue(field, trusted)
-			return ok && actual == expected.(string)
+			return ok && actual == expected.(string), ok
 		}
-		return false
+		return false, true
 	}
 }

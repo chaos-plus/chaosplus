@@ -23,9 +23,19 @@ const maxExtractedDatabaseBytes int64 = 1 << 30
 
 // workDir returns the cache directory for geoip databases.
 func workDir(parts ...string) (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
+	// Resolution order: GEOIP_CACHE_DIR (hermetic tests/deployments), then
+	// XDG_CACHE_HOME (os.UserCacheDir ignores it on macOS), then the user cache
+	// directory.
+	base := os.Getenv("GEOIP_CACHE_DIR")
+	if base == "" {
+		base = os.Getenv("XDG_CACHE_HOME")
+	}
+	if base == "" {
+		var err error
+		base, err = os.UserCacheDir()
+		if err != nil {
+			base = os.TempDir()
+		}
 	}
 	dir := filepath.Join(append([]string{base, "geoip"}, parts...)...)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -218,10 +228,12 @@ func findLatestFile(dir string, suffix string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Sort newest-first so the first match below is the most recently
+	// downloaded database, not the oldest.
 	sort.Slice(entries, func(i, j int) bool {
 		fi, _ := entries[i].Info()
 		fj, _ := entries[j].Info()
-		return fi.ModTime().Before(fj.ModTime())
+		return fi.ModTime().After(fj.ModTime())
 	})
 	for _, e := range entries {
 		if !e.IsDir() {

@@ -51,7 +51,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	assert.Empty(t, emptyMenuEnvelope.Data)
 
 	createdRole := api.Post("/iam/roles", header[0], header[1], map[string]any{"name": "Managers", "description": "Tenant managers"})
-	require.Equal(t, http.StatusOK, createdRole.Code, createdRole.Body.String())
+	require.Equal(t, http.StatusCreated, createdRole.Code, createdRole.Body.String())
 	roleID := responseID(t, createdRole.Body.Bytes())
 	require.NotEmpty(t, roleID)
 	assert.Equal(t, http.StatusOK, api.Get("/iam/roles/"+roleID, header[0], header[1]).Code)
@@ -100,7 +100,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	member := api.Post("/iam/members", header[0], header[1], map[string]any{
 		"subject": "external-subject", "display_name": "External User", "email": "external@example.com", "department_id": "department", "status": "active",
 	})
-	require.Equal(t, http.StatusOK, member.Code, member.Body.String())
+	require.Equal(t, http.StatusCreated, member.Code, member.Body.String())
 	assert.Contains(t, member.Body.String(), `"department_id":"department"`)
 	assert.Equal(t, http.StatusOK, api.Get("/iam/members/external-subject", header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Patch("/iam/members/external-subject", header[0], header[1], map[string]any{"status": "disabled"}).Code)
@@ -111,18 +111,18 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	rootEntity := api.Post("/iam/entities", header[0], header[1], map[string]any{
 		"type": "company", "name": "Acme", "metadata": map[string]any{"region": "west"},
 	})
-	require.Equal(t, http.StatusOK, rootEntity.Code, rootEntity.Body.String())
+	require.Equal(t, http.StatusCreated, rootEntity.Code, rootEntity.Body.String())
 	rootEntityID := responseID(t, rootEntity.Body.Bytes())
 	childEntity := api.Post("/iam/entities", header[0], header[1], map[string]any{
 		"parent_id": rootEntityID, "type": "store", "name": "Main",
 	})
-	require.Equal(t, http.StatusOK, childEntity.Code, childEntity.Body.String())
+	require.Equal(t, http.StatusCreated, childEntity.Code, childEntity.Body.String())
 	childEntityID := responseID(t, childEntity.Body.Bytes())
 	assert.Equal(t, http.StatusOK, api.Get("/iam/entities/"+childEntityID, header[0], header[1]).Code)
 	relationshipMember := api.Post("/iam/members", header[0], header[1], map[string]any{
 		"subject": "relationship-user", "display_name": "Relationship User", "status": "active",
 	})
-	require.Equal(t, http.StatusOK, relationshipMember.Code, relationshipMember.Body.String())
+	require.Equal(t, http.StatusCreated, relationshipMember.Code, relationshipMember.Body.String())
 	directRelationship := map[string]any{
 		"subject_type": "principal", "subject_id": "relationship-user", "relation": "owner",
 		"resource_type": "company", "resource_id": rootEntityID,
@@ -238,7 +238,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	menu := api.Post("/iam/menus", header[0], header[1], map[string]any{
 		"label": "Users", "route": "/iam/users", "permission_code": "user_view", "status": "active",
 	})
-	require.Equal(t, http.StatusOK, menu.Code, menu.Body.String())
+	require.Equal(t, http.StatusCreated, menu.Code, menu.Body.String())
 	menuID := responseID(t, menu.Body.Bytes())
 	assert.Equal(t, http.StatusOK, api.Get("/iam/menus/"+menuID, header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Patch("/iam/menus/"+menuID, header[0], header[1], map[string]any{
@@ -279,7 +279,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	backupMember := api.Post("/iam/members", header[0], header[1], map[string]any{
 		"subject": backupID, "display_name": "Backup Admin", "status": "active",
 	})
-	require.Equal(t, http.StatusOK, backupMember.Code, backupMember.Body.String())
+	require.Equal(t, http.StatusCreated, backupMember.Code, backupMember.Body.String())
 	backupRole := api.Put("/iam/roles/administrator/members/"+backupID, header[0], header[1])
 	require.Equal(t, http.StatusOK, backupRole.Code, backupRole.Body.String())
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/administrator/members/"+authorization.principalID, header[0], header[1]).Code)
@@ -292,7 +292,7 @@ func TestIAMDataScopeHTTPErrorsAndLocales(t *testing.T) {
 	db, api, authorization := newIAMAPI(t)
 	header := []string{authorization.header, authz.TenantHeader + ": tenant"}
 	role := api.Post("/iam/roles", header[0], header[1], map[string]any{"name": "Scoped"})
-	require.Equal(t, http.StatusOK, role.Code, role.Body.String())
+	require.Equal(t, http.StatusCreated, role.Code, role.Body.String())
 	roleID := responseID(t, role.Body.Bytes())
 	now := time.Now().UTC().UnixMilli()
 	for _, department := range []struct{ id, status string }{{"active", "active"}, {"disabled", "disabled"}} {
@@ -411,7 +411,7 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/menus/missing", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/administrator/permissions/not_declared", authorizationHeader, tenant).Code)
 	emptyRole := api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": "No Permissions"})
-	require.Equal(t, http.StatusOK, emptyRole.Code, emptyRole.Body.String())
+	require.Equal(t, http.StatusCreated, emptyRole.Code, emptyRole.Body.String())
 	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+responseID(t, emptyRole.Body.Bytes())+"/permissions/user_view/condition", authorizationHeader, tenant, map[string]any{"condition": map[string]any{"version": 1, "gte": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}}}}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/menus", authorizationHeader, tenant, map[string]any{
 		"label": "Invalid", "route": "/invalid", "permission_code": "not_declared", "status": "active",

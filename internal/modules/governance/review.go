@@ -29,6 +29,7 @@ const (
 	ReviewGrantPosition     = "position"
 	ReviewGrantEntity       = "entity"
 	ReviewGrantDynamicGroup = "dynamic_group"
+	ReviewGrantRelationship = "relationship"
 
 	maxReviewDuration = 365 * 24 * time.Hour
 )
@@ -284,6 +285,28 @@ func (s *Service) DecideReviewItem(ctx context.Context, tenantID, reviewID, item
 				policyChanged, err = s.grants.RemoveEntityRoleBinding(ctx, tx, tenantID, item.GrantID, item.RoleID, item.PrincipalID)
 			case ReviewGrantDynamicGroup:
 				err = ErrReviewDynamicDerived
+			case ReviewGrantRelationship:
+				// ReBAC edges are reviewed per resource; the grant_id is the
+				// target identifier. Try the graph-relationship table first,
+				// then the business-resource table; whichever row matches is
+				// the one the reviewer revoked.
+				graph, err := tx.NewDelete().Model((*struct {
+					bun.BaseModel `bun:"table:iam_relationships"`
+				})(nil)).Where("tenant_id = ? AND subject_type = 'principal' AND subject_id = ? AND resource_id = ?", tenantID, item.PrincipalID, item.GrantID).Exec(ctx)
+				if err != nil {
+					return err
+				}
+				affected, _ := graph.RowsAffected()
+				if affected == 0 {
+					resource, err := tx.NewDelete().Model((*struct {
+						bun.BaseModel `bun:"table:iam_resource_relationships"`
+					})(nil)).Where("tenant_id = ? AND subject_type = 'principal' AND subject_id = ? AND entity_id = ?", tenantID, item.PrincipalID, item.GrantID).Exec(ctx)
+					if err != nil {
+						return err
+					}
+					affected, _ = resource.RowsAffected()
+				}
+				policyChanged = affected > 0
 			default:
 				err = ErrInvalidReview
 			}
@@ -395,6 +418,11 @@ func (s *Service) finishReview(ctx context.Context, tenantID, reviewID, actorID,
 	return updated, nil
 }
 
+// listReviewableGrants collects every grant type that can be reviewed and
+// revoked: permanent role members, temporary grants, static-group-derived,
+// position-derived, entity-scoped bindings, dynamic-group-derived access, and
+// ReBAC relationship edges (both iam_relationships graph edges and
+// iam_resource_relationships business-resource edges).
 func listReviewableGrants(ctx context.Context, db bun.IDB, tenantID string, now int64) ([]reviewableGrantRow, error) {
 	rows := make([]reviewableGrantRow, 0)
 	err := db.NewRaw(`
@@ -440,8 +468,26 @@ JOIN iam_entities AS e ON e.tenant_id = b.tenant_id AND e.id = b.scope_id AND e.
 JOIN iam_roles AS roles ON roles.tenant_id = b.tenant_id AND roles.id = b.role_id
 JOIN iam_tenant_members AS tm ON tm.tenant_id = b.tenant_id AND tm.user_subject = b.principal_id AND tm.status = 'active'
 WHERE b.tenant_id = ? AND b.scope_type = 'entity' AND (b.expires_at = 0 OR b.expires_at > ?)
+UNION ALL
+SELECT r.subject_id AS principal_id, tm.display_name AS principal_name,
+       '' AS role_id, (r.relation || ' of ' || e.type || ' ' || e.name) AS role_name,
+       'relationship' AS grant_type, r.resource_id AS grant_id,
+       r.created_at AS grant_created_at, 0 AS grant_expires_at
+FROM iam_relationships AS r
+JOIN iam_entities AS e ON e.tenant_id = r.tenant_id AND e.id = r.resource_id AND e.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = r.tenant_id AND tm.user_subject = r.subject_id AND tm.status = 'active'
+WHERE r.tenant_id = ? AND r.subject_type = 'principal'
+UNION ALL
+SELECT rr.subject_id AS principal_id, tm.display_name AS principal_name,
+       '' AS role_id, (rr.relation || ' of ' || rr.resource_type || ' ' || rr.resource_id) AS role_name,
+       'relationship' AS grant_type, rr.entity_id AS grant_id,
+       rr.created_at AS grant_created_at, 0 AS grant_expires_at
+FROM iam_resource_relationships AS rr
+JOIN iam_entities AS e ON e.tenant_id = rr.tenant_id AND e.id = rr.entity_id AND e.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = rr.tenant_id AND tm.user_subject = rr.subject_id AND tm.status = 'active'
+WHERE rr.tenant_id = ? AND rr.subject_type = 'principal'
 ORDER BY principal_id, role_id, grant_type, grant_id`, tenantID, tenantID, now, now,
-		tenantID, now, now, tenantID, now, now, tenantID, now).Scan(ctx, &rows)
+		tenantID, now, now, tenantID, now, now, tenantID, now, tenantID, tenantID).Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("list reviewable role grants: %w", err)
 	}

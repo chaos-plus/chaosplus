@@ -501,23 +501,36 @@ func (s *Service) verifyHead(ctx context.Context, head headRow) (Integrity, erro
 }
 
 func (s *Service) verifyPrefix(ctx context.Context, tenantID string, maxSequence int64) (Integrity, error) {
-	var rows []eventRow
-	if err := s.db.NewSelect().Model(&rows).
-		Where("tenant_id = ? AND sequence > 0 AND sequence <= ?", tenantID, maxSequence).
-		Order("sequence ASC").Scan(ctx); err != nil {
-		return Integrity{}, err
-	}
-	result := Integrity{TenantID: tenantID, Valid: true, VerifiedEvents: int64(len(rows)), HeadSequence: maxSequence}
+	result := Integrity{TenantID: tenantID, Valid: true, HeadSequence: maxSequence}
 	previous := ""
-	for index, row := range rows {
-		if row.Sequence != int64(index+1) || row.PreviousHash != previous || row.EventHash != hash(row) {
-			result.Valid = false
-			return result, nil
+	seen := int64(0)
+	offset := int64(0)
+	for {
+		var rows []eventRow
+		if err := s.db.NewSelect().Model(&rows).
+			Where("tenant_id = ? AND sequence > 0 AND sequence <= ?", tenantID, maxSequence).
+			Order("sequence ASC").Offset(int(offset)).Limit(exportBatchSize).Scan(ctx); err != nil {
+			return Integrity{}, err
 		}
-		previous = row.EventHash
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			seen++
+			if row.Sequence != seen || row.PreviousHash != previous || row.EventHash != hash(row) {
+				result.Valid = false
+				return result, nil
+			}
+			previous = row.EventHash
+		}
+		offset += int64(len(rows))
+		if int64(len(rows)) < exportBatchSize {
+			break
+		}
 	}
+	result.VerifiedEvents = seen
 	result.HeadHash = previous
-	result.Valid = result.Valid && maxSequence == int64(len(rows))
+	result.Valid = result.Valid && maxSequence == seen
 	return result, nil
 }
 

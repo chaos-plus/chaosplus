@@ -41,6 +41,7 @@ func TestRESTOperationsDeclareAuthorization(t *testing.T) {
 	require.Equal(t, []string{
 		"authn-me",
 		"federation-callback-login",
+		"federation-callback-saml-login",
 		"federation-saml-metadata",
 		"federation-saml-slo",
 		"federation-saml-slo-post",
@@ -147,7 +148,7 @@ func assertEntityOpenAPIContract(t *testing.T, api huma.API) {
 		statuses                                       []string
 	}{
 		{http.MethodGet, "/iam/entities", "iam-list-entities", "List tenant entities", "entity_view", []string{"200", "401", "403", "422", "500", "503"}},
-		{http.MethodPost, "/iam/entities", "iam-create-entity", "Create a tenant entity", "entity_create", []string{"200", "401", "403", "404", "409", "422", "500", "503"}},
+		{http.MethodPost, "/iam/entities", "iam-create-entity", "Create a tenant entity", "entity_create", []string{"201", "401", "403", "404", "409", "422", "500", "503"}},
 		{http.MethodGet, "/iam/entities/{entity_id}", "iam-get-entity", "Get a tenant entity", "entity_view", []string{"200", "401", "403", "404", "422", "500", "503"}},
 		{http.MethodPatch, "/iam/entities/{entity_id}", "iam-update-entity", "Update a tenant entity", "entity_update", []string{"200", "401", "403", "404", "409", "422", "500", "503"}},
 		{http.MethodDelete, "/iam/entities/{entity_id}", "iam-delete-entity", "Delete an empty tenant entity", "entity_delete", []string{"200", "401", "403", "404", "409", "422", "500", "503"}},

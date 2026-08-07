@@ -35,7 +35,7 @@ func TestAuthorizationCodePKCEAndRefreshRotation(t *testing.T) {
 	verifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
 	digest := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(digest[:])
-	redirect, err := service.Authorize(context.Background(), auth.SessionCookie(session), "web", "https://client.example/callback", "code", "openid profile", "state", challenge, "S256", "nonce")
+	redirect, err := service.Authorize(context.Background(), auth.SessionCookie(session), "web", "https://client.example/callback", "code", "openid profile", "state", challenge, "S256", "nonce", "")
 	require.NoError(t, err)
 	parsed, err := url.Parse(redirect)
 	require.NoError(t, err)
@@ -240,15 +240,15 @@ func TestOAuthProtocolRejectionPaths(t *testing.T) {
 	_, err = service.Token(t.Context(), url.Values{"client_id": {public.ID}, "client_secret": {"unexpected"}}, "")
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 
-	_, err = service.Authorize(t.Context(), "", public.ID, public.RedirectURIs[0], "token", "openid", "", strings.Repeat("a", 43), "S256", "")
+	_, err = service.Authorize(t.Context(), "", public.ID, public.RedirectURIs[0], "token", "openid", "", strings.Repeat("a", 43), "S256", "", "")
 	assert.ErrorIs(t, err, ErrInvalidRequest)
-	_, err = service.Authorize(t.Context(), "", public.ID, public.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "")
+	_, err = service.Authorize(t.Context(), "", public.ID, public.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "", "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
 	session, _, err := authentication.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(t.Context(), "UPDATE iam_tenant_members SET status = 'disabled' WHERE tenant_id = ? AND user_subject = ?", "tenant", principalID)
 	require.NoError(t, err)
-	_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), public.ID, public.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "")
+	_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), public.ID, public.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "", "")
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 
 	assert.NoError(t, service.Revoke(t.Context(), url.Values{"client_id": {public.ID}}, ""))
@@ -277,10 +277,10 @@ func TestOAuthStoredGrantExpirationAndReplay(t *testing.T) {
 	digest := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(digest[:])
 
-	_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "admin", "", challenge, "S256", "")
+	_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "admin", "", challenge, "S256", "", "")
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 
-	redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", challenge, "S256", "")
+	redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", challenge, "S256", "", "")
 	require.NoError(t, err)
 	parsed, err := url.Parse(redirect)
 	require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestOAuthAuthorizationPersistenceFailures(t *testing.T) {
 		require.NoError(t, err)
 		_, err = service.db.ExecContext(t.Context(), "DROP TABLE iam_oauth_codes")
 		require.NoError(t, err)
-		_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "")
+		_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", strings.Repeat("a", 43), "S256", "", "")
 		assert.ErrorContains(t, err, "store authorization code")
 	})
 
@@ -345,7 +345,7 @@ func TestOAuthAuthorizationPersistenceFailures(t *testing.T) {
 		require.NoError(t, err)
 		verifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
 		digest := sha256.Sum256([]byte(verifier))
-		redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", base64.RawURLEncoding.EncodeToString(digest[:]), "S256", "")
+		redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", base64.RawURLEncoding.EncodeToString(digest[:]), "S256", "", "")
 		require.NoError(t, err)
 		location, err := url.Parse(redirect)
 		require.NoError(t, err)
@@ -366,7 +366,7 @@ func TestOAuthAuthorizationPersistenceFailures(t *testing.T) {
 		require.NoError(t, err)
 		session, _, err := authentication.Login(t.Context(), "admin", "correct horse battery staple", "")
 		require.NoError(t, err)
-		_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), row.ID, "%", "code", "openid", "", strings.Repeat("a", 43), "S256", "")
+		_, err = service.Authorize(t.Context(), authentication.SessionCookie(session), row.ID, "%", "code", "openid", "", strings.Repeat("a", 43), "S256", "", "")
 		assert.ErrorIs(t, err, ErrInvalidRequest)
 	})
 

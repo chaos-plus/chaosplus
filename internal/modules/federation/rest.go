@@ -3,7 +3,9 @@ package federation
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -135,6 +137,39 @@ func RegisterBrowserREST(api huma.API, service *Service) {
 		ctx.SetHeader("Location", result.ReturnURL)
 		ctx.SetStatus(http.StatusFound)
 	})
+
+	samlCallback := huma.Operation{
+		OperationID: "federation-callback-saml-login", Method: http.MethodPost, Path: "/federation/{provider_id}/callback",
+		Summary: "Complete the SAML SP-initiated assertion flow and set the browser session", Tags: []string{"federation"}, DefaultStatus: http.StatusFound,
+		Parameters: []*huma.Param{
+			{Name: "provider_id", In: "path", Required: true, Schema: &huma.Schema{Type: huma.TypeString, MaxLength: intPointer(128)}},
+		},
+	}
+	authz.Public(&samlCallback)
+	samlCallback.Responses = browserResponses(api.OpenAPI().Components.Schemas)
+	api.OpenAPI().AddOperation(&samlCallback)
+	api.Adapter().Handle(&samlCallback, func(ctx huma.Context) {
+		body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), samlFlateLimit))
+		if err != nil {
+			writeFederationError(api, ctx, ErrOIDCState)
+			return
+		}
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			writeFederationError(api, ctx, ErrOIDCState)
+			return
+		}
+		sessionToken, returnURL, err := service.CompleteSAMLLogin(ctx.Context(), ctx.Param("provider_id"), values.Get("SAMLResponse"), ctx.Header("Cookie"), requestCallbackURL(ctx, ctx.Param("provider_id")))
+		if err != nil {
+			ctx.AppendHeader("Set-Cookie", service.StateClearCookie())
+			writeFederationError(api, ctx, err)
+			return
+		}
+		ctx.AppendHeader("Set-Cookie", service.StateClearCookie())
+		ctx.AppendHeader("Set-Cookie", service.authn.SessionCookie(sessionToken))
+		ctx.SetHeader("Location", returnURL)
+		ctx.SetStatus(http.StatusFound)
+	})
 }
 
 func browserResponses(schemas huma.Registry) map[string]*huma.Response {
@@ -203,6 +238,8 @@ func federationError(err error) error {
 		return huma.Error400BadRequest("federation_email_unverified")
 	case errors.Is(err, ErrOIDCDiscovery), errors.Is(err, ErrOIDCToken), errors.Is(err, ErrOIDCTokenInvalid):
 		return huma.Error400BadRequest("federation_oidc_failed")
+	case errors.Is(err, ErrSAMLResponse):
+		return huma.Error400BadRequest("federation_saml_invalid_request")
 	default:
 		return huma.Error500InternalServerError("federation_unavailable")
 	}

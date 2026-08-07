@@ -26,6 +26,7 @@ type authorizeInput struct {
 	CodeChallenge       string `query:"code_challenge" required:"true" minLength:"43" maxLength:"128"`
 	CodeChallengeMethod string `query:"code_challenge_method" required:"true" enum:"S256"`
 	Nonce               string `query:"nonce"`
+	Prompt              string `query:"prompt" enum:"consent,none"`
 	Cookie              string `header:"Cookie" hidden:"true"`
 }
 
@@ -128,8 +129,20 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		return &jwksOutput{Body: service.authn.JWKS()}, nil
 	})
 	authz.RegisterPublic(api, huma.Operation{OperationID: "oauth-authorize", Method: http.MethodGet, Path: "/oauth/authorize", Summary: "Start an authorization code flow with PKCE", DefaultStatus: http.StatusFound, Security: []map[string][]string{{authz.SessionScheme: {}}}, Tags: []string{"oauth"}}, func(ctx context.Context, in *authorizeInput) (*redirectOutput, error) {
-		location, err := service.Authorize(ctx, in.Cookie, in.ClientID, in.RedirectURI, in.ResponseType, in.Scope, in.State, in.CodeChallenge, in.CodeChallengeMethod, in.Nonce)
+		location, err := service.Authorize(ctx, in.Cookie, in.ClientID, in.RedirectURI, in.ResponseType, in.Scope, in.State, in.CodeChallenge, in.CodeChallengeMethod, in.Nonce, in.Prompt)
 		if err != nil {
+			// A consent-required result redirects to the consent endpoint;
+			// everything else is a plain authorization error.
+			var consentErr *ErrConsentRequired
+			if errors.As(err, &consentErr) {
+				consentURL := service.authn.Issuer() + "/oauth/consent?client_id=" + url.QueryEscape(in.ClientID) +
+					"&scope=" + url.QueryEscape(in.Scope) + "&state=" + url.QueryEscape(in.State) +
+					"&redirect_uri=" + url.QueryEscape(in.RedirectURI) +
+					"&code_challenge=" + url.QueryEscape(in.CodeChallenge) +
+					"&code_challenge_method=" + url.QueryEscape(in.CodeChallengeMethod) +
+					"&nonce=" + url.QueryEscape(in.Nonce)
+				return &redirectOutput{Status: http.StatusFound, Location: consentURL}, nil
+			}
 			return nil, oauthError(ctx, http.StatusBadRequest, "invalid_request")
 		}
 		return &redirectOutput{Status: http.StatusFound, Location: location}, nil

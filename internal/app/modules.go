@@ -94,9 +94,9 @@ func (app *App) buildModules() []any {
 					}
 					return changed, err
 				},
-				RemoveGroupMembership:    iam.RemoveGroupMembership,
-				RemovePositionMembership: iam.RemovePositionMembership,
-				RemoveEntityRoleBinding:  iam.RemoveEntityRoleBinding,
+				RemoveGroupMembership: guardGroupPositionRemove(administratorGuard, dialect, iam.RemoveGroupMembership),
+				RemovePositionMembership: guardGroupPositionRemove(administratorGuard, dialect, iam.RemovePositionMembership),
+				RemoveEntityRoleBinding:  guardEntityRoleRemove(administratorGuard, dialect, iam.RemoveEntityRoleBinding),
 			}, nextID))
 			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar, app.cfg.Audit))
 			if app.cfg.Federation.Enabled && app.authnWeb != nil {
@@ -131,5 +131,58 @@ func registrationPrincipalCreator(ctx context.Context, db bun.IDB, email, passwo
 		return "", authnext.ErrInvalidRegistration
 	default:
 		return id, err
+	}
+}
+
+// guardGroupPositionRemove wraps a group or position membership removal with the
+// administrator guard so an access review cannot revoke the last tenant
+// administrator through a derived grant. The underlying removal function is
+// called only after the guard confirms a durable administrator remains.
+func guardGroupPositionRemove(
+	guard *iam.AdministratorGuard, dialect string,
+	remove func(context.Context, bun.IDB, string, string, string) (bool, error),
+) func(context.Context, bun.IDB, string, string, string) (bool, error) {
+	return func(ctx context.Context, db bun.IDB, tenantID, targetID, principalID string) (bool, error) {
+		verify, err := guard.Protect(ctx, db, dialect, tenantID)
+		if err != nil {
+			return false, err
+		}
+		changed, err := remove(ctx, db, tenantID, targetID, principalID)
+		if err != nil || !changed {
+			return changed, err
+		}
+		if err := verify(); err != nil {
+			if errors.Is(err, iam.ErrLastTenantAdministrator) {
+				return false, governance.ErrReviewLastAdministrator
+			}
+			return false, err
+		}
+		return true, nil
+	}
+}
+
+// guardEntityRoleRemove wraps an entity role binding removal with the
+// administrator guard so an access review cannot revoke the last tenant
+// administrator through a scoped entity role binding.
+func guardEntityRoleRemove(
+	guard *iam.AdministratorGuard, dialect string,
+	remove func(context.Context, bun.IDB, string, string, string, string) (bool, error),
+) func(context.Context, bun.IDB, string, string, string, string) (bool, error) {
+	return func(ctx context.Context, db bun.IDB, tenantID, entityID, roleID, principalID string) (bool, error) {
+		verify, err := guard.Protect(ctx, db, dialect, tenantID)
+		if err != nil {
+			return false, err
+		}
+		changed, err := remove(ctx, db, tenantID, entityID, roleID, principalID)
+		if err != nil || !changed {
+			return changed, err
+		}
+		if err := verify(); err != nil {
+			if errors.Is(err, iam.ErrLastTenantAdministrator) {
+				return false, governance.ErrReviewLastAdministrator
+			}
+			return false, err
+		}
+		return true, nil
 	}
 }

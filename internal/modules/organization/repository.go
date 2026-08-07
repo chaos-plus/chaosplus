@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type departmentRow struct {
@@ -130,7 +131,7 @@ func (r *Repository) update(ctx context.Context, row *departmentRow, expectedVer
 		Where("tenant_id = ? AND id = ? AND version = ?", row.TenantID, row.ID, expectedVersion).
 		Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return ErrNameConflict
 		}
 		return fmt.Errorf("update department: %w", err)
@@ -297,12 +298,8 @@ func departmentFromRow(row departmentRow, depth int) Department {
 	}
 }
 
-func isUniqueViolation(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate entry") || strings.Contains(message, "duplicate key")
-}
 
 func isSiblingNameViolation(err error) bool {
 	message := strings.ToLower(err.Error())
-	return isUniqueViolation(err) && (strings.Contains(message, "sibling_name") || (strings.Contains(message, "parent_id") && strings.Contains(message, "name_key")))
+	return bunx.IsUniqueViolation(err) && (strings.Contains(message, "sibling_name") || (strings.Contains(message, "parent_id") && strings.Contains(message, "name_key")))
 }

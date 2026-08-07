@@ -385,6 +385,33 @@ func TestSAMLSSOPostBindingAndMetadata(t *testing.T) {
 	assert.NotEmpty(t, responseValue)
 }
 
+func TestSAMLResponseTemplateEscapesRelayState(t *testing.T) {
+	env := newFederationEnvironment(t)
+	startSAML(t, env, SAMLConfig{Enabled: true})
+	tsp := newSAMLSPServer(t)
+	tsp.register(t, env)
+	server := newSAMLServer(t, env)
+	_, cookie := samlSessionCookie(t, env)
+
+	ssoURL := server.URL + samlSSOPath("tenant-a")
+	request := &saml.AuthnRequest{
+		ID: "id-xss-test", Version: "2.0", IssueInstant: time.Now().UTC(),
+		Destination: ssoURL, Issuer: &saml.Issuer{Value: tsp.entityID},
+		AssertionConsumerServiceURL: tsp.acsURL, ProtocolBinding: saml.HTTPPostBinding,
+	}
+	raw, err := xml.Marshal(request)
+	require.NoError(t, err)
+
+	evilRelay := `"><script>alert(1)</script>`
+	evilResponse := samlBrowserRequest(t, server, http.MethodPost, ssoURL, cookie,
+		"SAMLRequest="+url.QueryEscape(base64.StdEncoding.EncodeToString(raw))+
+			"&RelayState="+url.QueryEscape(evilRelay))
+	require.Equal(t, http.StatusOK, evilResponse.StatusCode)
+	evilHTML := samlReadBody(t, evilResponse)
+	assert.NotContains(t, evilHTML, `<script>alert(1)</script>`, "RelayState must be HTML-escaped")
+	assert.Contains(t, evilHTML, `&lt;script&gt;`, "RelayState script tag must be escaped")
+}
+
 func TestSAMLSSORejectsInvalidRequests(t *testing.T) {
 	env := newFederationEnvironment(t)
 	startSAML(t, env, SAMLConfig{Enabled: true})
@@ -722,6 +749,29 @@ func TestSAMLSingleLogoutRequiresEnabledIdP(t *testing.T) {
 	server := newSAMLServer(t, env)
 	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSLOPath("tenant-a")+"?SAMLRequest=x", "")
 	assert.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+}
+
+func TestSAMLSingleLogoutRejectsUnauthenticated(t *testing.T) {
+	env := newFederationEnvironment(t)
+	startSAML(t, env, SAMLConfig{Enabled: true})
+	tsp := newSAMLSPServer(t)
+	tsp.register(t, env)
+	server := newSAMLServer(t, env)
+	sloURL := server.URL + samlSLOPath("tenant-a")
+
+	notAfter := time.Now().UTC().Add(5 * time.Minute)
+	logout := &saml.LogoutRequest{
+		ID: "id-logout-csrf", Version: "2.0", IssueInstant: time.Now().UTC(),
+		Destination: sloURL, Issuer: &saml.Issuer{Value: tsp.entityID},
+		NameID:       &saml.NameID{Value: "alice", Format: samlNameIDPersistent},
+		NotOnOrAfter: &notAfter,
+	}
+	raw, err := xml.Marshal(logout)
+	require.NoError(t, err)
+
+	// No session cookie → logout CSRF is rejected.
+	response := samlBrowserRequest(t, server, http.MethodGet, sloURL+"?SAMLRequest="+url.QueryEscape(base64.StdEncoding.EncodeToString(raw)), "")
+	assert.Equal(t, http.StatusBadRequest, response.StatusCode, "unsigned LogoutRequest without session must be rejected")
 }
 
 func TestSAMLMetadataRequiresEnabledIdP(t *testing.T) {

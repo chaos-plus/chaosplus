@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type groupRow struct {
@@ -221,5 +222,5 @@ func groupMemberUpsertSQL(dialect string) string {
 
 func isGroupNameViolation(err error) bool {
 	message := strings.ToLower(err.Error())
-	return isUniqueViolation(err) && (strings.Contains(message, "groups_name") || strings.Contains(message, "tenant_id") && strings.Contains(message, "name_key"))
+	return bunx.IsUniqueViolation(err) && (strings.Contains(message, "groups_name") || strings.Contains(message, "tenant_id") && strings.Contains(message, "name_key"))
 }

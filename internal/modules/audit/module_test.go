@@ -18,14 +18,17 @@ func TestAuditModuleConstruction(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	module := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{})
 	require.NotNil(t, module.service)
+	// Start with no anchor config is a no-op.
+	require.NoError(t, module.Start(t.Context()))
 	declaration := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
 	assert.Nil(t, declaration.service)
 	assert.Panics(t, func() { NewModule(nil, nil, Config{}) })
 	assert.Panics(t, func() { NewModule(db, nil, Config{}) })
 	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
-	assert.Panics(t, func() {
-		NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{Enabled: true}})
-	})
+
+	// Invalid anchor config returns an error from Start, not a panic from NewModule.
+	badAnchor := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{Enabled: true}})
+	assert.Error(t, badAnchor.Start(t.Context()))
 
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	_, api := humatest.New(t)
@@ -46,6 +49,7 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 	}})
 	require.NotNil(t, module.service)
+	require.NoError(t, module.Start(t.Context()))
 	require.NotNil(t, module.service.anchor)
 	require.Nil(t, module.service.signer)
 
@@ -54,13 +58,15 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 		SigningKey: testSignerSeed(t),
 	}})
+	require.NoError(t, signed.Start(t.Context()))
 	require.NotNil(t, signed.service.anchor)
 	require.NotNil(t, signed.service.signer)
-	assert.Panics(t, func() {
-		NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{
-			Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
-			AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
-			SigningKey: "not-a-seed",
-		}})
-	})
+
+	// Invalid signing key returns an error from Start, not a panic.
+	badSigner := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{
+		Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
+		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
+		SigningKey: "not-a-seed",
+	}})
+	assert.Error(t, badSigner.Start(t.Context()))
 }

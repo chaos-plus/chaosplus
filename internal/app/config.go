@@ -96,9 +96,10 @@ type Redis struct {
 	DB           int      `mapstructure:"db" description:"redis database index" default:"0"`
 }
 
-// RateLimit configures the Redis-backed rate limiter. It enforces per-IP and
-// per-account dimensions independently; each is applied only when enabled with a
-// positive rate. Requires a configured Redis; disabled otherwise.
+// RateLimit configures the Redis-backed rate limiter. It enforces per-IP
+// dimensions; per-account limiting should only be enabled behind a trusted
+// reverse proxy that authenticates the caller and sets the account header.
+// Requires a configured Redis; disabled otherwise.
 type RateLimit struct {
 	Enabled bool        `mapstructure:"enabled" description:"enable rate limiting (requires redis)" default:"false"`
 	Prefix  string      `mapstructure:"prefix" description:"redis key prefix" default:"rl"`
@@ -115,14 +116,16 @@ type RateRule struct {
 	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
 }
 
-// AccountRule is a RateRule plus the header carrying the account id. When auth is
-// added, the account key can move from this header to the request context.
+// AccountRule is a RateRule plus the header carrying the account id.
+// IMPORTANT: only enable this dimension when a trusted reverse proxy
+// authenticates the caller and sets this header. Client-supplied headers
+// are trivially rotated to bypass per-account limits.
 type AccountRule struct {
 	Enabled bool          `mapstructure:"enabled" description:"enable this dimension" default:"false"`
 	Rate    int           `mapstructure:"rate" description:"allowed requests per period" default:"0"`
 	Period  time.Duration `mapstructure:"period" description:"rate window, e.g. 1m" default:"1m"`
 	Burst   int           `mapstructure:"burst" description:"max burst; defaults to rate when 0" default:"0"`
-	Header  string        `mapstructure:"header" description:"header carrying the account id" default:"X-Account-Id"`
+	Header  string        `mapstructure:"header" description:"header carrying the account id; only trust this when the proxy sets it after authentication" default:"X-Account-Id"`
 }
 
 type Log struct {

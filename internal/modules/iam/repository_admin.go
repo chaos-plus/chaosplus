@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type tenantMemberRow struct {
@@ -149,7 +150,7 @@ func (r *Repository) CreateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	row := menuToRow(menu)
 	row.ID, row.CreatedAt, row.UpdatedAt = id, now, now
 	if _, err := r.executor.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Menu{}, ErrMenuConflict
 		}
 		return Menu{}, fmt.Errorf("insert menu: %w", err)
@@ -190,7 +191,7 @@ func (r *Repository) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	result, err := r.executor.NewUpdate().Model(&row).Column("parent_id", "label", "route", "icon", "sort_order", "permission_code", "status").
 		Set("updated_at = ?", now).WherePK().Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Menu{}, ErrMenuConflict
 		}
 		return Menu{}, fmt.Errorf("update menu: %w", err)

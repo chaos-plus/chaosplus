@@ -7,6 +7,7 @@ import (
 
 const (
 	ProviderOIDC = "oidc"
+	ProviderSAML = "saml"
 
 	ProviderActive   = "active"
 	ProviderDisabled = "disabled"
@@ -24,6 +25,7 @@ var (
 	ErrOIDCToken              = errors.New("OIDC token exchange failed")
 	ErrOIDCState              = errors.New("invalid OIDC state")
 	ErrOIDCTokenInvalid       = errors.New("invalid OIDC ID token")
+	ErrSAMLResponse           = errors.New("invalid SAML response")
 	ErrInvalidSAMLSP          = errors.New("invalid SAML service provider")
 	ErrSAMLSPNotFound         = errors.New("SAML service provider not found")
 	ErrSAMLSPEntityIDExists   = errors.New("SAML service provider entity ID exists")

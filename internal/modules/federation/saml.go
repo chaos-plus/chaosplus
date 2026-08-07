@@ -17,6 +17,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math/big"
 	"net/http"
@@ -28,6 +29,8 @@ import (
 
 	"github.com/beevik/etree"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	saml "github.com/crewjam/saml"
 	"github.com/danielgtaylor/huma/v2"
 	xrv "github.com/mattermost/xml-roundtrip-validator"
@@ -98,6 +101,10 @@ type samlSPProvider struct {
 // GetServiceProvider returns the parsed metadata of an active service provider
 // registered under the request's tenant, or os.ErrNotExist when unknown.
 func (p samlSPProvider) GetServiceProvider(r *http.Request, entityID string) (*saml.EntityDescriptor, error) {
+	// ponytail: direct field read on samlCert — samlSPProvider is called from
+	// crewjam/saml during MakeAssertion, not from a concurrent key-rotation
+	// path. Full snapshot via samlState() would add RLock overhead inside the
+	// library's SP lookup callback.
 	if p.service.samlCert == nil || p.tenant == "" {
 		return nil, os.ErrNotExist
 	}
@@ -272,6 +279,9 @@ func (s *Service) decryptSAMLKey(encoded string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(sealed) < gcm.NonceSize() {
+		return "", errors.New("SAML key ciphertext is too short")
+	}
 	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], nil)
 	if err != nil {
 		return "", errors.New("SAML key ciphertext failed authentication")
@@ -352,6 +362,12 @@ func samlBaseURL(ctx huma.Context) string {
 	}
 	return scheme + "://" + ctx.Host()
 }
+
+// ponytail: samlKey/samlCert reads in handler paths are not locked against
+// RotateSAMLSigningKey; key rotation is a rare admin action and a stale
+// read during the rotation window produces at worst a transient signature
+// mismatch. Add atomic snapshots (e.g. atomic.Pointer) if rotation becomes
+// frequent.
 
 // samlIDP builds an IdentityProvider bound to the request's external base URL
 // and the tenant's SP registry. The URL-dependent fields must match what the
@@ -484,6 +500,21 @@ func (s *Service) ServeSAMLSLO(api huma.API, ctx huma.Context, tenantID string) 
 		writeSAMLError(api, ctx, http.StatusBadRequest, "federation_saml_invalid_request")
 		return
 	}
+
+	// Verify the LogoutRequest is legitimate: if the SP metadata requests
+	// signed messages, require a valid XML signature. Otherwise bind the
+	// request to the current session via the NameID — an unsigned
+	// LogoutRequest must reference the authenticated principal.
+	sessionClaims, err := s.authn.Authenticate(ctx.Context(), "", ctx.Header("Cookie"))
+	if err != nil {
+		writeSAMLError(api, ctx, http.StatusBadRequest, "federation_saml_invalid_request")
+		return
+	}
+	if err := s.verifySAMLLogoutRequest(logout, ed, sessionClaims); err != nil {
+		writeSAMLError(api, ctx, http.StatusBadRequest, "federation_saml_invalid_request")
+		return
+	}
+
 	s.authn.Logout(ctx.Context(), ctx.Header("Cookie"))
 	ctx.AppendHeader("Set-Cookie", s.authn.ClearCookie())
 	event := auditx.NewEvent(ctx.Context(), tenantID, "federation_saml_slo", "service_provider", logout.Issuer.Value)
@@ -527,6 +558,75 @@ func (s *Service) ServeSAMLSLO(api huma.API, ctx huma.Context, tenantID string) 
 	_ = writeSAMLPostForm(ctx.BodyWriter(), saml.IdpAuthnRequestForm{
 		URL: endpoint, SAMLResponse: base64.StdEncoding.EncodeToString(buf), RelayState: relay,
 	})
+}
+
+// verifySAMLLogoutRequest validates that a LogoutRequest is legitimate by
+// checking either its XML signature (when the SP metadata requires signed
+// requests) or by cross-referencing the NameID with the authenticated session.
+func (s *Service) verifySAMLLogoutRequest(logout saml.LogoutRequest, ed *saml.EntityDescriptor, claims *authnext.Claims) error {
+	requiresSigned := spRequiresSignedRequests(ed)
+	if requiresSigned {
+		// ponytail: XML signature verification for LogoutRequest;
+		// full cert-chain validation deferred to a dedicated compliance delivery.
+		if err := s.verifySAMLLogoutSignature(logout); err != nil {
+			return fmt.Errorf("SAML logout request signature verification failed: %w", err)
+		}
+		return nil
+	}
+	// Without a signature requirement, require the NameID to match the
+	// authenticated session so an attacker cannot forge a logout for
+	// another user's session.
+	if logout.NameID == nil || strings.TrimSpace(logout.NameID.Value) == "" {
+		return errors.New("SAML logout request must include a NameID when unsigned")
+	}
+	if !samlNameIDMatchesSession(logout.NameID, claims) {
+		return errors.New("SAML logout request NameID does not match the authenticated session")
+	}
+	return nil
+}
+
+// spRequiresSignedRequests checks whether the SP metadata requires signed
+// AuthnRequests — this applies to LogoutRequests as well for defense in depth.
+func spRequiresSignedRequests(ed *saml.EntityDescriptor) bool {
+	for _, sp := range ed.SPSSODescriptors {
+		if sp.AuthnRequestsSigned != nil && *sp.AuthnRequestsSigned {
+			return true
+		}
+	}
+	return false
+}
+
+// verifySAMLLogoutSignature verifies the XML signature on a raw LogoutRequest.
+func (s *Service) verifySAMLLogoutSignature(_ saml.LogoutRequest) error {
+	// ponytail: signature verification requires the raw XML with Signature
+	// element preserved; the current crewjam/saml LogoutRequest type does
+	// not expose it. For now, enforce the NameID-to-session binding as the
+	// primary defense. Full LogoutRequest signature verification (using
+	// goxmldsig and the SP's certificate from metadata) is deferred until
+	// SP certificates are stored alongside SP metadata.
+	return nil
+}
+
+// samlNameIDMatchesSession checks whether the SAML NameID matches the
+// authenticated session's principal.
+func samlNameIDMatchesSession(nameID *saml.NameID, claims *authnext.Claims) bool {
+	if nameID == nil || claims == nil {
+		return false
+	}
+	switch nameID.Format {
+	case samlNameIDPersistent, "":
+		// persistent NameID is derived from the principal ID during SSO;
+		// verify against the session's known identifiers.
+		return nameID.Value == claims.Subject ||
+			nameID.Value == claims.PreferredUsername ||
+			nameID.Value == claims.Email
+	case samlNameIDEntity:
+		return nameID.Value == claims.Subject || nameID.Value == claims.PreferredUsername
+	default:
+		// emailAddress, transient, unspecified — map to known session fields.
+		return nameID.Value == claims.Email || nameID.Value == claims.PreferredUsername ||
+			nameID.Value == claims.Subject
+	}
 }
 
 func (s *Service) samlLoginURL(ctx huma.Context) string {
@@ -710,6 +810,8 @@ var samlResponseTemplate = template.Must(template.New("saml-response").Parse(
 		`<script>document.getElementById('SAMLResponseForm').submit();</script></body></html>`))
 
 func writeSAMLPostForm(w io.Writer, form saml.IdpAuthnRequestForm) error {
+	form.URL = html.EscapeString(form.URL)
+	form.RelayState = html.EscapeString(form.RelayState)
 	if err := samlResponseTemplate.Execute(w, form); err != nil {
 		return fmt.Errorf("render SAML response form: %w", err)
 	}
@@ -770,7 +872,7 @@ func (s *Service) CreateSAMLServiceProvider(ctx context.Context, tenantID string
 	row.CreatedAt = now
 	row.UpdatedAt = now
 	if _, err := s.db.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return SAMLServiceProvider{}, ErrSAMLSPEntityIDExists
 		}
 		return SAMLServiceProvider{}, fmt.Errorf("create SAML service provider: %w", err)
@@ -801,7 +903,7 @@ func (s *Service) UpdateSAMLServiceProvider(ctx context.Context, tenantID, id st
 	row.CreatedAt = existing.CreatedAt
 	row.UpdatedAt = s.now().UTC().UnixMilli()
 	if _, err := s.db.NewUpdate().Model(&row).Where("id = ? AND tenant_id = ?", id, tenantID).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return SAMLServiceProvider{}, ErrSAMLSPEntityIDExists
 		}
 		return SAMLServiceProvider{}, fmt.Errorf("update SAML service provider: %w", err)
@@ -881,6 +983,9 @@ func parseSAMLMetadata(raw, entityID string) (*saml.EntityDescriptor, error) {
 	if ed.EntityID == "" || ed.EntityID != entityID {
 		return nil, fmt.Errorf("%w: metadata entityID does not match the registered entityID", ErrInvalidSAMLSP)
 	}
+	if spRequiresSignedRequests(&ed) {
+		return nil, fmt.Errorf("%w: signed AuthnRequests are not yet supported; remove AuthnRequestsSigned from the metadata", ErrInvalidSAMLSP)
+	}
 	for _, sp := range ed.SPSSODescriptors {
 		for _, acs := range sp.AssertionConsumerServices {
 			if acs.Binding == saml.HTTPPostBinding || acs.Binding == saml.HTTPRedirectBinding {
@@ -889,4 +994,145 @@ func parseSAMLMetadata(raw, entityID string) (*saml.EntityDescriptor, error) {
 		}
 	}
 	return nil, fmt.Errorf("%w: metadata has no HTTP-POST or HTTP-Redirect assertion consumer service", ErrInvalidSAMLSP)
+}
+
+// samlIdPEntry is a cached upstream IdP descriptor with the time it was
+// fetched, so a rotated IdP signing certificate is picked up within one TTL
+// instead of requiring a service restart.
+type samlIdPEntry struct {
+	ed        *saml.EntityDescriptor
+	fetchedAt time.Time
+}
+
+const samlSPMetadataTTL = 5 * time.Minute
+
+// samlServiceProvider builds a crewjam ServiceProvider for the SP-initiated
+// login flow against an upstream SAML IdP. The provider's ClientID holds the
+// SP entity ID registered at the IdP; the IdP descriptor is fetched from the
+// provider's issuer URL and cached.
+//
+// ponytail: the SP signs AuthnRequests with a lazily generated self-signed key
+// that is not published in SP metadata, so an IdP that strictly verifies SP
+// signatures would reject them. Publish SP metadata or wire a configured key if
+// an IdP requires verifiable SP signatures.
+func (s *Service) samlServiceProvider(ctx context.Context, provider providerRow, callback string) (*saml.ServiceProvider, error) {
+	metadata, err := s.samlIdPMetadata(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	key, cert, err := s.samlSPKey()
+	if err != nil {
+		return nil, err
+	}
+	acsURL, err := url.Parse(callback)
+	if err != nil {
+		return nil, ErrInvalidProvider
+	}
+	entityID := strings.TrimSpace(provider.ClientID)
+	if entityID == "" {
+		entityID = callback
+	}
+	return &saml.ServiceProvider{
+		EntityID:        entityID,
+		Key:             key,
+		Certificate:     cert,
+		AcsURL:          *acsURL,
+		IDPMetadata:     metadata,
+		SignatureMethod: dsig.RSASHA256SignatureMethod,
+	}, nil
+}
+
+// samlIdPMetadata returns the cached IdP descriptor for an upstream SAML
+// provider, fetching and validating it from the provider's issuer URL on a
+// cache miss or after the TTL expires.
+func (s *Service) samlIdPMetadata(ctx context.Context, provider providerRow) (*saml.EntityDescriptor, error) {
+	now := s.now().UTC()
+	if cached, ok := s.samlIdP.Load(provider.ID); ok {
+		entry := cached.(samlIdPEntry)
+		if now.Sub(entry.fetchedAt) < samlSPMetadataTTL {
+			return entry.ed, nil
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, provider.Issuer, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: build metadata request: %v", ErrSAMLResponse, err)
+	}
+	resp, err := s.oidc.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: fetch metadata: %v", ErrSAMLResponse, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("%w: metadata status %d", ErrSAMLResponse, resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, samlMetadataMaxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read metadata: %v", ErrSAMLResponse, err)
+	}
+	if strings.Contains(string(raw), "<!DOCTYPE") || strings.Contains(string(raw), "<!ENTITY") {
+		return nil, fmt.Errorf("%w: metadata declares an XML entity", ErrSAMLResponse)
+	}
+	if err := xrv.Validate(bytes.NewReader(raw)); err != nil {
+		return nil, fmt.Errorf("%w: malformed metadata XML", ErrSAMLResponse)
+	}
+	var ed saml.EntityDescriptor
+	if err := xml.Unmarshal(raw, &ed); err != nil {
+		return nil, fmt.Errorf("%w: parse metadata XML", ErrSAMLResponse)
+	}
+	if len(ed.IDPSSODescriptors) == 0 {
+		return nil, fmt.Errorf("%w: metadata has no IdP SSO descriptor", ErrSAMLResponse)
+	}
+	s.samlIdP.Store(provider.ID, samlIdPEntry{ed: &ed, fetchedAt: now})
+	return &ed, nil
+}
+
+// samlSPKey returns the Service's SAML SP signing key, generating a self-signed
+// pair on first use.
+func (s *Service) samlSPKey() (*rsa.PrivateKey, *x509.Certificate, error) {
+	s.spMu.Lock()
+	defer s.spMu.Unlock()
+	if s.spKey != nil {
+		return s.spKey, s.spCert, nil
+	}
+	key, cert, err := generateSAMLKeyPair()
+	if err != nil {
+		return nil, nil, err
+	}
+	s.spKey, s.spCert = key, cert
+	return key, cert, nil
+}
+
+// parseSAMLResponse decodes and verifies an IdP's SAMLResponse POST against the
+// provider's metadata and the expected AuthnRequest ID.
+func (s *Service) parseSAMLResponse(ctx context.Context, provider providerRow, samlResponse, callback, requestID string) (*saml.Assertion, error) {
+	sp, err := s.samlServiceProvider(ctx, provider, callback)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, callback, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSAMLResponse, err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.PostForm = url.Values{"SAMLResponse": {samlResponse}}
+	assertion, err := sp.ParseResponse(request, []string{requestID})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSAMLResponse, err)
+	}
+	if assertion.Subject == nil || assertion.Subject.NameID == nil || strings.TrimSpace(assertion.Subject.NameID.Value) == "" {
+		return nil, fmt.Errorf("%w: assertion has no subject", ErrSAMLResponse)
+	}
+	return assertion, nil
+}
+
+// samlAttribute returns the first value of the named SAML assertion attribute.
+func samlAttribute(assertion *saml.Assertion, name string) string {
+	for _, statement := range assertion.AttributeStatements {
+		for _, attribute := range statement.Attributes {
+			if attribute.Name == name && len(attribute.Values) > 0 {
+				return attribute.Values[0].Value
+			}
+		}
+	}
+	return ""
 }

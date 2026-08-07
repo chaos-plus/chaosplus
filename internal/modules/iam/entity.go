@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
@@ -59,7 +60,7 @@ func (r *Repository) CreateEntity(ctx context.Context, entity iamdomain.Entity) 
 		Name: entity.Name, Status: entity.Status, Metadata: string(metadata), CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := r.executor.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return iamdomain.Entity{}, iamdomain.ErrEntityConflict
 		}
 		return iamdomain.Entity{}, fmt.Errorf("insert entity: %w", err)
@@ -104,7 +105,7 @@ func (r *Repository) UpdateEntity(ctx context.Context, entity iamdomain.Entity) 
 		Set("metadata = ?", string(metadata)).Set("updated_at = ?", now).
 		Where("tenant_id = ? AND id = ?", entity.TenantID, entity.ID).Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return iamdomain.Entity{}, iamdomain.ErrEntityConflict
 		}
 		return iamdomain.Entity{}, fmt.Errorf("update entity: %w", err)

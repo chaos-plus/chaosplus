@@ -21,9 +21,11 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
+	saml "github.com/crewjam/saml"
 	"github.com/uptrace/bun"
 )
 
@@ -108,6 +110,12 @@ type Service struct {
 	samlKey    *rsa.PrivateKey
 	samlCert   *x509.Certificate
 	samlSPs    sync.Map
+	// SAML SP-initiated login state: cached upstream IdP metadata keyed by
+	// provider ID, plus the lazily generated SP signing key for AuthnRequests.
+	samlIdP sync.Map // providerID -> *saml.EntityDescriptor
+	spMu    sync.Mutex
+	spKey   *rsa.PrivateKey
+	spCert  *x509.Certificate
 }
 
 // ParseEncryptionKey decodes the federation encryption key from the accepted
@@ -202,7 +210,7 @@ func (s *Service) CreateProvider(ctx context.Context, tenantID string, input Pro
 		}
 	}
 	if _, err := s.db.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Provider{}, ErrProviderIssuerExists
 		}
 		return Provider{}, fmt.Errorf("create identity provider: %w", err)
@@ -244,7 +252,7 @@ func (s *Service) UpdateProvider(ctx context.Context, tenantID, id string, input
 		Set("default_role_id = ?", row.DefaultRoleID).Set("status = ?", row.Status).Set("updated_at = ?", row.UpdatedAt).
 		Where("tenant_id = ? AND id = ?", tenantID, id).Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Provider{}, ErrProviderIssuerExists
 		}
 		return Provider{}, fmt.Errorf("update identity provider: %w", err)
@@ -279,8 +287,10 @@ func (s *Service) DeleteProvider(ctx context.Context, tenantID, id string) error
 	return nil
 }
 
-// StartLogin begins an authorization-code flow: it resolves the provider, seals
-// the state cookie, and returns the upstream authorization URL.
+// StartLogin begins a browser login for an upstream identity provider: the
+// OIDC authorization-code flow, or the SAML SP-initiated flow for SAML
+// providers. It resolves the provider, seals the state cookie, and returns the
+// upstream redirect URL.
 func (s *Service) StartLogin(ctx context.Context, providerID, returnURL, callback string) (LoginStart, error) {
 	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
 	if err != nil {
@@ -288,6 +298,13 @@ func (s *Service) StartLogin(ctx context.Context, providerID, returnURL, callbac
 	}
 	if provider.Status != ProviderActive {
 		return LoginStart{}, ErrProviderDisabled
+	}
+	if provider.ProviderType == ProviderSAML {
+		redirectURL, stateCookie, err := s.StartSAMLLogin(ctx, providerID, returnURL, callback)
+		if err != nil {
+			return LoginStart{}, err
+		}
+		return LoginStart{AuthorizationURL: redirectURL, StateCookie: stateCookie}, nil
 	}
 	if !validHTTPURL(callback) || !strings.HasSuffix(callback, callbackURL(provider.ID)) {
 		return LoginStart{}, ErrInvalidProvider
@@ -363,7 +380,7 @@ func (s *Service) CompleteLogin(ctx context.Context, providerID, code, state, co
 	if err != nil {
 		return LoginComplete{}, err
 	}
-	sessionToken, err := s.authenticate(ctx, provider, claims)
+	sessionToken, err := s.authenticate(ctx, provider, claims, "oidc")
 	if err != nil {
 		return LoginComplete{}, err
 	}
@@ -376,7 +393,127 @@ func (s *Service) StateClearCookie() string {
 	return stateClearCookie(s.authn.CookieSecure())
 }
 
-func (s *Service) authenticate(ctx context.Context, provider providerRow, token idTokenClaims) (string, error) {
+// StartSAMLLogin begins an SP-initiated SAML login for a SAML identity
+// provider. It builds a signed HTTP-Redirect AuthnRequest to the IdP's SSO
+// endpoint and returns the redirect URL plus the sealed state cookie the
+// browser must send back to the callback.
+func (s *Service) StartSAMLLogin(ctx context.Context, providerID, returnURL, callback string) (string, string, error) {
+	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+	if err != nil {
+		return "", "", err
+	}
+	if provider.Status != ProviderActive {
+		return "", "", ErrProviderDisabled
+	}
+	if provider.ProviderType != ProviderSAML {
+		return "", "", ErrInvalidProvider
+	}
+	if !validHTTPURL(callback) || !strings.HasSuffix(callback, callbackURL(provider.ID)) {
+		return "", "", ErrInvalidProvider
+	}
+	resolvedReturnURL, err := s.authn.ResolveReturnURL(returnURL)
+	if err != nil {
+		return "", "", err
+	}
+	now := s.now().UTC()
+	// The state nonce doubles as the AuthnRequest ID so the callback can bind
+	// the response's InResponseTo to the exact request the browser started.
+	nonce, err := randomToken(18)
+	if err != nil {
+		return "", "", err
+	}
+	verifier, err := randomToken(32)
+	if err != nil {
+		return "", "", err
+	}
+	state := loginState{
+		ProviderID: provider.ID, Nonce: "id-" + nonce, CodeVerifier: verifier,
+		ReturnURL: resolvedReturnURL, ExpiresAt: now.Add(s.stateTTL).Unix(),
+	}
+	sealed, err := sealState(s.key, state)
+	if err != nil {
+		return "", "", err
+	}
+	sp, err := s.samlServiceProvider(ctx, provider, callback)
+	if err != nil {
+		return "", "", err
+	}
+	authnRequest := &saml.AuthnRequest{
+		ID:                          state.Nonce,
+		Version:                     "2.0",
+		IssueInstant:                now,
+		Destination:                 sp.GetSSOBindingLocation(saml.HTTPRedirectBinding),
+		Issuer:                      &saml.Issuer{Format: samlNameIDEntity, Value: sp.EntityID},
+		AssertionConsumerServiceURL: callback,
+		ProtocolBinding:             saml.HTTPPostBinding,
+	}
+	redirectURL, err := authnRequest.Redirect(state.Nonce, sp)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: build redirect request: %v", ErrSAMLResponse, err)
+	}
+	return redirectURL.String(), stateCookie(sealed, s.authn.CookieSecure(), int(s.stateTTL.Seconds())), nil
+}
+
+// CompleteSAMLLogin finishes an SP-initiated SAML login: it verifies the state
+// cookie, parses and verifies the IdP's SAMLResponse, provisions or links the
+// identity, and issues a browser session.
+func (s *Service) CompleteSAMLLogin(ctx context.Context, providerID, samlResponse, cookieHeader, callback string) (string, string, error) {
+	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+	if err != nil {
+		return "", "", err
+	}
+	if provider.Status != ProviderActive {
+		return "", "", ErrProviderDisabled
+	}
+	if provider.ProviderType != ProviderSAML {
+		return "", "", ErrInvalidProvider
+	}
+	if !validHTTPURL(callback) || !strings.HasSuffix(callback, callbackURL(provider.ID)) {
+		return "", "", ErrInvalidProvider
+	}
+	stateValue, err := cookieValue(cookieHeader, stateCookieName)
+	if err != nil {
+		return "", "", ErrOIDCState
+	}
+	sealedState, err := openState(s.key, stateValue)
+	if err != nil {
+		return "", "", ErrOIDCState
+	}
+	if sealedState.ProviderID != provider.ID || sealedState.ExpiresAt < s.now().UTC().Unix() {
+		return "", "", ErrOIDCState
+	}
+	assertion, err := s.parseSAMLResponse(ctx, provider, samlResponse, callback, sealedState.Nonce)
+	if err != nil {
+		return "", "", err
+	}
+	email := strings.TrimSpace(samlAttribute(assertion, "email"))
+	if email == "" {
+		email = strings.TrimSpace(samlAttribute(assertion, "Email"))
+	}
+	displayName := strings.TrimSpace(samlAttribute(assertion, "display_name"))
+	if displayName == "" {
+		displayName = strings.TrimSpace(samlAttribute(assertion, "displayName"))
+	}
+	if displayName == "" {
+		displayName = strings.TrimSpace(samlAttribute(assertion, "uid"))
+	}
+	verified := true
+	var authTime int64
+	if len(assertion.AuthnStatements) > 0 {
+		authTime = assertion.AuthnStatements[0].AuthnInstant.Unix()
+	}
+	claims := idTokenClaims{
+		Subject: assertion.Subject.NameID.Value, Email: email, EmailVerified: &verified,
+		Name: displayName, PreferredUsername: displayName, AuthTime: authTime,
+	}
+	sessionToken, err := s.authenticate(ctx, provider, claims, "saml")
+	if err != nil {
+		return "", "", err
+	}
+	return sessionToken, sealedState.ReturnURL, nil
+}
+
+func (s *Service) authenticate(ctx context.Context, provider providerRow, token idTokenClaims, method string) (string, error) {
 	var principalID string
 	now := s.now().UTC()
 	provisioned := false
@@ -446,7 +583,7 @@ func (s *Service) authenticate(ctx context.Context, provider providerRow, token 
 	if err != nil {
 		return "", err
 	}
-	assurance := authnext.Assurance{AuthTime: now, Level: 1, Methods: []string{"oidc"}}
+	assurance := authnext.Assurance{AuthTime: now, Level: 1, Methods: []string{method}}
 	if token.AuthTime > 0 {
 		assurance.AuthTime = time.Unix(token.AuthTime, 0).UTC()
 	}
@@ -469,9 +606,14 @@ func (s *Service) normalizeProvider(tenantID string, input ProviderInput) (provi
 		status = ProviderActive
 	}
 	secret := strings.TrimSpace(input.ClientSecret)
-	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 || providerType != ProviderOIDC ||
-		err != nil || clientID == "" || len(clientID) > 128 || scopes == "" || len(scopes) > 255 ||
+	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 ||
+		(providerType != ProviderOIDC && providerType != ProviderSAML) ||
+		err != nil || clientID == "" || len(clientID) > 128 ||
 		len(defaultRoleID) > 32 || (status != ProviderActive && status != ProviderDisabled) || len(secret) > 2048 {
+		return providerRow{}, "", ErrInvalidProvider
+	}
+	// SAML providers don't require scopes (assertion-driven); OIDC does.
+	if providerType == ProviderOIDC && (scopes == "" || len(scopes) > 255) {
 		return providerRow{}, "", ErrInvalidProvider
 	}
 	return providerRow{
@@ -646,11 +788,6 @@ func normalizeScopes(value string) string {
 		return ""
 	}
 	return strings.Join(result, " ")
-}
-
-func isUniqueViolation(err error) bool {
-	value := strings.ToLower(err.Error())
-	return strings.Contains(value, "unique constraint") || strings.Contains(value, "duplicate entry") || strings.Contains(value, "duplicate key")
 }
 
 // purposeKey derives a domain-separated key so one federation encryption key

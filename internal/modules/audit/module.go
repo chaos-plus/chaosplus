@@ -1,6 +1,9 @@
 package audit
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
@@ -9,28 +12,42 @@ import (
 type Module struct {
 	service   *Service
 	registrar *authz.Registrar
+	db        *bun.DB
+	anchorCfg Config
 }
 
 func NewModule(db *bun.DB, registrar *authz.Registrar, cfg Config) *Module {
 	if db == nil || registrar == nil {
 		panic("audit module requires database and authz registrar")
 	}
-	service := NewService(db)
-	if cfg.Anchor.Enabled {
-		store, err := NewAnchorStore(cfg.Anchor)
-		if err != nil {
-			panic("audit module: invalid anchor configuration: " + err.Error())
-		}
-		service = NewServiceWithAnchor(db, store)
-		if cfg.Anchor.SigningKey != "" {
-			signer, err := NewRootSigner(cfg.Anchor.SigningKey)
-			if err != nil {
-				panic("audit module: invalid anchor signing key: " + err.Error())
-			}
-			service = NewServiceWithAnchorAndSigner(db, store, signer)
-		}
+	return &Module{
+		service:   NewService(db),
+		registrar: registrar,
+		db:        db,
+		anchorCfg: cfg,
 	}
-	return &Module{service: service, registrar: registrar}
+}
+
+// Start wires the anchor store and root signer from the deferred config.
+// Config-derived errors surface here instead of panicking at construction.
+func (m *Module) Start(ctx context.Context) error {
+	if !m.anchorCfg.Anchor.Enabled {
+		return nil
+	}
+	store, err := NewAnchorStore(m.anchorCfg.Anchor)
+	if err != nil {
+		return fmt.Errorf("audit anchor configuration: %w", err)
+	}
+	svc := NewServiceWithAnchor(m.db, store)
+	if m.anchorCfg.Anchor.SigningKey != "" {
+		signer, err := NewRootSigner(m.anchorCfg.Anchor.SigningKey)
+		if err != nil {
+			return fmt.Errorf("audit anchor signing key: %w", err)
+		}
+		svc = NewServiceWithAnchorAndSigner(m.db, store, signer)
+	}
+	m.service = svc
+	return nil
 }
 
 func NewDeclarationOnlyModule(registrar *authz.Registrar) *Module {

@@ -262,13 +262,17 @@ func (s *WebService) VerifyLoginMFA(ctx context.Context, challengeID, code strin
 			return err
 		}
 		if !valid {
-			nextAttempts := challenge.Attempts + 1
-			update := tx.NewUpdate().Model((*mfaChallengeRow)(nil)).Set("attempts = ?", nextAttempts)
-			if nextAttempts >= s.cfg.MFA.MaxAttempts {
+			update := tx.NewUpdate().Model((*mfaChallengeRow)(nil)).
+				Set("attempts = attempts + 1")
+			if challenge.Attempts+1 >= s.cfg.MFA.MaxAttempts {
 				update = update.Set("consumed_at = ?", now.UnixMilli())
 			}
-			if _, err := update.Where("id_hash = ? AND consumed_at = 0", challenge.IDHash).Exec(ctx); err != nil {
+			result, err := update.Where("id_hash = ? AND consumed_at = 0 AND attempts = ?", challenge.IDHash, challenge.Attempts).Exec(ctx)
+			if err != nil {
 				return err
+			}
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				return ErrMFAChallenge
 			}
 			invalidCode = true
 			return nil

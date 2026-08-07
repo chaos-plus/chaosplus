@@ -54,6 +54,8 @@ type Config struct {
 	SigningKeyFile    string                  `mapstructure:"signing_key_file" description:"file containing the base64 Ed25519 seed" default:""`
 	AccessTokenTTL    time.Duration           `mapstructure:"access_token_ttl" description:"local OAuth access token lifetime" default:"15m"`
 	Web               WebConfig               `mapstructure:"web" group:"web"`
+	Password          PasswordConfig          `mapstructure:"password" group:"password"`
+	MFAPolicy         MFAPolicy               `mapstructure:"mfa_policy" group:"mfa_policy"`
 	MFA               MFAConfig               `mapstructure:"mfa" group:"mfa"`
 	Passkey           PasskeyConfig           `mapstructure:"passkey" group:"passkey"`
 	Notification      NotificationConfig      `mapstructure:"notification" group:"notification"`
@@ -83,6 +85,22 @@ type NotificationConfig struct {
 	PollInterval      time.Duration `mapstructure:"poll_interval" description:"notification outbox polling interval" default:"5s"`
 	RequestTimeout    time.Duration `mapstructure:"request_timeout" description:"notification webhook request timeout" default:"10s"`
 	MaxAttempts       int           `mapstructure:"max_attempts" description:"notification delivery attempts before permanent failure" default:"10"`
+}
+
+// PasswordConfig controls password policy including lockout thresholds.
+// Adjust lockout thresholds based on your threat model; defaults are
+// conservative for a typical web-facing identity server.
+type PasswordConfig struct {
+	MaxFailedAttempts int           `mapstructure:"max_failed_attempts" description:"consecutive failed login attempts before lockout" default:"5"`
+	LockDuration      time.Duration `mapstructure:"lock_duration" description:"account lockout duration after max failed attempts" default:"15m"`
+}
+
+// MFAPolicy controls whether MFA enrollment is required for authentication.
+// When RequireMFA is true, users without MFA enrolled are redirected to the
+// enrollment flow after password authentication and cannot access protected
+// resources until MFA is configured.
+type MFAPolicy struct {
+	RequireMFA bool `mapstructure:"require_mfa" description:"require all users to enroll MFA before accessing protected resources" default:"false"`
 }
 
 // RecoveryConfig controls password recovery policy. Delivery uses the shared

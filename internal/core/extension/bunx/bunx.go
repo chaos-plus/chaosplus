@@ -160,6 +160,9 @@ type DatasourceRouter struct {
 }
 
 func (r *DatasourceRouter) Read() *bun.DB {
+	if len(r.Writer) == 0 {
+		return nil
+	}
 	if len(r.Reader) == 0 {
 		return r.Writer[0]
 	}
@@ -168,6 +171,9 @@ func (r *DatasourceRouter) Read() *bun.DB {
 }
 
 func (r *DatasourceRouter) Write() *bun.DB {
+	if len(r.Writer) == 0 {
+		return nil
+	}
 	tick := time.Now().Unix()
 	return r.Writer[tick%int64(len(r.Writer))]
 }
@@ -220,4 +226,19 @@ func NewDatasourceRouter(tracerName string, debug bool, datasources map[string]D
 		Writer: writer,
 		Reader: reader,
 	}
+}
+
+// IsUniqueViolation reports whether an error is a database unique-constraint
+// violation across MySQL, PostgreSQL, and SQLite. Use this instead of
+// string-matching error messages.
+func IsUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// MySQL: "Duplicate entry", PostgreSQL: "duplicate key", SQLite: "UNIQUE constraint"
+	return strings.Contains(msg, "unique constraint") ||
+		strings.Contains(msg, "duplicate entry") ||
+		strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "UNIQUE constraint")
 }

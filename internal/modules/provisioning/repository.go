@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type directoryRow struct {
@@ -131,7 +132,7 @@ func (r *Repository) getTarget(ctx context.Context, tenantID, id string) (target
 
 func (r *Repository) insertTarget(ctx context.Context, row *targetRow) error {
 	if _, err := r.executor.NewInsert().Model(row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return ErrTargetName
 		}
 		return fmt.Errorf("insert SCIM target: %w", err)
@@ -142,7 +143,7 @@ func (r *Repository) insertTarget(ctx context.Context, row *targetRow) error {
 func (r *Repository) replaceTarget(ctx context.Context, row *targetRow, expectedVersion int64) error {
 	result, err := r.executor.NewUpdate().Model(row).Where("id = ? AND version = ?", row.ID, expectedVersion).Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return ErrTargetName
 		}
 		return fmt.Errorf("replace SCIM target: %w", err)
@@ -166,6 +167,14 @@ func (r *Repository) deleteTarget(ctx context.Context, id string) error {
 
 // getTargetResource returns sql.ErrNoRows when no mapping exists yet; a
 // missing mapping is the normal first-push condition, not an error.
+func (r *Repository) listTargetResources(ctx context.Context, targetID string) ([]targetResourceRow, error) {
+	var rows []targetResourceRow
+	if err := r.executor.NewSelect().Model(&rows).Where("target_id = ?", targetID).Order("resource_type ASC", "resource_id ASC").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("list SCIM target resources: %w", err)
+	}
+	return rows, nil
+}
+
 func (r *Repository) getTargetResource(ctx context.Context, targetID, resourceType, resourceID string) (targetResourceRow, error) {
 	var row targetResourceRow
 	if err := r.executor.NewSelect().Model(&row).Where("target_id = ? AND resource_type = ? AND resource_id = ?", targetID, resourceType, resourceID).Scan(ctx); err != nil {
@@ -334,7 +343,7 @@ func (r *Repository) getResourceByExternalKey(ctx context.Context, directoryID, 
 
 func (r *Repository) insertResource(ctx context.Context, row *resourceRow) error {
 	if _, err := r.executor.NewInsert().Model(row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return ErrResourceConflict
 		}
 		return fmt.Errorf("insert SCIM resource mapping: %w", err)
@@ -346,7 +355,7 @@ func (r *Repository) updateResource(ctx context.Context, row *resourceRow, expec
 	result, err := r.executor.NewUpdate().Model(row).Column("external_id", "external_key", "version", "updated_at", "deleted_at").
 		Where("directory_id = ? AND resource_type = ? AND resource_id = ? AND version = ?", row.DirectoryID, row.ResourceType, row.ResourceID, expectedVersion).Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return ErrResourceConflict
 		}
 		return fmt.Errorf("update SCIM resource mapping: %w", err)
@@ -473,12 +482,8 @@ func externalKey(externalID, resourceID string) string {
 	return "ext:" + hex.EncodeToString(digest[:])
 }
 
-func isUniqueViolation(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate entry") || strings.Contains(message, "duplicate key")
-}
 
 func isDirectoryNameViolation(err error) bool {
 	message := strings.ToLower(err.Error())
-	return isUniqueViolation(err) && (strings.Contains(message, "scim_directories_name") || strings.Contains(message, "name_key"))
+	return bunx.IsUniqueViolation(err) && (strings.Contains(message, "scim_directories_name") || strings.Contains(message, "name_key"))
 }

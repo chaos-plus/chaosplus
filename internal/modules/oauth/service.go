@@ -250,7 +250,14 @@ func (s *Service) clientAudit(ctx context.Context, tenantID, clientID, eventType
 	return auditmod.EventInput{TenantID: tenantID, PrincipalID: principalID, EventType: eventType, TargetType: "oauth_client", TargetID: clientID, Outcome: "success", Detail: detail}
 }
 
-func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirectURI, responseType, scope, state, challenge, challengeMethod, nonce string) (string, error) {
+// ErrConsentRequired signals that the authorization flow needs interactive
+// consent before issuing a code. The REST layer converts it into a redirect
+// to the consent endpoint.
+type ErrConsentRequired struct{}
+
+func (e *ErrConsentRequired) Error() string { return "oauth consent required" }
+
+func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirectURI, responseType, scope, state, challenge, challengeMethod, nonce, prompt string) (string, error) {
 	if responseType != "code" || challengeMethod != "S256" || len(challenge) < 43 || len(challenge) > 128 {
 		return "", ErrInvalidRequest
 	}
@@ -264,6 +271,29 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 	}
 	if active, err := s.activeMember(ctx, client.TenantID, claims.Subject); err != nil || !active {
 		return "", ErrInvalidRequest
+	}
+	// Interactive consent: authorize records a consent grant for the
+	// principal+client+scope combination. prompt=consent forces the request
+	// through the interactive consent screen (the REST layer redirects to
+	// /oauth/consent); prompt=none fails when no prior consent exists (per the
+	// OIDC prompt contract). With no prompt the first authorization
+	// auto-consents and records the grant for audit and future prompt=none.
+	consented, err := s.hasConsent(ctx, client.ID, claims.Subject, scope)
+	if err != nil {
+		return "", fmt.Errorf("check oauth consent: %w", err)
+	}
+	if !consented {
+		switch prompt {
+		case "none":
+			return "", ErrInvalidRequest
+		case "consent":
+			return "", &ErrConsentRequired{}
+		default:
+			// Auto-consent on first authorization.
+		}
+	}
+	if err := s.recordConsent(ctx, client, claims.Subject, scope); err != nil {
+		return "", fmt.Errorf("record oauth consent: %w", err)
 	}
 	code, err := secureToken(32)
 	if err != nil {
@@ -641,6 +671,16 @@ func normalizeWords(value string) string {
 	return strings.Join(words, " ")
 }
 
+// containsAllWords reports whether granted contains every word in required.
+func containsAllWords(granted, required string) bool {
+	for _, word := range strings.Fields(required) {
+		if !containsWord(granted, word) {
+			return false
+		}
+	}
+	return true
+}
+
 func verifyPKCE(challenge, verifier string) bool {
 	sum := sha256.Sum256([]byte(verifier))
 	got := base64.RawURLEncoding.EncodeToString(sum[:])
@@ -658,4 +698,76 @@ func secureToken(size int) (string, error) {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// hasConsent reports whether the principal has previously granted the client
+// the requested scopes. Public (third-party) clients require this record
+// before the flow can issue a code without an interactive screen.
+func (s *Service) hasConsent(ctx context.Context, clientID, principalID, scope string) (bool, error) {
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS iam_oauth_consents (
+		principal_id VARCHAR(64) NOT NULL,
+		client_id    VARCHAR(128) NOT NULL,
+		tenant_id    VARCHAR(128) NOT NULL,
+		scope        TEXT NOT NULL DEFAULT '',
+		created_at   BIGINT NOT NULL,
+		last_used_at BIGINT NOT NULL,
+		PRIMARY KEY (principal_id, client_id)
+	)`); err != nil {
+		return false, err
+	}
+	var row consentRow
+	if err := s.db.NewSelect().Model(&row).Where("principal_id = ? AND client_id = ?", principalID, clientID).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return containsAllWords(row.Scope, scope), nil
+}
+
+// recordConsent writes an OAuth consent grant so the authorization flow
+// leaves a compliance trail. A future interactive consent screen can gate
+// on this record's absence for third-party clients.
+func (s *Service) recordConsent(ctx context.Context, client clientRow, principalID, scope string) error {
+	// ponytail: CREATE IF NOT EXISTS avoids a migration dependency.
+	// Move to a proper goose migration when the consent table stabilizes.
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS iam_oauth_consents (
+		principal_id VARCHAR(64) NOT NULL,
+		client_id    VARCHAR(128) NOT NULL,
+		tenant_id    VARCHAR(128) NOT NULL,
+		scope        TEXT NOT NULL DEFAULT '',
+		created_at   BIGINT NOT NULL,
+		last_used_at BIGINT NOT NULL,
+		PRIMARY KEY (principal_id, client_id)
+	)`); err != nil {
+		return err
+	}
+	now := s.now().UTC().UnixMilli()
+	row := &consentRow{
+		PrincipalID: principalID, ClientID: client.ID, TenantID: client.TenantID,
+		Scope: normalizeWords(scope), CreatedAt: now, LastUsedAt: now,
+	}
+	if _, err := s.db.NewInsert().Model(row).
+		On("CONFLICT (principal_id, client_id) DO UPDATE SET scope = excluded.scope, last_used_at = excluded.last_used_at").
+		Exec(ctx); err != nil {
+		return err
+	}
+	if _, err := s.audit.Append(ctx, auditmod.EventInput{
+		TenantID: client.TenantID, PrincipalID: principalID,
+		EventType: "oauth_consent_granted", TargetType: "oauth_client", TargetID: client.ID,
+		Outcome: "success", Detail: map[string]any{"scope": scope},
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+type consentRow struct {
+	bun.BaseModel `bun:"table:iam_oauth_consents"`
+	PrincipalID   string `bun:"principal_id,pk"`
+	ClientID      string `bun:"client_id,pk"`
+	TenantID      string
+	Scope         string
+	CreatedAt     int64
+	LastUsedAt    int64
 }

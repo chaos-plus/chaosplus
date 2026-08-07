@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type roleRow struct {
@@ -89,7 +90,7 @@ func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description
 	now := r.now().UTC().UnixMilli()
 	row := roleRow{TenantID: tenantID, ID: id, Name: name, Description: description, CreatedAt: now, UpdatedAt: now}
 	if _, err := r.executor.NewInsert().Model(&row).Exec(ctx); err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Role{}, ErrRoleNameConflict
 		}
 		return Role{}, fmt.Errorf("insert role: %w", err)
@@ -142,7 +143,7 @@ func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID, name, des
 		Where("tenant_id = ? AND id = ?", tenantID, roleID).
 		Exec(ctx)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if bunx.IsUniqueViolation(err) {
 			return Role{}, ErrRoleNameConflict
 		}
 		return Role{}, fmt.Errorf("update role: %w", err)
@@ -351,7 +352,3 @@ func roleFromRow(row roleRow) Role {
 	}
 }
 
-func isUniqueViolation(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate entry") || strings.Contains(message, "duplicate key")
-}

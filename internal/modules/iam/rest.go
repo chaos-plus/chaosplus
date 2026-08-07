@@ -117,6 +117,10 @@ type EntityRoleBinding struct {
 
 type tenantInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128" doc:"tenant authorization boundary"`
+	// ponytail: pagination added to prevent unbounded list responses.
+	// Offset and Limit are optional; 0/0 returns all records.
+	Offset int `query:"offset" minimum:"0" default:"0"`
+	Limit  int `query:"limit" minimum:"0" maximum:"200" default:"0"`
 }
 
 type roleInput struct {
@@ -376,11 +380,11 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 		if err != nil {
 			return nil, apiError("list entities", err)
 		}
-		return respx.OK(ctx, entitiesFromDomain(entities)), nil
+		return paginateList(ctx, entitiesFromDomain(entities), in.Offset, in.Limit), nil
 	})
 
 	authz.Register(registrar, a, huma.Operation{
-		OperationID: "iam-create-entity", Method: http.MethodPost, Path: "/iam/entities", Summary: "Create a tenant entity", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
+		OperationID: "iam-create-entity", Method: http.MethodPost, Path: "/iam/entities", Summary: "Create a tenant entity", Tags: []string{"iam"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "entity", Verb: "create"}, func(ctx context.Context, in *createEntityInput) (*respx.Body[Entity], error) {
 		entity, err := svc.CreateEntity(ctx, iamdomain.Entity{
 			TenantID: in.TenantID, ParentID: in.Body.ParentID, Type: in.Body.Type, Name: in.Body.Name,
@@ -464,11 +468,11 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 		if err != nil {
 			return nil, apiError("list roles", err)
 		}
-		return respx.OK(ctx, rolesFromDomain(roles)), nil
+		return paginateList(ctx, rolesFromDomain(roles), in.Offset, in.Limit), nil
 	})
 
 	authz.Register(registrar, a, huma.Operation{
-		OperationID: "iam-create-role", Method: http.MethodPost, Path: "/iam/roles", Summary: "Create a tenant role", Tags: []string{"iam"}, Errors: []int{http.StatusConflict},
+		OperationID: "iam-create-role", Method: http.MethodPost, Path: "/iam/roles", Summary: "Create a tenant role", Tags: []string{"iam"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict},
 	}, authz.Guard{Resource: "role", Verb: "create"}, func(ctx context.Context, in *createRoleInput) (*respx.Body[APIRole], error) {
 		role, err := svc.CreateRole(ctx, in.TenantID, in.Body.Name, in.Body.Description)
 		if err != nil {
@@ -653,7 +657,7 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 		}
 		return respx.List(ctx, membersFromDomain(members), respx.Page{Offset: in.Offset, Limit: in.Limit, Count: len(members), Total: total}), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-tenant-member", Method: http.MethodPost, Path: "/iam/members", Summary: "Bind an existing principal to a tenant", Tags: []string{"iam"}, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createTenantMemberInput) (*respx.Body[APITenantMember], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-tenant-member", Method: http.MethodPost, Path: "/iam/members", Summary: "Bind an existing principal to a tenant", Tags: []string{"iam"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createTenantMemberInput) (*respx.Body[APITenantMember], error) {
 		member, err := svc.PutTenantMember(ctx, in.TenantID, in.Body.Subject, in.Body.DisplayName, in.Body.Email, in.Body.DepartmentID, in.Body.Status)
 		if err != nil {
 			return nil, apiError("create tenant member", err)
@@ -711,7 +715,7 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 		}
 		return respx.OK(ctx, menusFromDomain(menus)), nil
 	})
-	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-menu", Method: http.MethodPost, Path: "/iam/menus", Summary: "Create a tenant menu", Tags: []string{"iam"}}, authz.Guard{Resource: "menu", Verb: "create"}, func(ctx context.Context, in *createMenuInput) (*respx.Body[APIMenu], error) {
+	authz.Register(registrar, a, huma.Operation{OperationID: "iam-create-menu", Method: http.MethodPost, Path: "/iam/menus", Summary: "Create a tenant menu", Tags: []string{"iam"}, DefaultStatus: http.StatusCreated}, authz.Guard{Resource: "menu", Verb: "create"}, func(ctx context.Context, in *createMenuInput) (*respx.Body[APIMenu], error) {
 		menu, err := svc.CreateMenu(ctx, iamdomain.Menu{TenantID: in.TenantID, ParentID: in.Body.ParentID, Label: in.Body.Label, Route: in.Body.Route, Icon: in.Body.Icon, SortOrder: in.Body.SortOrder, PermissionCode: in.Body.PermissionCode, Status: in.Body.Status})
 		if err != nil {
 			return nil, apiError("create menu", err)
@@ -772,7 +776,7 @@ func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
 		if err != nil {
 			return nil, apiError("effective menus", err)
 		}
-		return respx.OK(ctx, menus), nil
+		return paginateList(ctx, menus, in.Offset, in.Limit), nil
 	})
 }
 
@@ -953,4 +957,30 @@ func apiError(operation string, err error) error {
 		slog.Error("iam request failed", "operation", operation, "err", err)
 		return huma.Error500InternalServerError("internal_server_error")
 	}
+}
+
+// paginateList applies offset/limit to a list result, defaulting to all
+// records when both are zero. This prevents unbounded response sizes
+// on collections that can grow large (roles, entities, menus).
+func paginateList[T any](ctx context.Context, items []T, offset, limit int) *respx.Body[[]T] {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit < 0 || limit > 200 {
+		limit = 0
+	}
+	total := len(items)
+	if offset >= total {
+		return respx.List(ctx, []T{}, respx.Page{Offset: offset, Limit: limit, Total: int64(total)})
+	}
+	if limit > 0 {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		items = items[offset:end]
+	} else if offset > 0 {
+		items = items[offset:]
+	}
+	return respx.List(ctx, items, respx.Page{Offset: offset, Limit: limit, Total: int64(total)})
 }

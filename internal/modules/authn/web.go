@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -155,6 +156,12 @@ func NewWebService(cfg authnext.Config, db *bun.DB, options ...WebOption) (*WebS
 	}
 	if s.cfg.ClockSkew <= 0 {
 		s.cfg.ClockSkew = 30 * time.Second
+	}
+	if s.cfg.Password.MaxFailedAttempts <= 0 {
+		s.cfg.Password.MaxFailedAttempts = 5
+	}
+	if s.cfg.Password.LockDuration <= 0 {
+		s.cfg.Password.LockDuration = 15 * time.Minute
 	}
 	if s.web.CookieName == "" {
 		s.web.CookieName = "cp_session"
@@ -359,8 +366,8 @@ func (s *WebService) BeginLogin(ctx context.Context, loginName, password, return
 	if !valid {
 		attempts := credential.FailedAttempts + 1
 		lockedUntil := int64(0)
-		if attempts >= 5 {
-			lockedUntil = now.Add(15 * time.Minute).UnixMilli()
+		if attempts >= s.cfg.Password.MaxFailedAttempts {
+			lockedUntil = now.Add(s.cfg.Password.LockDuration).UnixMilli()
 			attempts = 0
 		}
 		_, _ = s.db.NewUpdate().Model((*credentialRow)(nil)).Set("failed_attempts = ?", attempts).Set("locked_until = ?", lockedUntil).Set("updated_at = ?", now.UnixMilli()).Where("principal_id = ?", principal.ID).Exec(ctx)
@@ -370,6 +377,17 @@ func (s *WebService) BeginLogin(ctx context.Context, loginName, password, return
 	_, err = s.db.NewUpdate().Model((*credentialRow)(nil)).Set("failed_attempts = 0").Set("locked_until = 0").Set("updated_at = ?", now.UnixMilli()).Where("principal_id = ?", principal.ID).Exec(ctx)
 	if err != nil {
 		return authnext.LoginResult{}, fmt.Errorf("reset login failures: %w", err)
+	}
+	// Global MFA policy: if the server requires MFA and the user hasn't
+	// enrolled, mark the credential and force enrollment before proceeding.
+	if s.cfg.MFAPolicy.RequireMFA && credential.TOTPSecret == "" && !credential.MFARequired {
+		if _, err := s.db.NewUpdate().Model((*credentialRow)(nil)).
+			Set("mfa_required = ?", true).Set("updated_at = ?", now.UnixMilli()).
+			Where("principal_id = ?", principal.ID).Exec(ctx); err != nil {
+			slog.Warn("failed to enforce MFA policy", "principal", principal.ID, "error", err)
+		} else {
+			credential.MFARequired = true
+		}
 	}
 	if credential.MFARequired {
 		if credential.TOTPSecret == "" {

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -210,6 +211,10 @@ func (s *Service) PushResource(ctx context.Context, tenantID, targetID, resource
 	if tenantID == "" || targetID == "" || resourceID == "" || len(targetID) > 128 || len(resourceID) > 128 || (resourceType != ResourceUser && resourceType != ResourceGroup) {
 		return PushResult{}, ErrInvalidTarget
 	}
+	// Serialize push/deprovision per resource to avoid racing the remote
+	// state between concurrent operations.
+	unlock := s.lockPushResource(targetID, resourceType, resourceID)
+	defer unlock()
 	target, err := s.repo.getTarget(ctx, tenantID, targetID)
 	if err != nil {
 		return PushResult{}, err
@@ -283,6 +288,8 @@ func (s *Service) DeprovisionResource(ctx context.Context, tenantID, targetID, r
 	if tenantID == "" || targetID == "" || resourceID == "" || len(targetID) > 128 || len(resourceID) > 128 || (resourceType != ResourceUser && resourceType != ResourceGroup) {
 		return ErrInvalidTarget
 	}
+	unlock := s.lockPushResource(targetID, resourceType, resourceID)
+	defer unlock()
 	target, err := s.repo.getTarget(ctx, tenantID, targetID)
 	if err != nil {
 		return err
@@ -468,10 +475,17 @@ func validTargetURL(raw string) bool {
 		return false
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return false
 	}
-	return true
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		return u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+	default:
+		return false
+	}
 }
 
 func trimRemoteDetail(body []byte) string {
@@ -480,4 +494,56 @@ func trimRemoteDetail(body []byte) string {
 		detail = detail[:500] + "..."
 	}
 	return strings.ReplaceAll(detail, "\n", " ")
+}
+
+// SyncTarget reconciles all mapped resources for a target by pushing every
+// active resource that has a local mapping. Missing remote resources are
+// re-created; existing ones are updated. Returns the count of synced resources.
+//
+// ponytail: full incremental sync (drift detection, auto-deprovision on
+// disable, outbound bulk) deferred to a scheduled-worker delivery. This
+// provides the on-demand reconciliation primitive.
+func (s *Service) SyncTarget(ctx context.Context, tenantID, targetID string) (int, error) {
+	tenantID, targetID = strings.TrimSpace(tenantID), strings.TrimSpace(targetID)
+	if tenantID == "" || targetID == "" || len(targetID) > 128 {
+		return 0, ErrInvalidTarget
+	}
+	target, err := s.repo.getTarget(ctx, tenantID, targetID)
+	if err != nil {
+		return 0, err
+	}
+	if target.Status != TargetActive {
+		return 0, ErrTargetDisabled
+	}
+	mappings, err := s.repo.listTargetResources(ctx, targetID)
+	if err != nil {
+		return 0, fmt.Errorf("list SCIM target resource mappings: %w", err)
+	}
+	synced := 0
+	deprovisioned := 0
+	for _, m := range mappings {
+		if m.DeletedAt != 0 {
+			continue
+		}
+		_, err := s.PushResource(ctx, tenantID, targetID, m.ResourceType, m.ResourceID)
+		if err != nil {
+			// The local resource no longer exists (deleted in the platform);
+			// drift-detection auto-deprovisions it from the target.
+			if errors.Is(err, ErrResourceMissing) {
+				if derr := s.DeprovisionResource(ctx, tenantID, targetID, m.ResourceType, m.ResourceID); derr != nil {
+					slog.Warn("SCIM sync auto-deprovision failed", "target", targetID, "resource", m.ResourceID, "error", derr)
+				} else {
+					deprovisioned++
+				}
+				continue
+			}
+			slog.Warn("SCIM sync push failed", "target", targetID, "resource", m.ResourceID, "error", err)
+			continue
+		}
+		synced++
+	}
+	if deprovisioned > 0 {
+		slog.Info("SCIM sync auto-deprovisioned missing resources", "target", targetID, "count", deprovisioned)
+	}
+	return synced, nil
 }

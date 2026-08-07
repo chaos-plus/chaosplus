@@ -24,6 +24,9 @@ var (
 	ErrPrincipalInactive = errors.New("principal or tenant membership is not active")
 )
 
+// AdministratorGuard is a consumer-side interface satisfied by
+// iam.AdministratorGuard. Defined here rather than imported to keep the
+// dependency direction identity → iam unidirectional (interface at call site).
 type AdministratorGuard interface {
 	Protect(context.Context, bun.IDB, string, string) (func() error, error)
 }

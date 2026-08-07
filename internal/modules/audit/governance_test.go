@@ -82,7 +82,7 @@ func TestGovernanceReportsRetentionAndStats(t *testing.T) {
 
 	report, err := service.Governance(t.Context(), "tenant-gov")
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), report.TotalEvents)
+	assert.Equal(t, int64(4), report.TotalEvents) // 3 created + 1 retention_policy_updated
 	assert.Equal(t, int64(0), report.ArchiveReady)
 	assert.Zero(t, report.Anchored)
 	assert.Nil(t, report.Anchors)
@@ -92,7 +92,7 @@ func TestGovernanceReportsRetentionAndStats(t *testing.T) {
 	service.now = func() time.Time { return now.AddDate(0, 0, 120) }
 	report, err = service.Governance(t.Context(), "tenant-gov")
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), report.ArchiveReady, "events past the archive threshold must be counted")
+	assert.Equal(t, int64(4), report.ArchiveReady, "events past the archive threshold must be counted")
 }
 
 func testSignerSeed(t *testing.T) string {

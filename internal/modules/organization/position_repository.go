@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 type positionRow struct {
@@ -201,5 +202,5 @@ func positionMemberUpsertSQL(dialect string) string {
 
 func isPositionCodeViolation(err error) bool {
 	message := strings.ToLower(err.Error())
-	return isUniqueViolation(err) && (strings.Contains(message, "positions_code") || strings.Contains(message, "tenant_id") && strings.Contains(message, "code"))
+	return bunx.IsUniqueViolation(err) && (strings.Contains(message, "positions_code") || strings.Contains(message, "tenant_id") && strings.Contains(message, "code"))
 }

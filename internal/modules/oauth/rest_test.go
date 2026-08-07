@@ -211,7 +211,7 @@ func TestOAuthHTTPTokenServerFailure(t *testing.T) {
 	require.NoError(t, err)
 	verifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
 	digest := sha256.Sum256([]byte(verifier))
-	redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", base64.RawURLEncoding.EncodeToString(digest[:]), "S256", "")
+	redirect, err := service.Authorize(t.Context(), authentication.SessionCookie(session), client.ID, client.RedirectURIs[0], "code", "openid", "", base64.RawURLEncoding.EncodeToString(digest[:]), "S256", "", "")
 	require.NoError(t, err)
 	location, err := url.Parse(redirect)
 	require.NoError(t, err)

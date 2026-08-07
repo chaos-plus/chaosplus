@@ -16,6 +16,7 @@ type Config struct {
 	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 32-byte key encrypting outbound SCIM target bearer tokens; prefer encryption_key_file" default:""`
 	EncryptionKeyFile string        `mapstructure:"encryption_key_file" description:"file containing the base64 32-byte provisioning encryption key" default:""`
 	HTTPTimeout       time.Duration `mapstructure:"http_timeout" description:"outbound SCIM request timeout" default:"10s"`
+	SyncInterval      time.Duration `mapstructure:"sync_interval" description:"background reconciliation interval for outbound SCIM targets; 0 disables" default:"0"`
 }
 
 // ParseEncryptionKey decodes a base64-encoded 32-byte key. An empty value

@@ -10,6 +10,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
@@ -148,8 +149,8 @@ func TestDepartmentValidationAndFailures(t *testing.T) {
 	assert.Panics(t, func() { NewService(db, nil, func() (string, error) { return "1", nil }) })
 	assert.Panics(t, func() { NewService(db, realOrganizationAuditAppender(db), nil) })
 	assert.Panics(t, func() { NewRepository(nil) })
-	assert.True(t, isUniqueViolation(errors.New("duplicate key value")))
-	assert.False(t, isUniqueViolation(errors.New("connection closed")))
+	assert.True(t, bunx.IsUniqueViolation(errors.New("duplicate key value")))
+	assert.False(t, bunx.IsUniqueViolation(errors.New("connection closed")))
 }
 
 func TestDepartmentCreateRollsBackWhenAuditFails(t *testing.T) {

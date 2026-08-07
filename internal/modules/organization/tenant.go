@@ -13,6 +13,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	"github.com/uptrace/bun"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 const (
@@ -134,7 +135,7 @@ func (s *TenantService) Create(ctx context.Context, input CreateTenant) (Tenant,
 	event.Detail["slug"] = input.Slug
 	err = s.repo.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
-			if isUniqueViolation(err) {
+			if bunx.IsUniqueViolation(err) {
 				return ErrTenantSlugConflict
 			}
 			return fmt.Errorf("insert tenant: %w", err)
