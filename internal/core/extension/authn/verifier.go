@@ -237,6 +237,12 @@ func (v *Verifier) Authenticate(ctx context.Context, authorization, _ string) (*
 }
 
 func (v *Verifier) Verify(ctx context.Context, token string) (*Claims, error) {
+	// A disabled verifier carries no HTTP client or key cache, so this guard
+	// must mirror VerifyAuthorization: without it a direct Verify call panics
+	// on a nil client instead of reporting that authentication is off.
+	if !v.cfg.Enabled {
+		return nil, ErrDisabled
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, ErrInvalidToken

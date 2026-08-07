@@ -220,6 +220,127 @@ type testKey struct {
 	kid     string
 }
 
+// TestInt64Claim covers the numeric claim decoder. JSON numbers arrive as
+// float64 from encoding/json by default but as json.Number when the decoder is
+// configured to preserve precision, and anything else must not be coerced.
+func TestInt64Claim(t *testing.T) {
+	assert.Equal(t, int64(1700000000), int64Claim(float64(1700000000)))
+	assert.Equal(t, int64(1700000000), int64Claim(json.Number("1700000000")))
+	assert.Equal(t, int64(0), int64Claim(json.Number("not-a-number")))
+	assert.Equal(t, int64(0), int64Claim("1700000000"), "a string must not be coerced into a timestamp")
+	assert.Equal(t, int64(0), int64Claim(nil))
+	assert.Equal(t, int64(0), int64Claim(map[string]any{}))
+}
+
+// TestVerifyRejectsMalformedTokenStructure walks the structural checks Verify
+// performs before it consults a key, so a malformed token can never reach
+// signature verification.
+func TestVerifyRejectsMalformedTokenStructure(t *testing.T) {
+	key := newTestKey(t)
+	var issuer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": issuer + "/jwks"})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{key.jwk()}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	issuer = srv.URL
+
+	verifier, err := NewVerifier(Config{Enabled: true, Issuer: issuer, Audience: []string{"api"}})
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	// Wrong number of segments.
+	for _, token := range []string{"", "onlyone", "two.parts", "a.b.c.d"} {
+		_, verifyErr := verifier.Verify(ctx, token)
+		assert.ErrorIs(t, verifyErr, ErrInvalidToken, token)
+	}
+
+	// Header is not base64url JSON.
+	_, err = verifier.Verify(ctx, "!!!."+mustJSONPart(t, map[string]any{"sub": "s"})+".sig")
+	assert.ErrorIs(t, err, ErrInvalidToken)
+
+	// Header parses but omits kid or alg, so no key can be selected.
+	for _, header := range []map[string]any{
+		{"alg": "RS256", "typ": "JWT"},
+		{"kid": key.kid, "typ": "JWT"},
+		{"typ": "JWT"},
+	} {
+		token := mustJSONPart(t, header) + "." + mustJSONPart(t, map[string]any{"sub": "s"}) + ".sig"
+		_, verifyErr := verifier.Verify(ctx, token)
+		assert.ErrorIs(t, verifyErr, ErrInvalidToken)
+	}
+
+	// Header is complete but the signature segment is not base64url.
+	token := mustJSONPart(t, map[string]any{"alg": "RS256", "kid": key.kid, "typ": "JWT"}) +
+		"." + mustJSONPart(t, map[string]any{"sub": "s"}) + ".!!!"
+	_, err = verifier.Verify(ctx, token)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+
+	// A disabled verifier has no HTTP client, so Verify must report that
+	// authentication is off rather than dereference nil.
+	disabled, err := NewVerifier(Config{})
+	require.NoError(t, err)
+	assert.NotPanics(t, func() {
+		_, verifyErr := disabled.Verify(ctx, token)
+		assert.ErrorIs(t, verifyErr, ErrDisabled)
+	})
+}
+
+// TestJWKSURLValueCachesDiscovery proves the OIDC discovery document is fetched
+// once and then served from cache, so token verification does not issue a
+// discovery request per call.
+func TestJWKSURLValueCachesDiscovery(t *testing.T) {
+	key := newTestKey(t)
+	var issuer string
+	discoveries := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			discoveries++
+			_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": issuer + "/jwks"})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{key.jwk()}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	issuer = srv.URL
+
+	verifier, err := NewVerifier(Config{Enabled: true, Issuer: issuer, Audience: []string{"api"}})
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	resolved, err := verifier.jwksURLValue(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, issuer+"/jwks", resolved)
+	assert.Equal(t, 1, discoveries)
+
+	// The second call is served from the cached value.
+	resolved, err = verifier.jwksURLValue(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, issuer+"/jwks", resolved)
+	assert.Equal(t, 1, discoveries, "discovery must not be repeated")
+
+	// An explicitly configured JWKS URL skips discovery entirely.
+	explicit, err := NewVerifier(Config{Enabled: true, Issuer: issuer, Audience: []string{"api"}, JWKSURL: issuer + "/jwks"})
+	require.NoError(t, err)
+	resolved, err = explicit.jwksURLValue(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, issuer+"/jwks", resolved)
+	assert.Equal(t, 1, discoveries)
+
+	// A successful refresh still leaves an unknown kid unresolvable.
+	_, err = verifier.key(ctx, "absent-kid")
+	assert.ErrorIs(t, err, ErrUnknownKey)
+}
+
 func newTestKey(t *testing.T) testKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
