@@ -27,7 +27,7 @@ type meOutput struct {
 }
 
 type meInput struct {
-	Authorization string `header:"Authorization" doc:"Bearer access token issued by Chaosplus IAM"`
+	Authorization string `header:"Authorization" doc:"Bearer access token issued by the identity platform"`
 	Cookie        string `header:"Cookie" hidden:"true"`
 }
 

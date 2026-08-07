@@ -175,8 +175,13 @@ func NewWebService(cfg authnext.Config, db *bun.DB, options ...WebOption) (*WebS
 	if s.web.IdleTTL > s.web.SessionTTL {
 		s.web.IdleTTL = s.web.SessionTTL
 	}
+	// Brand fields (TOTP issuer, passkey RP display name) default to a
+	// neutral functional name so the otp/webauthn libraries have a non-empty
+	// value; the app layer overrides them from the configured app name, and a
+	// deployment can rebrand via config alone (authn.mfa.issuer /
+	// authn.passkey.display_name). A product brand is never hardcoded here.
 	if s.cfg.MFA.Issuer == "" {
-		s.cfg.MFA.Issuer = "Chaosplus"
+		s.cfg.MFA.Issuer = "Identity Platform"
 	}
 	if s.cfg.MFA.EnrollmentTTL <= 0 {
 		s.cfg.MFA.EnrollmentTTL = 10 * time.Minute
@@ -197,7 +202,7 @@ func NewWebService(cfg authnext.Config, db *bun.DB, options ...WebOption) (*WebS
 		s.cfg.Passkey.MaxCredentials = 10
 	}
 	if s.cfg.Passkey.DisplayName == "" {
-		s.cfg.Passkey.DisplayName = "Chaosplus"
+		s.cfg.Passkey.DisplayName = "Identity Platform"
 	}
 	if s.cfg.Recovery.TokenTTL <= 0 {
 		s.cfg.Recovery.TokenTTL = 15 * time.Minute

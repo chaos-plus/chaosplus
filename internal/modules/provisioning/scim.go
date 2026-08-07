@@ -157,7 +157,7 @@ func (e *SCIMError) GetHeaders() http.Header { return e.headers.Clone() }
 func newSCIMError(ctx context.Context, status int, scimType, key string) *SCIMError {
 	headers := http.Header{"Content-Type": []string{SCIMContentType}}
 	if status == http.StatusUnauthorized {
-		headers.Set("WWW-Authenticate", `Bearer realm="Chaosplus SCIM"`)
+		headers.Set("WWW-Authenticate", `Bearer realm="SCIM"`)
 	}
 	return &SCIMError{status: status, headers: headers, Schemas: []string{ErrorSchema}, Status: strconv.Itoa(status), ScimType: scimType, Detail: i18n.TContext(ctx, key)}
 }

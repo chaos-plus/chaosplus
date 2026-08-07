@@ -84,6 +84,14 @@ func (app *App) Bootstrap() error {
 		if claimPlugins != nil {
 			options = append(options, authnmod.WithClaimEnricher(claimPlugins))
 		}
+		// Brand fields follow the configured app name so a deployment can
+		// rebrand by changing config.name alone.
+		if app.cfg.Authn.MFA.Issuer == "" {
+			app.cfg.Authn.MFA.Issuer = app.cfg.Name
+		}
+		if app.cfg.Authn.Passkey.DisplayName == "" {
+			app.cfg.Authn.Passkey.DisplayName = app.cfg.Name
+		}
 		web, err := authnmod.NewWebService(app.cfg.Authn, app.dbr.Write(), options...)
 		if err != nil {
 			return fmt.Errorf("init local authn: %w", err)

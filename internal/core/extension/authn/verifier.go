@@ -125,7 +125,7 @@ type EmailVerificationConfig struct {
 type PasskeyConfig struct {
 	Enabled                   bool          `mapstructure:"enabled" description:"enable passkey registration and passwordless login" default:"false"`
 	RPID                      string        `mapstructure:"rp_id" description:"WebAuthn relying party domain without scheme or port"`
-	DisplayName               string        `mapstructure:"display_name" description:"relying party name shown by authenticators" default:"Chaosplus"`
+	DisplayName               string        `mapstructure:"display_name" description:"relying party name shown by authenticators; defaults to the configured app name" default:""`
 	Origins                   []string      `mapstructure:"origins" description:"exact trusted WebAuthn browser origins"`
 	ChallengeTTL              time.Duration `mapstructure:"challenge_ttl" description:"one-time registration and login challenge lifetime" default:"5m"`
 	MaxCredentials            int           `mapstructure:"max_credentials" description:"maximum active passkeys per principal" default:"10"`
@@ -149,7 +149,7 @@ type WebConfig struct {
 
 // MFAConfig controls trusted storage and short-lived state for local MFA.
 type MFAConfig struct {
-	Issuer            string        `mapstructure:"issuer" description:"TOTP issuer shown by authenticator applications" default:"Chaosplus"`
+	Issuer            string        `mapstructure:"issuer" description:"TOTP issuer shown by authenticator applications; defaults to the configured app name" default:""`
 	EncryptionKey     string        `mapstructure:"encryption_key" description:"base64 32-byte AES key; prefer encryption_key_file" default:""`
 	EncryptionKeyFile string        `mapstructure:"encryption_key_file" description:"file containing the base64 32-byte MFA encryption key" default:""`
 	EnrollmentTTL     time.Duration `mapstructure:"enrollment_ttl" description:"lifetime of an unconfirmed TOTP enrollment" default:"10m"`

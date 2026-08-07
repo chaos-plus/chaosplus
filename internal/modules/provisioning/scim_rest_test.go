@@ -40,7 +40,7 @@ func TestSCIMNativeHTTPContract(t *testing.T) {
 
 	response = scimRequest(t, server.Client(), http.MethodGet, server.URL+"/scim/v2/Users", "", nil, map[string]string{"Accept-Language": "ms-MY"})
 	assert.Equal(t, http.StatusUnauthorized, response.StatusCode)
-	assert.Equal(t, `Bearer realm="Chaosplus SCIM"`, response.Header.Get("WWW-Authenticate"))
+	assert.Equal(t, `Bearer realm="SCIM"`, response.Header.Get("WWW-Authenticate"))
 	var protocolError SCIMError
 	decodeHTTPBody(t, response, &protocolError)
 	assert.Equal(t, localized("ms-MY", "scim_unauthorized"), protocolError.Detail)

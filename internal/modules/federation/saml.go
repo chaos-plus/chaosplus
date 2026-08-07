@@ -301,7 +301,7 @@ func generateSAMLKeyPair() (*rsa.PrivateKey, *x509.Certificate, error) {
 	now := time.Now().UTC()
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Chaosplus SAML Identity Provider"},
+		Subject:               pkix.Name{CommonName: "SAML Identity Provider"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.AddDate(10, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
