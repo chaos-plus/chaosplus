@@ -30,6 +30,8 @@ func TestRESTOperationsDeclareAuthorization(t *testing.T) {
 	require.NoError(t, authz.ValidateOperations(api, registry))
 	require.Equal(t, []string{
 		"authn-me",
+		"health-live",
+		"health-ready",
 		"lookup-geoip",
 		"lookup-geoip-self",
 		"next-guid",

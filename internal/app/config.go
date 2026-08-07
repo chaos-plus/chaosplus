@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
@@ -160,4 +161,18 @@ type RestServer struct {
 type GrpcServer struct {
 	Host string `mapstructure:"host" description:"host" default:"0.0.0.0"`
 	Port int    `mapstructure:"port" description:"grpc port" default:"9090"`
+}
+
+// logLevel parses c.Log.Level into a slog.Level; invalid values default to Info.
+func (c Config) logLevel() slog.Level {
+	switch c.Log.Level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

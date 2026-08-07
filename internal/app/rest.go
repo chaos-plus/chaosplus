@@ -12,6 +12,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/ratex"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secure"
+	"github.com/chaos-plus/chaosplus/internal/infra/metrics"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -33,11 +34,15 @@ func (app *App) StartRestServer() error {
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
-	app.useSecurity(router)  // security response headers
-	app.useCors(router)      // CORS (handles preflight before routing)
-	router.Use(respx.Timing) // stamp request start time for response meta
-	router.Use(respx.Locale) // resolve request locale for message i18n
-	app.useRateLimit(router) // per-IP / per-account limiting (after RealIP + Locale)
+	app.useSecurity(router)   // security response headers
+	app.useCors(router)       // CORS (handles preflight before routing)
+	router.Use(metrics.Middleware) // request count + latency (before Timing so it covers full request)
+	router.Use(respx.Timing)  // stamp request start time for response meta
+	router.Use(respx.Locale)  // resolve request locale for message i18n
+	app.useRateLimit(router)  // per-IP / per-account limiting (after RealIP + Locale)
+
+	// Prometheus metrics endpoint (before huma so it doesn't appear in OpenAPI).
+	router.Handle("/metrics", metrics.Handler())
 
 	config := huma.DefaultConfig(app.name+" API", "1.0.0")
 	// Disable huma's built-in single-renderer /docs so our own tabbed page

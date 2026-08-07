@@ -96,20 +96,20 @@ func TestStopModules_ReverseOrderAndJoinsErrors(t *testing.T) {
 }
 
 func TestBuildModules(t *testing.T) {
-	// No writable database → only the geoip module.
+	// No writable database → geoip + health (nil db).
 	a := &App{}
 	mods := a.buildModules()
-	require.Len(t, mods, 1)
+	require.Len(t, mods, 2)
 	_, isGeoip := mods[0].(*geoip.Module)
 	assert.True(t, isGeoip)
 
-	// With a writer → id generator is prepended.
+	// With a writer → id generator + geoip + health.
 	a = &App{dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
-	require.Len(t, a.buildModules(), 2)
+	require.Len(t, a.buildModules(), 3)
 
 	a = &App{authzRegistrar: authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())}
 	mods = a.buildModules()
-	require.Len(t, mods, 2)
+	require.Len(t, mods, 3)
 	_, isIAM := mods[0].(*iam.Module)
 	assert.True(t, isIAM)
 }

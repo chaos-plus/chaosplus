@@ -7,6 +7,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/infra/geoip"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/chaos-plus/chaosplus/internal/infra/health"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 )
@@ -45,6 +46,13 @@ func (app *App) buildModules() []any {
 		slog.Warn("authorization stack disabled; skipping iam management API")
 	}
 	mods = append(mods, geoip.NewModule(app.cfg.GeoIP))
+
+	// Health module — always registered so liveness/readiness probes work.
+	if db := app.dbr.Write(); db != nil {
+		mods = append(mods, health.NewModule(db.DB))
+	} else {
+		mods = append(mods, health.NewModule(nil))
+	}
 
 	return mods
 }

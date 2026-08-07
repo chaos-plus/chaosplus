@@ -109,6 +109,9 @@ func (r *DatasourceRouter) Read() *bun.DB {
 }
 
 func (r *DatasourceRouter) Write() *bun.DB {
+	if len(r.Writer) == 0 {
+		return nil
+	}
 	tick := time.Now().Unix()
 	return r.Writer[tick%int64(len(r.Writer))]
 }

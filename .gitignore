@@ -49,8 +49,8 @@ Thumbs.db
 
 
 
-/.github
 /.github/*
+!/.github/workflows/
 
 
 /*.png

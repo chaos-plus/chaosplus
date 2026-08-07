@@ -15,7 +15,6 @@ import (
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/chaos-plus/chaosplus/pkg/timezone"
 	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/contrib/bridges/otelslog"
 )
 
 // Bootstrap wires up cross-cutting dependencies before the servers start: base
@@ -36,11 +35,10 @@ func (app *App) Bootstrap() error {
 		return fmt.Errorf("init i18n: %w", err)
 	}
 
-	// init logger — always to stdout, optionally also to a file when configured.
-	var handlers []slog.Handler
-	handlers = append(handlers, slog.NewJSONHandler(os.Stdout, nil))
-	handlers = append(handlers, otelslog.NewHandler(app.name))
-	slog.SetDefault(slog.New(slog.NewMultiHandler(handlers...)))
+	// init logger — JSON to stdout, enriched with OTel trace_id/span_id from the
+	// request context via the otelslog handler wrapper.
+	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: app.cfg.logLevel()})
+	slog.SetDefault(slog.New(newOtelHandler(jsonHandler)))
 
 	// init db — a single sqlite connection keeps the private ":memory:" database
 	// alive and consistent for the process lifetime (see SetupDebug).
