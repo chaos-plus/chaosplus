@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -579,9 +578,10 @@ func startTestMinIO(t *testing.T) (string, *minio.Client) {
 	if binary == "" {
 		t.Skip("real MinIO binary not available; set CHAOSPLUS_MINIO_BINARY or CHAOSPLUS_MINIO_ENDPOINT")
 	}
-	port := freePort(t)
+	ports := freePorts(t, 2)
+	port, consolePort := ports[0], ports[1]
 	dataDir := t.TempDir()
-	command := exec.Command(binary, "server", dataDir, "--address", "127.0.0.1:"+port, "--console-address", "127.0.0.1:"+nextPort(port))
+	command := exec.Command(binary, "server", dataDir, "--address", "127.0.0.1:"+port, "--console-address", "127.0.0.1:"+consolePort)
 	command.Env = append(os.Environ(), "MINIO_ROOT_USER="+minioTestUser, "MINIO_ROOT_PASSWORD="+minioTestPassword)
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
@@ -627,18 +627,26 @@ func newRawClient(t *testing.T, endpoint string) *minio.Client {
 	return client
 }
 
-func freePort(t *testing.T) string {
+// freePorts reserves n distinct loopback ports. Every listener is held open
+// until all ports have been chosen, which is what guarantees they differ.
+//
+// The previous helper derived MinIO's console port as "data port + 1" without
+// ever checking it. Under a parallel `go test ./...` run the ephemeral ports
+// handed out to sibling MinIO instances sit close together, so that guess
+// regularly collided, MinIO exited during startup, and the anchor tests failed
+// intermittently while passing in isolation.
+func freePorts(t *testing.T, n int) []string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-	return strings.TrimPrefix(listener.Addr().String(), "127.0.0.1:")
-}
-
-func nextPort(port string) string {
-	value, err := strconv.Atoi(port)
-	if err != nil {
-		panic(err)
+	listeners := make([]net.Listener, 0, n)
+	ports := make([]string, 0, n)
+	for range n {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		listeners = append(listeners, listener)
+		ports = append(ports, strings.TrimPrefix(listener.Addr().String(), "127.0.0.1:"))
 	}
-	return strconv.Itoa(value + 1)
+	for _, listener := range listeners {
+		require.NoError(t, listener.Close())
+	}
+	return ports
 }
