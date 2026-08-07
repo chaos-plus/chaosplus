@@ -235,10 +235,14 @@ func IsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
+	// MySQL reports "Duplicate entry", PostgreSQL "duplicate key value violates
+	// unique constraint", SQLite "UNIQUE constraint failed". The engines differ
+	// in capitalization, so this comparison must be case-insensitive: matching
+	// MySQL's message in lower case only silently turned every MySQL conflict
+	// into a 500 instead of a 409.
+	msg := strings.ToLower(err.Error())
 	// MySQL: "Duplicate entry", PostgreSQL: "duplicate key", SQLite: "UNIQUE constraint"
 	return strings.Contains(msg, "unique constraint") ||
 		strings.Contains(msg, "duplicate entry") ||
-		strings.Contains(msg, "duplicate key") ||
-		strings.Contains(msg, "UNIQUE constraint")
+		strings.Contains(msg, "duplicate key")
 }

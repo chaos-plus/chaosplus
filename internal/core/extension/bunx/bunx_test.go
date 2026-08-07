@@ -3,6 +3,7 @@ package bunx_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +16,37 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "github.com/uptrace/bun/driver/sqliteshim"
 )
+
+// TestIsUniqueViolationAcrossDialectMessages pins the exact driver messages the
+// three supported engines emit. MySQL capitalizes "Duplicate entry", which the
+// original lower-case-only match missed, silently downgrading every MySQL
+// conflict from 409 to 500.
+func TestIsUniqueViolationAcrossDialectMessages(t *testing.T) {
+	unique := map[string]string{
+		"mysql":    `Error 1062 (23000): Duplicate entry 'tenant-a-Operators' for key 'iam_roles.uq_iam_roles_name'`,
+		"postgres": `ERROR: duplicate key value violates unique constraint "uq_iam_roles_name" (SQLSTATE=23505)`,
+		"sqlite":   `UNIQUE constraint failed: iam_roles.tenant_id, iam_roles.name`,
+	}
+	for dialect, message := range unique {
+		assert.True(t, bunx.IsUniqueViolation(errors.New(message)), "%s: %s", dialect, message)
+	}
+
+	other := map[string]string{
+		"foreign key":   `FOREIGN KEY constraint failed`,
+		"not null":      `Error 1048 (23000): Column 'name' cannot be null`,
+		"check":         `ERROR: new row violates check constraint "ck_status" (SQLSTATE=23514)`,
+		"connection":    `dial tcp 10.0.0.1:3306: connect: connection refused`,
+		"missing table": `SQL logic error: no such table: iam_roles (1)`,
+		"deadlock":      `Error 1213 (40001): Deadlock found when trying to get lock`,
+		"serialization": `ERROR: could not serialize access due to concurrent update (SQLSTATE=40001)`,
+		"lock wait":     `Error 1205 (HY000): Lock wait timeout exceeded`,
+		"syntax":        `ERROR: syntax error at or near "SELCT" (SQLSTATE=42601)`,
+	}
+	for name, message := range other {
+		assert.False(t, bunx.IsUniqueViolation(errors.New(message)), "%s: %s", name, message)
+	}
+	assert.False(t, bunx.IsUniqueViolation(nil))
+}
 
 func TestDatasourceDSNFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dsn")
