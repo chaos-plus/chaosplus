@@ -41,7 +41,9 @@ func TestRegisterAllowsDocsFramingOnly(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	for _, path := range []string{"/", "/docs", "/docs/scalar", "/docs/swagger", "/docs/redoc", "/docs/stoplight", "/docs/openapi-ui"} {
+	// Docs pages (and the renderers) may be embedded; the root landing page and
+	// ordinary API routes keep the DENY frame option.
+	for _, path := range []string{"/docs", "/docs/scalar", "/docs/swagger", "/docs/redoc", "/docs/stoplight", "/docs/openapi-ui"} {
 		t.Run(path, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
@@ -51,6 +53,13 @@ func TestRegisterAllowsDocsFramingOnly(t *testing.T) {
 		})
 	}
 
+	// The root landing page is a plain route and keeps the DENY frame option.
+	rrRoot := httptest.NewRecorder()
+	r.ServeHTTP(rrRoot, httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.Equal(t, http.StatusOK, rrRoot.Code)
+	assert.Equal(t, "DENY", rrRoot.Header().Get("X-Frame-Options"))
+
+	// Ordinary API routes keep DENY too.
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api-test", nil))
 	assert.Equal(t, http.StatusNoContent, rr.Code)

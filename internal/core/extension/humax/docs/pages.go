@@ -214,3 +214,102 @@ func docsWrapperHTML(name, specJSON string) []byte {
   </body>
 </html>`)
 }
+
+// indexHTML is the lightweight landing page served at the API root. It is
+// intentionally distinct from the docs renderer: it names the service, reports
+// liveness/readiness links, and points to the full API reference and the
+// machine-readable OpenAPI spec. No external assets are referenced.
+func indexHTML(name, specJSON string) []byte {
+	return []byte(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>` + name + ` API</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --card: #171a21;
+        --border: #262b36;
+        --text: #e6e9ef;
+        --muted: #9aa4b2;
+        --accent: #6ea8fe;
+        --ok: #3fb950;
+        --radius: 8px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      main { width: min(560px, 90vw); }
+      h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+      p.lead { color: var(--muted); margin: 0 0 1.5rem; line-height: 1.5; }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.35rem 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 0.85rem;
+        color: var(--ok);
+        margin-bottom: 1.5rem;
+      }
+      .status::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--ok);
+      }
+      nav { display: grid; gap: 0.75rem; }
+      a {
+        display: block;
+        padding: 0.9rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--card);
+        color: var(--text);
+        text-decoration: none;
+        transition: border-color 160ms;
+      }
+      a:hover { border-color: var(--accent); }
+      a strong { display: block; font-weight: 600; }
+      a span { color: var(--muted); font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>` + name + ` API</h1>
+      <p class="lead">Identity and access management platform. This service exposes the REST API; use the links below to browse the API reference and machine-readable specification.</p>
+      <div class="status">Service online</div>
+      <nav>
+        <a href="/docs">
+          <strong>API reference</strong>
+          <span>Interactive documentation for every endpoint</span>
+        </a>
+        <a href="` + specJSON + `">
+          <strong>OpenAPI specification</strong>
+          <span>Machine-readable ` + specJSON + ` document</span>
+        </a>
+        <a href="/healthz">
+          <strong>Liveness</strong>
+          <span>Service health probe</span>
+        </a>
+        <a href="/readyz">
+          <strong>Readiness</strong>
+          <span>Database connectivity probe</span>
+        </a>
+      </nav>
+    </main>
+  </body>
+</html>
+`)
+}
