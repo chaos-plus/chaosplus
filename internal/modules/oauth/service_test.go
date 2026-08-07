@@ -384,6 +384,25 @@ func TestOAuthAuthorizationPersistenceFailures(t *testing.T) {
 	})
 }
 
+// TestOAuthServicePropagatesDatabaseFailures drops the real client table so the
+// driver produces genuine errors, exercising the failure branches that the
+// happy-path tests never reach.
+func TestOAuthServicePropagatesDatabaseFailures(t *testing.T) {
+	service, _, _ := newOAuthTestService(t)
+	_, err := service.db.ExecContext(t.Context(), "DROP TABLE iam_oauth_clients")
+	require.NoError(t, err)
+
+	_, listErr := service.ListClients(t.Context(), "tenant")
+	assert.Error(t, listErr)
+	_, _, createErr := service.CreateClient(t.Context(), "tenant", "Broken", []string{"https://app.example/cb"}, []string{"authorization_code"}, []string{"openid"}, true)
+	assert.Error(t, createErr)
+	_, updateErr := service.UpdateClient(t.Context(), "tenant", "missing", "Broken", []string{"https://app.example/cb"}, []string{"authorization_code"}, []string{"openid"}, true, "active")
+	assert.Error(t, updateErr)
+	_, rotateErr := service.RotateClientSecret(t.Context(), "tenant", "missing")
+	assert.Error(t, rotateErr)
+	assert.Error(t, service.DeleteClient(t.Context(), "tenant", "missing"))
+}
+
 func newOAuthTestService(t *testing.T) (*Service, *authnmod.WebService, string) {
 	t.Helper()
 	db, err := bunxtest.Memory()

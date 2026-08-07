@@ -41,6 +41,49 @@ type fakeSCIMProvider struct {
 	body     string
 }
 
+// TestSyncTargetPushesEveryMappedResource drives the reconciler that the
+// background SCIM worker calls on every tick. It had no test at all, so neither
+// SyncTarget nor listTargetResources was ever executed.
+func TestSyncTargetPushesEveryMappedResource(t *testing.T) {
+	env := newProvisioningEnvironment(t)
+	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider.echo = true
+	ctx := t.Context()
+
+	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", providerServer.URL, "bearer-secret")
+	require.NoError(t, err)
+
+	// An empty target reconciles to zero without contacting the provider.
+	synced, err := env.service.SyncTarget(ctx, "tenant-a", created.Target.ID)
+	require.NoError(t, err)
+	assert.Zero(t, synced)
+	assert.Zero(t, provider.count())
+
+	// Once resources are mapped, reconciliation re-pushes each of them.
+	alice, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-alice", "alice", "alice@example.test"))
+	require.NoError(t, err)
+	bob, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-bob", "bob", "bob@example.test"))
+	require.NoError(t, err)
+	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, alice.ID)
+	require.NoError(t, err)
+	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, bob.ID)
+	require.NoError(t, err)
+	before := provider.count()
+
+	synced, err = env.service.SyncTarget(ctx, "tenant-a", created.Target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, synced)
+	assert.Greater(t, provider.count(), before, "reconciliation must reach the provider")
+
+	// Invalid and unknown targets fail before any network call.
+	_, err = env.service.SyncTarget(ctx, "", created.Target.ID)
+	assert.ErrorIs(t, err, ErrInvalidTarget)
+	_, err = env.service.SyncTarget(ctx, "tenant-a", "")
+	assert.ErrorIs(t, err, ErrInvalidTarget)
+	_, err = env.service.SyncTarget(ctx, "tenant-a", "missing")
+	assert.Error(t, err)
+}
+
 func newFakeSCIMProvider(t *testing.T, status int, body string) (*fakeSCIMProvider, *httptest.Server) {
 	t.Helper()
 	provider := &fakeSCIMProvider{status: status, body: body}

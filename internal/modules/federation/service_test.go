@@ -71,6 +71,29 @@ func newFederationEnvironment(t *testing.T) *federationEnvironment {
 	return &federationEnvironment{db: db, service: service, web: web, audit: appendAudit, identities: identities, key: key, idp: newTestIDP(t)}
 }
 
+// TestFederationServicePropagatesDatabaseFailures drops the real provider table
+// so the driver produces genuine errors, exercising the failure branches the
+// happy-path tests never reach.
+func TestFederationServicePropagatesDatabaseFailures(t *testing.T) {
+	env := newFederationEnvironment(t)
+	input := ProviderInput{
+		Name: "Broken", ProviderType: "oidc", Issuer: "https://idp.example",
+		ClientID: "client", ClientSecret: "secret", Scopes: "openid", Status: "active",
+	}
+	_, err := env.db.ExecContext(t.Context(), "DROP TABLE iam_identity_providers")
+	require.NoError(t, err)
+
+	_, listErr := env.service.ListProviders(t.Context(), "tenant-a")
+	assert.Error(t, listErr)
+	_, createErr := env.service.CreateProvider(t.Context(), "tenant-a", input)
+	assert.Error(t, createErr)
+	_, updateErr := env.service.UpdateProvider(t.Context(), "tenant-a", "missing", input)
+	assert.Error(t, updateErr)
+	assert.Error(t, env.service.DeleteProvider(t.Context(), "tenant-a", "missing"))
+	_, startErr := env.service.StartLogin(t.Context(), "missing", "https://app.example/", "https://app.example/cb")
+	assert.Error(t, startErr)
+}
+
 func (env *federationEnvironment) createProvider(t *testing.T, input ProviderInput) Provider {
 	t.Helper()
 	provider, err := env.service.CreateProvider(t.Context(), "tenant-a", input)

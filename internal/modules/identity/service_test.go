@@ -447,6 +447,47 @@ func TestPrincipalDisablePreservesEveryTenantAdministrator(t *testing.T) {
 	assert.Equal(t, "disabled", current.Status)
 }
 
+// TestIdentityServicePropagatesDatabaseFailures drops real tables so the driver
+// produces genuine errors, exercising the failure branches the happy-path tests
+// never reach.
+func TestIdentityServicePropagatesDatabaseFailures(t *testing.T) {
+	t.Run("principals", func(t *testing.T) {
+		db, service, principal := newIdentityFixture(t)
+		_, err := db.ExecContext(t.Context(), "DROP TABLE iam_principals")
+		require.NoError(t, err)
+
+		_, _, listErr := service.List(t.Context(), "tenant", "", 10, 0)
+		assert.Error(t, listErr)
+		_, getErr := service.Get(t.Context(), "tenant", principal.ID)
+		assert.Error(t, getErr)
+		displayName := "Renamed"
+		_, updateErr := service.Update(t.Context(), "tenant", principal.ID, &displayName, nil)
+		assert.Error(t, updateErr)
+		_, statusErr := service.SetStatus(t.Context(), "tenant", principal.ID, "disabled")
+		assert.Error(t, statusErr)
+		_, createErr := service.Create(t.Context(), "tenant", "broken", "correct horse battery staple", "Broken", "broken@example.test")
+		assert.Error(t, createErr)
+		_, _, ensureErr := service.EnsureExternalPrincipal(t.Context(), db, "tenant", "external@example.test", "External", time.Now().UTC())
+		assert.Error(t, ensureErr)
+	})
+
+	t.Run("service accounts", func(t *testing.T) {
+		db, service, _ := newIdentityFixture(t)
+		_, err := db.ExecContext(t.Context(), "DROP TABLE iam_service_accounts")
+		require.NoError(t, err)
+
+		_, _, listErr := service.ListServiceAccounts(t.Context(), "tenant", "", 10, 0)
+		assert.Error(t, listErr)
+		_, getErr := service.GetServiceAccount(t.Context(), "tenant", "missing")
+		assert.Error(t, getErr)
+		_, createErr := service.CreateServiceAccount(t.Context(), "tenant", "broken", "Broken", "", nil)
+		assert.Error(t, createErr)
+		_, replaceErr := service.ReplaceServiceAccount(t.Context(), "tenant", "missing", "Broken", "", "active", nil, 1)
+		assert.Error(t, replaceErr)
+		assert.Error(t, service.DeleteServiceAccount(t.Context(), "tenant", "missing", 1))
+	})
+}
+
 func newIdentityFixture(t *testing.T) (*bun.DB, *Service, Principal) {
 	t.Helper()
 	db, err := bunxtest.Memory()

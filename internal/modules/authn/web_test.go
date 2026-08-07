@@ -22,6 +22,77 @@ import (
 	"github.com/uptrace/bun"
 )
 
+// TestWebServiceSessionAndReturnURLHelpers covers the helpers federation uses
+// after an external login completes. All three shipped with zero coverage.
+func TestWebServiceSessionAndReturnURLHelpers(t *testing.T) {
+	service, principalID := newLocalService(t)
+
+	assert.True(t, service.CookieSecure())
+	assert.Equal(t, "https://app.example/login", service.PostLogoutURL())
+
+	// An empty return URL falls back to the configured post-login URL.
+	resolved, err := service.ResolveReturnURL("")
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example/", resolved)
+	resolved, err = service.ResolveReturnURL("  https://app.example/  ")
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example/", resolved)
+	// Anything outside the allowlist is refused, which is what stops open
+	// redirects after a federated login.
+	_, err = service.ResolveReturnURL("https://evil.example/steal")
+	assert.ErrorIs(t, err, authnext.ErrReturnURL)
+
+	// A session created directly authenticates like any browser session.
+	token, err := service.CreateSession(t.Context(), principalID, time.Now().UTC(), authnext.Assurance{AuthTime: time.Now().UTC(), Level: 1, Methods: []string{"pwd"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	claims, err := service.Authenticate(t.Context(), "", service.SessionCookie(token))
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.Subject)
+
+	// A disabled service refuses both helpers instead of silently succeeding.
+	disabled, err := NewWebService(authnext.Config{}, nil)
+	require.NoError(t, err)
+	_, err = disabled.CreateSession(t.Context(), principalID, time.Now().UTC(), authnext.Assurance{})
+	assert.ErrorIs(t, err, authnext.ErrDisabled)
+	_, err = disabled.ResolveReturnURL("https://app.example/")
+	assert.ErrorIs(t, err, authnext.ErrDisabled)
+}
+
+// TestWebServicePropagatesDatabaseFailures drops the real credential and
+// session tables so the driver produces genuine errors. These failure branches
+// guard the login path and were otherwise unexercised.
+func TestWebServicePropagatesDatabaseFailures(t *testing.T) {
+	t.Run("credentials", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		_, err := service.db.ExecContext(t.Context(), "DROP TABLE iam_credentials")
+		require.NoError(t, err)
+
+		_, beginErr := service.BeginLogin(t.Context(), "Admin", "correct horse battery staple", "")
+		assert.Error(t, beginErr)
+		_, _, loginErr := service.Login(t.Context(), "Admin", "correct horse battery staple", "")
+		assert.Error(t, loginErr)
+	})
+
+	t.Run("sessions", func(t *testing.T) {
+		service, _ := newLocalService(t)
+		token, _, err := service.Login(t.Context(), "Admin", "correct horse battery staple", "")
+		require.NoError(t, err)
+		cookie := service.SessionCookie(token)
+		_, dropErr := service.db.ExecContext(t.Context(), "DROP TABLE iam_sessions")
+		require.NoError(t, dropErr)
+
+		_, listErr := service.ListSessions(t.Context(), "", cookie)
+		assert.Error(t, listErr)
+		assert.Error(t, service.RevokeSession(t.Context(), "", cookie, "some-session"))
+		assert.Error(t, service.LogoutAll(t.Context(), "", cookie))
+		assert.Error(t, service.ChangePassword(t.Context(), "", cookie, "correct horse battery staple", "a different long passphrase"))
+		// Logout still returns a clear-cookie header when the store is gone, so
+		// a browser is never left holding a session it cannot use.
+		assert.NotEmpty(t, service.Logout(t.Context(), cookie))
+	})
+}
+
 func newLocalService(t *testing.T) (*WebService, string) {
 	t.Helper()
 	db, err := bunxtest.Memory()
