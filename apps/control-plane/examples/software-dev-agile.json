@@ -15,7 +15,7 @@
       "id": "requirements",
       "type": "agent",
       "agent": {
-        "id": "requirements", "role": "pm", "executor": "mock",
+        "id": "requirements", "role": "pm", "executor": "claude",
         "systemPrompt": "产出需求文档 requirements.md",
         "outputSpec": { "produces": [{ "id": "requirements.md", "path": "requirements.md", "type": "markdown", "required": true }] }
       }
@@ -24,7 +24,7 @@
       "id": "prd",
       "type": "agent",
       "agent": {
-        "id": "prd", "role": "pm", "executor": "mock",
+        "id": "prd", "role": "pm", "executor": "claude",
         "systemPrompt": "基于 requirements.md 产出 PRD.md",
         "outputSpec": { "produces": [{ "id": "PRD.md", "path": "PRD.md", "type": "markdown", "required": true }] }
       }
@@ -34,7 +34,7 @@
       "id": "design",
       "type": "agent",
       "agent": {
-        "id": "design", "role": "arch", "executor": "mock",
+        "id": "design", "role": "arch", "executor": "claude",
         "systemPrompt": "基于 PRD.md 产出技术设计",
         "outputSpec": { "produces": [{ "id": "design.md", "path": "design.md", "type": "markdown", "required": true }] }
       }
@@ -44,7 +44,7 @@
       "id": "sprint-plan",
       "type": "agent",
       "agent": {
-        "id": "sprint-plan", "role": "pm", "executor": "mock",
+        "id": "sprint-plan", "role": "pm", "executor": "claude",
         "systemPrompt": "拆解 sprint 任务为子任务列表",
         "outputSpec": { "produces": [{ "id": "sprint.md", "path": "sprint.md", "type": "markdown", "required": true }] }
       }
@@ -54,15 +54,15 @@
       "id": "coding",
       "type": "agent",
       "agent": {
-        "id": "coding", "role": "coder", "executor": "mock",
+        "id": "coding", "role": "coder", "executor": "claude",
         "systemPrompt": "实现一个子任务并自测",
         "inputSpec": { "consumes": [{ "id": "sprint.md", "type": "markdown", "required": true }] },
         "outputSpec": { "produces": [{ "id": "code", "path": "src/", "type": "code", "required": true }] }
       }
     },
     { "id": "join", "type": "join" },
-    { "id": "qa", "type": "agent", "agent": { "id": "qa", "role": "qa", "executor": "mock", "systemPrompt": "运行测试并报告 passed/failed" } },
-    { "id": "bug-fix", "type": "agent", "agent": { "id": "bug-fix", "role": "coder", "executor": "mock", "systemPrompt": "修复 QA 指出的缺陷" } },
+    { "id": "qa", "type": "agent", "agent": { "id": "qa", "role": "qa", "executor": "claude", "systemPrompt": "运行测试并报告 passed/failed" } },
+    { "id": "bug-fix", "type": "agent", "agent": { "id": "bug-fix", "role": "coder", "executor": "claude", "systemPrompt": "修复 QA 指出的缺陷" } },
     {
       "id": "qa-loop",
       "type": "loop",

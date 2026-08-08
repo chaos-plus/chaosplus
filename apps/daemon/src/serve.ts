@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 import { AgentManager } from "./agents/manager";
 import { NatsDaemonTransport, type RunnerCommand, type RunnerEvent } from "./nats/transport";
 
@@ -14,6 +16,7 @@ const NATS_URL = process.env.DAEMON_NATS_URL ?? "nats://127.0.0.1:4222";
 
 const manager = new AgentManager();
 const sessions = new Map<string, string>(); // spawnId -> agent session id
+const spawnCwd = new Map<string, string>(); // spawnId -> workspace cwd (for read-file)
 const transport = new NatsDaemonTransport(RUNNER_ID, NATS_URL);
 
 async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown) => void): Promise<void> {
@@ -29,9 +32,29 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
         apiKey: cmd.spawn.apiKey,
       });
       sessions.set(cmd.spawn.spawnId, agent.spec.id);
+      spawnCwd.set(cmd.spawn.spawnId, cmd.spawn.cwd);
       transport.publish({ type: "spawn-started", spawnId: cmd.spawn.spawnId });
       reply(true, { agentId: agent.spec.id });
       void runAndReport(agent.spec.id, cmd.spawn.spawnId, cmd.spawn.prompt);
+      return;
+    }
+    case "read-file": {
+      const cwd = spawnCwd.get(cmd.spawnId);
+      if (!cwd) {
+        reply(false, { error: `no workspace for spawn ${cmd.spawnId}` });
+        return;
+      }
+      const abs = resolve(cwd, cmd.path);
+      if (abs !== cwd && !abs.startsWith(cwd + sep)) {
+        reply(false, { error: "path escapes workspace" });
+        return;
+      }
+      try {
+        const content = await readFile(abs, "utf8");
+        reply(true, { content });
+      } catch (e) {
+        reply(false, { error: (e as Error).message });
+      }
       return;
     }
     case "kill": {

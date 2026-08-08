@@ -1,0 +1,32 @@
+{
+  "id": "e2e-real",
+  "version": "1.0.0",
+  "name": "真实执行 E2E（最小）",
+  "contextSchema": {
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 }
+    }
+  },
+  "nodes": [
+    { "id": "trigger", "type": "trigger", "trigger": { "source": "manual" } },
+    {
+      "id": "a",
+      "type": "agent",
+      "agent": {
+        "id": "a", "role": "coder", "executor": "claude",
+        "systemPrompt": "你是资深工程师。完成任务后，把结论写入 output.json（JSON 对象，含字段 ok: true 和 summary 字符串）。"
+      }
+    },
+    { "id": "check", "type": "condition", "condition": { "expr": { "var": "a.ok" } } },
+    { "id": "ok", "type": "transform", "transform": { "expr": { "cat": ["passed: ", { "var": "a.summary" }] }, "output": "result" } },
+    { "id": "fail", "type": "agent", "agent": { "id": "f", "role": "coder", "executor": "claude", "systemPrompt": "输出失败分支。写 output.json 含 ok: false。" } }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "a" },
+    { "from": "a", "to": "check" },
+    { "from": "check", "to": "ok", "branchKey": "true" },
+    { "from": "check", "to": "fail", "branchKey": "false" }
+  ]
+}

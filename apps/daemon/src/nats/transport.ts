@@ -21,7 +21,8 @@ export interface SpawnCommand extends AgentTask {
 export type RunnerCommand =
   | { type: "spawn"; spawn: SpawnCommand }
   | { type: "kill"; spawnId: string }
-  | { type: "switch-provider"; spawnId: string; provider: string; apiKey?: string };
+  | { type: "switch-provider"; spawnId: string; provider: string; apiKey?: string }
+  | { type: "read-file"; spawnId: string; path: string };
 
 export type RunnerEvent =
   | { type: "heartbeat"; ts: number }

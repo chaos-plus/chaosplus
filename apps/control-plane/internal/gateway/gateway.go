@@ -40,11 +40,16 @@ type runnerCmd struct {
 	SpawnID  string `json:"spawnId,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	APIKey   string `json:"apiKey,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 type runnerReply struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	Data  struct {
+		Content string `json:"content"`
+		Error   string `json:"error,omitempty"`
+	} `json:"data,omitempty"`
 }
 
 // RunnerEvent is a raw event payload published by a runner.
@@ -152,6 +157,51 @@ func (g *Gateway) Spawn(ctx context.Context, runnerID string, sp Spawn) error {
 	return g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
 }
 
+// SpawnResult is the outcome of a completed spawn.
+type SpawnResult struct {
+	OK       bool
+	ExitCode int
+	Error    string
+}
+
+// SpawnAndWait sends a spawn command and blocks until the matching
+// spawn-done / spawn-error event arrives for that spawnId. Events are consumed
+// from the gateway's stream, so callers must not concurrently drain Events().
+func (g *Gateway) SpawnAndWait(ctx context.Context, runnerID string, sp Spawn) (SpawnResult, error) {
+	if err := g.Spawn(ctx, runnerID, sp); err != nil {
+		return SpawnResult{}, err
+	}
+	for {
+		select {
+		case ev := <-g.events:
+			if ev.RunnerID != runnerID {
+				continue
+			}
+			var p struct {
+				SpawnID  string `json:"spawnId"`
+				OK       *bool  `json:"ok"`
+				ExitCode int    `json:"exitCode"`
+				Message  string `json:"message"`
+			}
+			if err := json.Unmarshal(ev.Payload, &p); err != nil {
+				continue
+			}
+			if p.SpawnID != sp.SpawnID {
+				continue
+			}
+			switch ev.Type {
+			case "spawn-done":
+				ok := p.OK == nil || *p.OK
+				return SpawnResult{OK: ok, ExitCode: p.ExitCode}, nil
+			case "spawn-error":
+				return SpawnResult{OK: false, Error: p.Message}, nil
+			}
+		case <-ctx.Done():
+			return SpawnResult{}, ctx.Err()
+		}
+	}
+}
+
 // Kill sends a kill command for a running spawn.
 func (g *Gateway) Kill(ctx context.Context, runnerID, spawnID string) error {
 	cmd, err := json.Marshal(runnerCmd{Type: "kill", SpawnID: spawnID})
@@ -171,18 +221,42 @@ func (g *Gateway) SwitchProvider(ctx context.Context, runnerID, spawnID, provide
 }
 
 func (g *Gateway) roundTrip(ctx context.Context, subject string, payload []byte) error {
+	_, err := g.roundTripReply(ctx, subject, payload)
+	return err
+}
+
+func (g *Gateway) roundTripReply(ctx context.Context, subject string, payload []byte) (runnerReply, error) {
 	reply, err := g.nc.RequestWithContext(ctx, subject, payload)
 	if err != nil {
-		return fmt.Errorf("request %s: %w", subject, err)
+		return runnerReply{}, fmt.Errorf("request %s: %w", subject, err)
 	}
 	var r runnerReply
 	if err := json.Unmarshal(reply.Data, &r); err != nil {
-		return fmt.Errorf("bad reply on %s: %w", subject, err)
+		return runnerReply{}, fmt.Errorf("bad reply on %s: %w", subject, err)
 	}
 	if !r.OK {
-		return errors.New(r.Error)
+		// daemon's reply contract is {ok, data}; errors ride inside data.error.
+		msg := r.Error
+		if msg == "" {
+			msg = r.Data.Error
+		}
+		return r, errors.New(msg)
 	}
-	return nil
+	return r, nil
+}
+
+// ReadArtifact asks the runner to read a workspace file (relative to the spawn's
+// cwd, sandboxed) and returns its contents.
+func (g *Gateway) ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error) {
+	cmd, err := json.Marshal(runnerCmd{Type: "read-file", SpawnID: spawnID, Path: path})
+	if err != nil {
+		return nil, err
+	}
+	r, err := g.roundTripReply(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(r.Data.Content), nil
 }
 
 func splitSubject(subj string) []string {
