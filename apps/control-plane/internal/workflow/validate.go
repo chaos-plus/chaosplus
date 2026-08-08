@@ -82,6 +82,23 @@ func (d *WorkflowDef) Validate() error {
 		return fmt.Errorf("workflow %s: graph contains a cycle (loop nodes must use a loop body, not back-edges)", d.ID)
 	}
 
+	// human_approval nodes must route only via approved/rejected out-edges
+	// (F.5): a default success edge would let rejection flow downstream.
+	// A terminal approval node (no out-edges, e.g. sprint-delivery) is valid.
+	for id, n := range nodes {
+		if n.Type != NodeHumanApproval {
+			continue
+		}
+		for _, e := range d.Edges {
+			if e.From != id {
+				continue
+			}
+			if e.Condition != EdgeApproved && e.Condition != EdgeRejected {
+				return fmt.Errorf("workflow %s: approval node %q out-edge to %q must be 'approved' or 'rejected' (got %q)", d.ID, id, e.To, e.Condition)
+			}
+		}
+	}
+
 	// Per-type required fields.
 	for id, n := range nodes {
 		if err := validateNodeFields(d.ID, id, n); err != nil {
