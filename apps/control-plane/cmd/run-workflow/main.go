@@ -100,6 +100,20 @@ func main() {
 	log.Printf("running %s (%s) on runner %s, workspace %s", def.Name, def.ID, runnerID, workspace)
 
 	exec := workflow.NewRunnerExecutor(g, runnerID, workspace, runID)
+	if d := os.Getenv("SPAWN_IDLE_TIMEOUT"); d != "" {
+		if t, err := time.ParseDuration(d); err == nil {
+			exec.WithSpawnTimeout(t, 0)
+		} else {
+			log.Printf("invalid SPAWN_IDLE_TIMEOUT %q: %v", d, err)
+		}
+	}
+	if d := os.Getenv("SPAWN_MAX_TIMEOUT"); d != "" {
+		if t, err := time.ParseDuration(d); err == nil {
+			exec.WithSpawnTimeout(0, t)
+		} else {
+			log.Printf("invalid SPAWN_MAX_TIMEOUT %q: %v", d, err)
+		}
+	}
 	eng, err := workflow.NewEngine(&def, exec)
 	if err != nil {
 		log.Fatalf("new engine: %v", err)

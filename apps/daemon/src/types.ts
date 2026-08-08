@@ -32,6 +32,7 @@ export interface AgentTask {
 /** Persistent description of one hosted agent (executor or digital-human). */
 export interface AgentSpec {
   id: string;
+  name?: string;
   kind: AgentKind;
   runtime: ExecutorType;
   cwd: string;

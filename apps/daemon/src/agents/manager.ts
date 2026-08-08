@@ -4,6 +4,7 @@ import type { AgentKind, ExecutorType } from "../types";
 import { AgentSession } from "./session";
 
 export interface CreateAgentInput {
+  name?: string;
   kind?: AgentKind;
   runtime?: ExecutorType;
   cwd?: string;
@@ -30,6 +31,7 @@ export class AgentManager {
     pickBackend(runtime); // validate at the boundary, not at first run
     const session = new AgentSession({
       id: randomUUID(),
+      name: input.name,
       kind: input.kind ?? "executor",
       runtime,
       cwd: input.cwd ?? process.cwd(),

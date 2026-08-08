@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
@@ -35,20 +36,25 @@ type Spawn struct {
 }
 
 type runnerCmd struct {
-	Type     string `json:"type"`
-	Spawn    *Spawn `json:"spawn,omitempty"`
-	SpawnID  string `json:"spawnId,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	APIKey   string `json:"apiKey,omitempty"`
-	Path     string `json:"path,omitempty"`
+	Type      string `json:"type"`
+	Spawn     *Spawn `json:"spawn,omitempty"`
+	SpawnID   string `json:"spawnId,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	APIKey    string `json:"apiKey,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Cmd       string `json:"cmd,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
 }
 
 type runnerReply struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	Data  struct {
-		Content string `json:"content"`
-		Error   string `json:"error,omitempty"`
+		Content  string `json:"content"`
+		Error    string `json:"error,omitempty"`
+		ExitCode int    `json:"exitCode,omitempty"`
+		Stdout   string `json:"stdout,omitempty"`
+		Stderr   string `json:"stderr,omitempty"`
 	} `json:"data,omitempty"`
 }
 
@@ -164,13 +170,61 @@ type SpawnResult struct {
 	Error    string
 }
 
+// SpawnWaitOption configures activity-based timeout on SpawnAndWait.
+type SpawnWaitOption func(*spawnWaitConfig)
+
+type spawnWaitConfig struct {
+	idle time.Duration // no matching event for this long → timeout
+	max  time.Duration // absolute cap regardless of activity
+}
+
+// WithIdleTimeout fails the wait after `d` with no matching spawn event.
+func WithIdleTimeout(d time.Duration) SpawnWaitOption {
+	return func(c *spawnWaitConfig) { c.idle = d }
+}
+
+// WithMaxTimeout caps the total wait even if activity keeps arriving.
+func WithMaxTimeout(d time.Duration) SpawnWaitOption {
+	return func(c *spawnWaitConfig) { c.max = d }
+}
+
 // SpawnAndWait sends a spawn command and blocks until the matching
 // spawn-done / spawn-error event arrives for that spawnId. Events are consumed
 // from the gateway's stream, so callers must not concurrently drain Events().
+// Callers wanting activity-based timeout use SpawnAndWaitOpts.
 func (g *Gateway) SpawnAndWait(ctx context.Context, runnerID string, sp Spawn) (SpawnResult, error) {
+	return g.SpawnAndWaitOpts(ctx, runnerID, sp)
+}
+
+// SpawnAndWaitOpts is SpawnAndWait with timeout options. Every matching event
+// (started/event/done/error) resets the idle timer; max is an absolute bound.
+func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spawn, opts ...SpawnWaitOption) (SpawnResult, error) {
+	cfg := &spawnWaitConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
 	if err := g.Spawn(ctx, runnerID, sp); err != nil {
 		return SpawnResult{}, err
 	}
+
+	maxCtx := ctx
+	cancelMax := func() {}
+	if cfg.max > 0 {
+		maxCtx, cancelMax = context.WithTimeout(ctx, cfg.max)
+	}
+	defer cancelMax()
+
+	var idle *time.Timer
+	idleC := make(chan time.Time, 1)
+	if cfg.idle > 0 {
+		idle = time.AfterFunc(cfg.idle, func() { idleC <- time.Time{} })
+	}
+	resetIdle := func() {
+		if idle != nil {
+			idle.Reset(cfg.idle)
+		}
+	}
+
 	for {
 		select {
 		case ev := <-g.events:
@@ -189,6 +243,8 @@ func (g *Gateway) SpawnAndWait(ctx context.Context, runnerID string, sp Spawn) (
 			if p.SpawnID != sp.SpawnID {
 				continue
 			}
+			// Any matching event = live activity → reset idle timer.
+			resetIdle()
 			switch ev.Type {
 			case "spawn-done":
 				ok := p.OK == nil || *p.OK
@@ -196,8 +252,10 @@ func (g *Gateway) SpawnAndWait(ctx context.Context, runnerID string, sp Spawn) (
 			case "spawn-error":
 				return SpawnResult{OK: false, Error: p.Message}, nil
 			}
-		case <-ctx.Done():
-			return SpawnResult{}, ctx.Err()
+		case <-idleC:
+			return SpawnResult{}, fmt.Errorf("spawn %s idle timeout after %s", sp.SpawnID, cfg.idle)
+		case <-maxCtx.Done():
+			return SpawnResult{}, maxCtx.Err()
 		}
 	}
 }
@@ -257,6 +315,27 @@ func (g *Gateway) ReadArtifact(ctx context.Context, runnerID, spawnID, path stri
 		return nil, err
 	}
 	return []byte(r.Data.Content), nil
+}
+
+// CmdResult is the outcome of running a validator command on a runner.
+type CmdResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+}
+
+// RunCmd executes a PRD F.5 'cmd:' validator template in the spawn's workspace
+// on the runner and returns its output. Non-zero exit = validation failed.
+func (g *Gateway) RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (CmdResult, error) {
+	cmd, err := json.Marshal(runnerCmd{Type: "run-cmd", SpawnID: spawnID, Cmd: cmdTemplate, TimeoutMs: timeoutMs})
+	if err != nil {
+		return CmdResult{}, err
+	}
+	r, err := g.roundTripReply(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	if err != nil {
+		return CmdResult{}, err
+	}
+	return CmdResult{ExitCode: r.Data.ExitCode, Stdout: r.Data.Stdout, Stderr: r.Data.Stderr}, nil
 }
 
 func splitSubject(subj string) []string {

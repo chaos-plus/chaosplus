@@ -16,8 +16,7 @@
       "type": "agent",
       "agent": {
         "id": "requirements", "role": "pm", "executor": "claude",
-        "systemPrompt": "产出需求文档 requirements.md",
-        "outputSpec": { "produces": [{ "id": "requirements.md", "path": "requirements.md", "type": "markdown", "required": true }] }
+        "systemPrompt": "你是产品经理。把任务拆成清晰的需求。完成后写 output.json，内容必须是一个 JSON 对象：{\"requirements\":\"<需求要点摘要，3-5 句>\",\"ok\":true}。output.json 里只放这一个 JSON 对象。"
       }
     },
     {
@@ -25,8 +24,7 @@
       "type": "agent",
       "agent": {
         "id": "prd", "role": "pm", "executor": "claude",
-        "systemPrompt": "基于 requirements.md 产出 PRD.md",
-        "outputSpec": { "produces": [{ "id": "PRD.md", "path": "PRD.md", "type": "markdown", "required": true }] }
+        "systemPrompt": "你是产品经理。基于需求撰写 PRD。完成后写 output.json，内容必须是一个 JSON 对象：{\"prd\":\"<PRD 要点摘要>\",\"ok\":true}。output.json 里只放这一个 JSON 对象。"
       }
     },
     { "id": "prd-approval", "type": "human_approval", "humanApproval": { "approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause" } },
@@ -35,8 +33,7 @@
       "type": "agent",
       "agent": {
         "id": "design", "role": "arch", "executor": "claude",
-        "systemPrompt": "基于 PRD.md 产出技术设计",
-        "outputSpec": { "produces": [{ "id": "design.md", "path": "design.md", "type": "markdown", "required": true }] }
+        "systemPrompt": "你是架构师。基于 PRD 做技术设计，给出实现要点。完成后写 output.json，内容必须是一个 JSON 对象：{\"design\":\"<设计要点>\",\"ok\":true}。output.json 里只放这一个 JSON 对象。"
       }
     },
     { "id": "arch-approval", "type": "human_approval", "humanApproval": { "approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause" } },
@@ -45,8 +42,7 @@
       "type": "agent",
       "agent": {
         "id": "sprint-plan", "role": "pm", "executor": "claude",
-        "systemPrompt": "拆解 sprint 任务为子任务列表",
-        "outputSpec": { "produces": [{ "id": "sprint.md", "path": "sprint.md", "type": "markdown", "required": true }] }
+        "systemPrompt": "你是敏捷 PM。把任务拆解成 2-3 个可并行的子任务，每个子任务一句话。完成后写 output.json，内容必须是一个 JSON 对象：{\"tasks\":[\"<子任务1>\",\"<子任务2>\",\"<子任务3>\"],\"ok\":true}。output.json 里只放这一个 JSON 对象。"
       }
     },
     { "id": "fork", "type": "parallel_fork", "fanOut": { "itemsExpr": { "var": "sprint-plan.tasks" }, "templateNodeId": "coding" } },
@@ -55,14 +51,12 @@
       "type": "agent",
       "agent": {
         "id": "coding", "role": "coder", "executor": "claude",
-        "systemPrompt": "实现一个子任务并自测",
-        "inputSpec": { "consumes": [{ "id": "sprint.md", "type": "markdown", "required": true }] },
-        "outputSpec": { "produces": [{ "id": "code", "path": "src/", "type": "code", "required": true }] }
+        "systemPrompt": "你是工程师。按给定子任务实现代码，文件写到当前工作目录。完成后写 output.json，内容必须是一个 JSON 对象：{\"summary\":\"<做了什么>\",\"ok\":true}。output.json 里只放这一个 JSON 对象。"
       }
     },
     { "id": "join", "type": "join" },
-    { "id": "qa", "type": "agent", "agent": { "id": "qa", "role": "qa", "executor": "claude", "systemPrompt": "运行测试并报告 passed/failed" } },
-    { "id": "bug-fix", "type": "agent", "agent": { "id": "bug-fix", "role": "coder", "executor": "claude", "systemPrompt": "修复 QA 指出的缺陷" } },
+    { "id": "qa", "type": "agent", "agent": { "id": "qa", "role": "qa", "executor": "claude", "systemPrompt": "你是 QA。检查当前工作目录的代码质量，若有缺陷在 output.json 写 {\"result\":\"failed\",\"summary\":\"<缺陷描述>\"}。最终是否通过由验证器决定，你只需指出问题。", "outputSpec": { "outputValidator": "cmd:python selfcheck.py" } } },
+    { "id": "bug-fix", "type": "agent", "agent": { "id": "bug-fix", "role": "coder", "executor": "claude", "systemPrompt": "你是工程师。修复 QA 指出的代码缺陷，改到当前工作目录。完成后写 output.json，内容必须是一个 JSON 对象：{\"summary\":\"<修复了什么>\",\"ok\":true}。output.json 里只放这一个 JSON 对象。" } },
     {
       "id": "qa-loop",
       "type": "loop",

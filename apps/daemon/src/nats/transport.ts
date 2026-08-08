@@ -22,7 +22,8 @@ export type RunnerCommand =
   | { type: "spawn"; spawn: SpawnCommand }
   | { type: "kill"; spawnId: string }
   | { type: "switch-provider"; spawnId: string; provider: string; apiKey?: string }
-  | { type: "read-file"; spawnId: string; path: string };
+  | { type: "read-file"; spawnId: string; path: string }
+  | { type: "run-cmd"; spawnId: string; cmd: string; timeoutMs: number };
 
 export type RunnerEvent =
   | { type: "heartbeat"; ts: number }

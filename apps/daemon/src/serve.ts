@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { AgentManager } from "./agents/manager";
 import { NatsDaemonTransport, type RunnerCommand, type RunnerEvent } from "./nats/transport";
+import { startWeb } from "./web";
 
 /**
  * Daemon entry: connect to NATS, register with the control-plane, and service
@@ -35,6 +37,13 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
       spawnCwd.set(cmd.spawn.spawnId, cmd.spawn.cwd);
       transport.publish({ type: "spawn-started", spawnId: cmd.spawn.spawnId });
       reply(true, { agentId: agent.spec.id });
+      // Forward message/tool output as spawn-event so the control-plane can
+      // reset its idle timeout on live activity (activity-based spawn timeout).
+      agent.subscribe((e) => {
+        if (e.type === "message" || e.type === "tool") {
+          transport.publish({ type: "spawn-event", spawnId: cmd.spawn.spawnId, event: e });
+        }
+      });
       void runAndReport(agent.spec.id, cmd.spawn.spawnId, cmd.spawn.prompt);
       return;
     }
@@ -52,6 +61,23 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
       try {
         const content = await readFile(abs, "utf8");
         reply(true, { content });
+      } catch (e) {
+        reply(false, { error: (e as Error).message });
+      }
+      return;
+    }
+    case "run-cmd": {
+      // PRD F.5 'cmd:' validator: run a command template in the spawn's
+      // workspace; non-zero exit = node failed. Output is returned to the
+      // control-plane for diagnostics.
+      const cwd = spawnCwd.get(cmd.spawnId);
+      if (!cwd) {
+        reply(false, { error: `no workspace for spawn ${cmd.spawnId}` });
+        return;
+      }
+      try {
+        const { stdout, stderr, exitCode } = await runCmd(cmd.cmd, cwd, cmd.timeoutMs || 60000);
+        reply(true, { exitCode, stdout, stderr });
       } catch (e) {
         reply(false, { error: (e as Error).message });
       }
@@ -100,6 +126,9 @@ async function main(): Promise<void> {
   await transport.register({ runtime: "bun", pid: String(process.pid) });
   console.log(`[daemon] ${RUNNER_ID} connected to ${NATS_URL}, awaiting commands`);
 
+  // Local web UI for managing agents + 1v1 chat (dev/test). Independent of NATS.
+  startWeb(manager);
+
   const heartbeat: RunnerEvent = { type: "heartbeat", ts: Date.now() };
   const hb = setInterval(() => transport.publish(heartbeat), 15000);
 
@@ -110,6 +139,18 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+/** Run a validator command template in a workspace, killing it on timeout. */
+function runCmd(cmd: string, cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolvePromise, reject) => {
+    const proc = execFile(cmd, { cwd, shell: true, windowsHide: true }, (err, stdout, stderr) => {
+      const code = err && typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 0;
+      resolvePromise({ stdout, stderr, exitCode: code });
+    });
+    const killer = setTimeout(() => proc.kill(), timeoutMs);
+    proc.on("close", () => clearTimeout(killer));
+  });
 }
 
 if (import.meta.main) void main();

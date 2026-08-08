@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 )
@@ -22,6 +24,8 @@ type RunnerExecutor struct {
 	runnerID  string
 	workspace string // cwd every agent spawns in (workspace root, PRD artifact paths resolve here)
 	runID     string
+	idle      time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
+	max       time.Duration // per-spawn absolute cap; 0 = none
 	seq       int
 	mu        sync.Mutex
 }
@@ -31,14 +35,31 @@ func NewRunnerExecutor(g *gateway.Gateway, runnerID, workspace, runID string) *R
 	return &RunnerExecutor{g: g, runnerID: runnerID, workspace: workspace, runID: runID}
 }
 
+// WithSpawnTimeout sets the per-spawn idle timeout (reset on live activity) and
+// an absolute max cap. A real agent that stops producing output but never
+// terminates (SDK session stuck after writing) then fails the node instead of
+// hanging the whole run forever.
+func (r *RunnerExecutor) WithSpawnTimeout(idle, max time.Duration) *RunnerExecutor {
+	r.idle, r.max = idle, max
+	return r
+}
+
 func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
 	r.mu.Lock()
 	r.seq++
 	spawnID := fmt.Sprintf("%s-%s-%d", r.runID, node.ID, r.seq)
 	r.mu.Unlock()
 
+	opts := []gateway.SpawnWaitOption{}
+	if r.idle > 0 {
+		opts = append(opts, gateway.WithIdleTimeout(r.idle))
+	}
+	if r.max > 0 {
+		opts = append(opts, gateway.WithMaxTimeout(r.max))
+	}
+
 	prompt := r.buildPrompt(node, input)
-	res, err := r.g.SpawnAndWait(ctx, r.runnerID, gateway.Spawn{
+	res, err := r.g.SpawnAndWaitOpts(ctx, r.runnerID, gateway.Spawn{
 		RunID:        r.runID,
 		NodeID:       node.ID,
 		Attempt:      1,
@@ -47,8 +68,11 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		Prompt:       prompt,
 		Cwd:          r.workspace,
 		SystemPrompt: node.Agent.SystemPrompt,
-	})
+	}, opts...)
 	if err != nil {
+		// On timeout, tell the runner to stop the stray session so it doesn't
+		// keep burning tokens/CPU after we've given up on it.
+		_ = r.g.Kill(context.Background(), r.runnerID, spawnID)
 		return nil, fmt.Errorf("node %s: spawn: %w", node.ID, err)
 	}
 	if !res.OK {
@@ -65,6 +89,28 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	if !json.Valid(out) {
 		return nil, fmt.Errorf("node %s: output.json is not valid JSON", node.ID)
 	}
+
+	// PRD F.5 outputValidator ('cmd:<template>'): the agent's self-claim is not
+	// trusted — run the real validator in the workspace; non-zero exit fails the
+	// node. Pass overrides the output with {"result":"passed"} so downstream
+	// condition/loop nodes see the validator's verdict, not the agent's words.
+	if v := validatorCmd(node); v != "" {
+		res, err := r.g.RunCmd(ctx, r.runnerID, spawnID, v, 120000)
+		if err != nil {
+			return nil, fmt.Errorf("node %s: validator: %w", node.ID, err)
+		}
+		if res.ExitCode != 0 {
+			detail := strings.TrimSpace(res.Stderr)
+			if detail == "" {
+				detail = strings.TrimSpace(res.Stdout)
+			}
+			if detail == "" {
+				detail = fmt.Sprintf("exit %d", res.ExitCode)
+			}
+			return nil, fmt.Errorf("node %s: validator failed: %s", node.ID, detail)
+		}
+		out, _ = json.Marshal(map[string]any{"result": "passed"})
+	}
 	return out, nil
 }
 
@@ -75,6 +121,19 @@ func (r *RunnerExecutor) Approve(ctx context.Context, node *Node) (bool, error) 
 }
 
 var _ Executor = (*RunnerExecutor)(nil)
+
+// validatorCmd extracts the 'cmd:' output-validator template from an agent
+// node, or "" when none is configured.
+func validatorCmd(node *Node) string {
+	if node.Agent == nil || node.Agent.OutputSpec == nil || node.Agent.OutputSpec.OutputValidator == nil {
+		return ""
+	}
+	v := strings.TrimSpace(*node.Agent.OutputSpec.OutputValidator)
+	if !strings.HasPrefix(v, "cmd:") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(v, "cmd:"))
+}
 
 // buildPrompt tells the agent what to produce and that its deliverable must
 // land in output.json (the read-back contract for the engine's node output).
