@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { AgentManager } from "./agents/manager";
 import { WsDaemonTransport } from "./machine/client";
 import type { RunnerCommand, RunnerEvent } from "./nats/transport";
@@ -65,8 +65,12 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
         reply(false, { error: `no workspace for spawn ${cmd.spawnId}` });
         return;
       }
-      const abs = resolve(cwd, cmd.path);
-      if (abs !== cwd && !abs.startsWith(cwd + sep)) {
+      // Windows: cwd arrives with forward slashes but resolve() yields backslashes,
+      // so a raw comparison would false-positive "escapes". Normalize both sides.
+      const norm = (p: string) => p.replace(/\\/g, "/");
+      const base = norm(resolve(cwd));
+      const abs = norm(resolve(cwd, cmd.path));
+      if (abs !== base && !abs.startsWith(base + "/")) {
         reply(false, { error: "path escapes workspace" });
         return;
       }
@@ -138,8 +142,9 @@ async function main(): Promise<void> {
   await transport.register({ runtime: "bun", pid: String(process.pid), name: NAME });
   console.log(`[daemon] ${NAME} connected to ${SERVER}, awaiting commands`);
 
-  // Local web UI for managing agents + 1v1 chat (dev/test). Independent of NATS.
-  startWeb(manager);
+  // Local web UI is a dev/test surface for 1v1 agent chat — only when explicitly
+  // requested (--web), so a machine runner doesn't squat a port / spawn services.
+  if (arg("--web")) startWeb(manager);
 
   const heartbeat: RunnerEvent = { type: "heartbeat", ts: Date.now() };
   const hb = setInterval(() => transport.publish(heartbeat), 15000);

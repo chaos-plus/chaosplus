@@ -256,6 +256,11 @@ func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) err
 	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
 		return err
 	}
+	// A confirmed machine is no longer pending — otherwise its disconnect would
+	// be misread as an unconfirmed-abandon and invalidate the long-term token.
+	h.mu.Lock()
+	delete(h.pending, machineID)
+	h.mu.Unlock()
 	if h.machines != nil {
 		return h.machines.UpsertMachine(ctx, store.Machine{
 			ID: machineID, InstanceID: "desktop", Address: address,
