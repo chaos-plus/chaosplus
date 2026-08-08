@@ -20,6 +20,7 @@ import (
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
 func main() {
@@ -63,9 +64,10 @@ func main() {
 		}
 	}()
 
-	// Machine hub (WS daemon link) + HTTP surface (run orchestration / realtime / approvals).
-	hub := machine.NewHub(machine.NewTokenStore(), st)
-	rm := server.NewRunManager(nc, hub, st, envOr("CONTROL_RUNNER_ID", ""))
+	// Machine hub = NATS↔WS bridge for daemons; engine reaches daemons via the
+	// NATS gateway (any instance), never through the bridge directly.
+	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
+	rm := server.NewRunManager(nc, &workflow.NatsRunnerLink{G: g}, st, envOr("CONTROL_RUNNER_ID", ""))
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}

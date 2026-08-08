@@ -27,7 +27,7 @@ func TestMachineOnboardingFlow(t *testing.T) {
 
 	nc := startTestNATS(t)
 	m := NewRunManager(nc, nil, nil, "r") // link unused: this test never launches a run
-	hub := machine.NewHub(machine.NewTokenStore(), st)
+	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
 	ts := httptest.NewServer(NewHandler(m, hub))
 	defer ts.Close()
 

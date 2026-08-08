@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nats-io/nats.go"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
@@ -33,12 +33,6 @@ type wsCommand struct {
 	TimeoutMs int            `json:"timeoutMs,omitempty"`
 }
 
-// wsReply is the daemon's request/reply answer.
-type wsReply struct {
-	OK   bool            `json:"ok"`
-	Data json.RawMessage `json:"data,omitempty"`
-}
-
 // wsEvent is a daemon→control unsolicited event (heartbeat / spawn lifecycle).
 type wsEvent struct {
 	Type     string `json:"type"`
@@ -48,14 +42,19 @@ type wsEvent struct {
 	Message  string `json:"message,omitempty"`
 }
 
+// pendingReq pairs a forwarded command's reqId with the NATS request to answer.
+type pendingReq struct {
+	respond func(data []byte) error
+}
+
 // daemonConn is one authenticated daemon WebSocket. wmu serializes all writes:
 // gorilla/websocket allows only one concurrent writer per connection.
 type daemonConn struct {
-	runnerID string
-	ws       *websocket.Conn
-	wmu      sync.Mutex
-	mu       sync.Mutex
-	reqs     map[int64]chan wsReply
+	machineID string
+	ws        *websocket.Conn
+	wmu       sync.Mutex
+	mu        sync.Mutex
+	reqs      map[int64]*pendingReq
 }
 
 func (c *daemonConn) writeJSON(v any) error {
@@ -64,33 +63,43 @@ func (c *daemonConn) writeJSON(v any) error {
 	return c.ws.WriteJSON(v)
 }
 
-// Hub accepts daemon WS connections (token-authenticated), maps runnerID↔conn,
-// and implements the engine's RunnerLink by dispatching commands over the socket
-// and correlating replies + spawn lifecycle events (PRD §5.3.1 / §17.1).
+// Hub is a NATS↔WebSocket bridge for machine runners (PRD §5.3.1). A daemon
+// holds one authenticated WS to /api/machines/ws; the hub bridges it onto the
+// NATS runner subjects, so ANY control-plane instance (a NATS client) can reach
+// the daemon — the daemon itself never touches NATS.
+//
+//	instance(gateway) --NATS request chaos.runner.{id}.cmd-->  hub --WS cmd--> daemon
+//	daemon --WS reply/event-->  hub --NATS reply/chaos.runner.{id}.evt-->  gateway
 type Hub struct {
+	nc       *nats.Conn
 	tokens   *TokenStore
 	machines *store.Store // nil-safe
 	seq      atomic.Int64
 
 	mu      sync.Mutex
 	conns   map[string]*daemonConn
-	pending map[string]bool // machineID connected with an unconfirmed one-time token
+	subs    map[string]*nats.Subscription // machineID -> its chaos.runner.{id}.cmd sub
+	pending map[string]bool               // machineID connected with an unconfirmed one-time token
 	names   map[string]string
-	events  chan gateway.RunnerEvent
 }
 
-func NewHub(tokens *TokenStore, machines *store.Store) *Hub {
+func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
 	return &Hub{
+		nc:       nc,
 		tokens:   tokens,
 		machines: machines,
 		conns:    make(map[string]*daemonConn),
+		subs:     make(map[string]*nats.Subscription),
 		pending:  make(map[string]bool),
 		names:    make(map[string]string),
-		events:   make(chan gateway.RunnerEvent, 256),
 	}
 }
 
-// HandleWS authenticates the ?token= and serves the daemon connection.
+const cmdSubjectFmt = "chaos.runner.%s.cmd"
+const evtSubjectFmt = "chaos.runner.%s.evt"
+const registerSubject = "chaos.runner.register"
+
+// HandleWS authenticates the ?token= and bridges the daemon onto NATS.
 func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -106,19 +115,44 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := &daemonConn{runnerID: at.MachineID, ws: conn, reqs: make(map[int64]chan wsReply)}
+	c := &daemonConn{machineID: at.MachineID, ws: conn, reqs: make(map[int64]*pendingReq)}
+
+	// Bridge: subscribe this machine's command subject, forward each request over WS.
+	sub, err := h.nc.Subscribe(fmt.Sprintf(cmdSubjectFmt, at.MachineID), func(m *nats.Msg) {
+		var cmd wsCommand
+		if err := json.Unmarshal(m.Data, &cmd); err != nil {
+			_ = m.Respond([]byte(`{"ok":false,"data":{"error":"bad command"}}`))
+			return
+		}
+		reqID := h.seq.Add(1)
+		c.mu.Lock()
+		c.reqs[reqID] = &pendingReq{respond: m.Respond}
+		c.mu.Unlock()
+		if err := c.writeJSON(map[string]any{"type": "cmd", "reqId": reqID, "cmd": cmd}); err != nil {
+			c.mu.Lock()
+			delete(c.reqs, reqID)
+			c.mu.Unlock()
+			_ = m.Respond([]byte(`{"ok":false,"data":{"error":"daemon disconnected"}}`))
+		}
+	})
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
 	h.mu.Lock()
 	h.conns[at.MachineID] = c
+	h.subs[at.MachineID] = sub
 	if !at.LongTerm {
 		h.pending[at.MachineID] = true
 	}
 	h.mu.Unlock()
 	_ = c.writeJSON(map[string]any{"type": "ready"})
-	h.serve(c)
+	h.serve(c, sub)
 }
 
-func (h *Hub) serve(c *daemonConn) {
-	defer h.unregister(c)
+func (h *Hub) serve(c *daemonConn, sub *nats.Subscription) {
+	defer h.unregister(c, sub)
 	for {
 		var m struct {
 			Type  string            `json:"type"`
@@ -133,56 +167,60 @@ func (h *Hub) serve(c *daemonConn) {
 		}
 		switch m.Type {
 		case "reply":
-			if m.ReqID != 0 {
-				c.mu.Lock()
-				ch := c.reqs[m.ReqID]
-				c.mu.Unlock()
-				if ch != nil {
-					ch <- wsReply{OK: m.OK != nil && *m.OK, Data: m.Data}
-				}
+			if m.ReqID == 0 {
+				continue
+			}
+			c.mu.Lock()
+			pr := c.reqs[m.ReqID]
+			delete(c.reqs, m.ReqID)
+			c.mu.Unlock()
+			if pr != nil {
+				ok := m.OK != nil && *m.OK
+				body, _ := json.Marshal(map[string]any{"ok": ok, "data": json.RawMessage(m.Data)})
+				pr.respond(body)
 			}
 		case "event":
 			if m.Event != nil {
-				h.handleEvent(c.runnerID, m.Event)
+				h.bridgeEvent(c.machineID, m.Event)
 			}
 		case "register":
 			h.mu.Lock()
-			h.names[c.runnerID] = m.Meta["name"]
+			h.names[c.machineID] = m.Meta["name"]
 			h.mu.Unlock()
+			// Let the gateway's register subscription see this runner too.
+			reg, _ := json.Marshal(map[string]any{"runnerId": c.machineID, "meta": m.Meta})
+			_ = h.nc.Publish(registerSubject, reg)
 		}
 	}
 }
 
-func (h *Hub) handleEvent(runnerID string, ev *wsEvent) {
+func (h *Hub) bridgeEvent(machineID string, ev *wsEvent) {
 	raw, _ := json.Marshal(ev)
-	ge := gateway.RunnerEvent{Type: ev.Type, RunnerID: runnerID, Payload: raw}
 	if ev.Type == "heartbeat" && h.machines != nil {
-		_ = h.machines.TouchMachineHeartbeat(context.Background(), runnerID)
+		_ = h.machines.TouchMachineHeartbeat(context.Background(), machineID)
 	}
-	select {
-	case h.events <- ge:
-	default: // drop if the engine isn't consuming fast enough
-	}
+	_ = h.nc.Publish(fmt.Sprintf(evtSubjectFmt, machineID), raw)
 }
 
-func (h *Hub) unregister(c *daemonConn) {
+func (h *Hub) unregister(c *daemonConn, sub *nats.Subscription) {
+	_ = sub.Unsubscribe()
 	h.mu.Lock()
-	if h.conns[c.runnerID] == c {
-		delete(h.conns, c.runnerID)
+	if h.conns[c.machineID] == c {
+		delete(h.conns, c.machineID)
 	}
-	wasPending := h.pending[c.runnerID]
+	delete(h.subs, c.machineID)
+	wasPending := h.pending[c.machineID]
 	if wasPending {
-		delete(h.pending, c.runnerID)
+		delete(h.pending, c.machineID)
 		// §5.3.1: an unconfirmed machine that disconnects loses its token. Call
-		// under h.mu so no race window where a client sees the conn gone but the
-		// token still valid (tokens.mu is a separate lock; order is always h.mu→tokens.mu).
-		h.tokens.Invalidate(c.runnerID)
+		// under h.mu so no race window (tokens.mu is separate; order is h.mu→tokens.mu).
+		h.tokens.Invalidate(c.machineID)
 	}
 	h.mu.Unlock()
 	_ = c.ws.Close()
 }
 
-// ---- RunnerLink implementation ----
+// ---- machine onboarding surface (unchanged API) ----
 
 func (h *Hub) RegisteredRunners() []string {
 	h.mu.Lock()
@@ -194,7 +232,6 @@ func (h *Hub) RegisteredRunners() []string {
 	return out
 }
 
-// IsConnected reports whether a machine currently holds a live connection.
 func (h *Hub) IsConnected(machineID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -202,7 +239,12 @@ func (h *Hub) IsConnected(machineID string) bool {
 	return ok
 }
 
-// ListMachines returns confirmed machines from the store (empty when none).
+func (h *Hub) MachineName(runnerID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.names[runnerID]
+}
+
 func (h *Hub) ListMachines(ctx context.Context) ([]store.Machine, error) {
 	if h.machines == nil {
 		return nil, nil
@@ -210,8 +252,6 @@ func (h *Hub) ListMachines(ctx context.Context) ([]store.Machine, error) {
 	return h.machines.ListMachines(ctx)
 }
 
-// Confirm promotes a one-time token to long-term and persists the machine
-// (PRD §5.3.1 step 6). Idempotent on repeat confirm of the same token.
 func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) error {
 	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
 		return err
@@ -225,8 +265,6 @@ func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) err
 	return nil
 }
 
-// Disconnect force-closes a machine's connection (cancel / force-offline).
-// unregister handles cleanup + pending-token invalidation.
 func (h *Hub) Disconnect(machineID string) {
 	h.mu.Lock()
 	c := h.conns[machineID]
@@ -236,29 +274,17 @@ func (h *Hub) Disconnect(machineID string) {
 	}
 }
 
-// IssueToken mints a fresh machine id + one-time onboarding token.
 func (h *Hub) IssueToken() (machineID, token string) {
 	machineID = newMachineID()
 	at := h.tokens.Issue(machineID)
 	return machineID, at.Token
 }
 
-// RefreshToken invalidates the machine's old tokens and issues a new one
-// (§5.3.1 "刷新命令").
 func (h *Hub) RefreshToken(machineID string) (string, error) {
 	h.tokens.Invalidate(machineID)
 	return h.tokens.Issue(machineID).Token, nil
 }
 
-func newMachineID() string {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return "m-" + hex.EncodeToString(b)
-}
-
-// Cancel revokes a machine's tokens and disconnects it (cancel / force-offline).
 func (h *Hub) Cancel(machineID string) {
 	h.tokens.Invalidate(machineID)
 	h.Disconnect(machineID)
@@ -267,154 +293,10 @@ func (h *Hub) Cancel(machineID string) {
 	}
 }
 
-// MachineName returns the name a connected daemon registered (if any).
-func (h *Hub) MachineName(runnerID string) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.names[runnerID]
-}
-
-// Events exposes the daemon event stream (heartbeat + spawn lifecycle).
-func (h *Hub) Events() <-chan gateway.RunnerEvent { return h.events }
-
-// doRequest sends a command and waits for the correlated reply.
-func (h *Hub) doRequest(ctx context.Context, c *daemonConn, cmd wsCommand) (wsReply, error) {
-	reqID := h.seq.Add(1)
-	ch := make(chan wsReply, 1)
-	c.mu.Lock()
-	c.reqs[reqID] = ch
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		delete(c.reqs, reqID)
-		c.mu.Unlock()
-	}()
-
-	if err := c.writeJSON(map[string]any{"type": "cmd", "reqId": reqID, "cmd": cmd}); err != nil {
-		return wsReply{}, fmt.Errorf("send to %s: %w", c.runnerID, err)
+func newMachineID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
 	}
-	select {
-	case r := <-ch:
-		if !r.OK {
-			var d struct {
-				Error string `json:"error"`
-			}
-			_ = json.Unmarshal(r.Data, &d)
-			return r, fmt.Errorf("daemon %s: %s", c.runnerID, d.Error)
-		}
-		return r, nil
-	case <-ctx.Done():
-		return wsReply{}, ctx.Err()
-	}
-}
-
-// SpawnAndWait spawns and blocks until spawn-done/error or timeout (idle resets
-// on live activity, max is absolute) — mirrors gateway.SpawnAndWaitOpts over WS.
-func (h *Hub) SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max time.Duration) (gateway.SpawnResult, error) {
-	c := h.connFor(runnerID)
-	if c == nil {
-		return gateway.SpawnResult{}, fmt.Errorf("runner %s not connected", runnerID)
-	}
-	if _, err := h.doRequest(ctx, c, wsCommand{Type: "spawn", Spawn: &sp}); err != nil {
-		return gateway.SpawnResult{}, err
-	}
-
-	maxCtx := ctx
-	cancelMax := func() {}
-	if max > 0 {
-		maxCtx, cancelMax = context.WithTimeout(ctx, max)
-	}
-	defer cancelMax()
-
-	var idleTimer *time.Timer
-	idleC := make(chan time.Time, 1)
-	if idle > 0 {
-		idleTimer = time.AfterFunc(idle, func() { idleC <- time.Time{} })
-	}
-	resetIdle := func() {
-		if idleTimer != nil {
-			idleTimer.Reset(idle)
-		}
-	}
-
-	for {
-		select {
-		case ev := <-h.events:
-			if ev.RunnerID != runnerID {
-				continue
-			}
-			var p wsEvent
-			if err := json.Unmarshal(ev.Payload, &p); err != nil {
-				continue
-			}
-			if p.SpawnID != sp.SpawnID {
-				continue
-			}
-			resetIdle()
-			switch ev.Type {
-			case "spawn-done":
-				ok := p.OK == nil || *p.OK
-				return gateway.SpawnResult{OK: ok, ExitCode: p.ExitCode}, nil
-			case "spawn-error":
-				return gateway.SpawnResult{OK: false, Error: p.Message}, nil
-			}
-		case <-idleC:
-			return gateway.SpawnResult{}, fmt.Errorf("spawn %s idle timeout after %s", sp.SpawnID, idle)
-		case <-maxCtx.Done():
-			return gateway.SpawnResult{}, maxCtx.Err()
-		}
-	}
-}
-
-func (h *Hub) Kill(ctx context.Context, runnerID, spawnID string) error {
-	c := h.connFor(runnerID)
-	if c == nil {
-		return fmt.Errorf("runner %s not connected", runnerID)
-	}
-	_, err := h.doRequest(ctx, c, wsCommand{Type: "kill", SpawnID: spawnID})
-	return err
-}
-
-func (h *Hub) ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error) {
-	c := h.connFor(runnerID)
-	if c == nil {
-		return nil, fmt.Errorf("runner %s not connected", runnerID)
-	}
-	r, err := h.doRequest(ctx, c, wsCommand{Type: "read-file", SpawnID: spawnID, Path: path})
-	if err != nil {
-		return nil, err
-	}
-	var d struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(r.Data, &d); err != nil {
-		return nil, err
-	}
-	return []byte(d.Content), nil
-}
-
-func (h *Hub) RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (gateway.CmdResult, error) {
-	c := h.connFor(runnerID)
-	if c == nil {
-		return gateway.CmdResult{}, fmt.Errorf("runner %s not connected", runnerID)
-	}
-	r, err := h.doRequest(ctx, c, wsCommand{Type: "run-cmd", SpawnID: spawnID, Cmd: cmdTemplate, TimeoutMs: timeoutMs})
-	if err != nil {
-		return gateway.CmdResult{}, err
-	}
-	var d struct {
-		ExitCode int    `json:"exitCode"`
-		Stdout   string `json:"stdout"`
-		Stderr   string `json:"stderr"`
-	}
-	if err := json.Unmarshal(r.Data, &d); err != nil {
-		return gateway.CmdResult{}, err
-	}
-	return gateway.CmdResult{ExitCode: d.ExitCode, Stdout: d.Stdout, Stderr: d.Stderr}, nil
-}
-
-func (h *Hub) connFor(runnerID string) *daemonConn {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.conns[runnerID]
+	return "m-" + hex.EncodeToString(b)
 }

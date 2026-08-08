@@ -25,7 +25,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	ts := httptest.NewServer(NewHandler(m, machine.NewHub(machine.NewTokenStore(), nil)))
+	ts := httptest.NewServer(NewHandler(m, machine.NewHub(nc, machine.NewTokenStore(), nil)))
 	defer ts.Close()
 
 	// 发起 run。
@@ -97,7 +97,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 func TestHTTPErrors(t *testing.T) {
 	nc := startTestNATS(t)
 	m := NewRunManager(nc, nil, nil, "r")
-	ts := httptest.NewServer(NewHandler(m, machine.NewHub(machine.NewTokenStore(), nil)))
+	ts := httptest.NewServer(NewHandler(m, machine.NewHub(nc, machine.NewTokenStore(), nil)))
 	defer ts.Close()
 
 	// 非法工作流(空 nodes)→ 4xx 而非 500。
