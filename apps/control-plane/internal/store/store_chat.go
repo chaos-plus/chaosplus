@@ -12,15 +12,15 @@ import (
 // and be invoked by chat messages.
 type AgentSpec struct {
 	bun.BaseModel `bun:"table:agent_specs"`
-	ID            string `bun:"id,pk"`
-	InstanceID    string `bun:"instance_id,notnull,default:''"`
-	Name          string `bun:"name,notnull"`
-	Kind          string `bun:"kind,notnull,default:'digital_human'"`
-	Runtime       string `bun:"runtime,notnull,default:'claude'"`
-	Model         string `bun:"model,notnull,default:''"`
-	Provider      string `bun:"provider,notnull,default:''"`
-	SystemPrompt  string `bun:"system_prompt,notnull,default:''"`
-	CreatedAt     int64  `bun:"created_at,notnull,default:0"`
+	ID            string `bun:"id,pk" json:"id"`
+	InstanceID    string `bun:"instance_id,notnull,default:''" json:"instanceId"`
+	Name          string `bun:"name,notnull" json:"name"`
+	Kind          string `bun:"kind,notnull,default:'digital_human'" json:"kind"`
+	Runtime       string `bun:"runtime,notnull,default:'claude'" json:"runtime"`
+	Model         string `bun:"model,notnull,default:''" json:"model"`
+	Provider      string `bun:"provider,notnull,default:''" json:"provider"`
+	SystemPrompt  string `bun:"system_prompt,notnull,default:''" json:"systemPrompt"`
+	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 }
 
 func (s *Store) CreateAgent(ctx context.Context, a *AgentSpec) error {
@@ -69,10 +69,10 @@ func (s *Store) DeleteAgent(ctx context.Context, id string) error {
 // (agents/humans) and an event-sourced message log.
 type Channel struct {
 	bun.BaseModel `bun:"table:channels"`
-	ID           string `bun:"id,pk"`
-	InstanceID   string `bun:"instance_id,notnull,default:''"`
-	Name         string `bun:"name,notnull"`
-	CreatedAt    int64  `bun:"created_at,notnull,default:0"`
+	ID           string `bun:"id,pk" json:"id"`
+	InstanceID   string `bun:"instance_id,notnull,default:''" json:"instanceId"`
+	Name         string `bun:"name,notnull" json:"name"`
+	CreatedAt    int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 }
 
 func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {
@@ -118,22 +118,22 @@ func (s *Store) ListChannelMembers(ctx context.Context, channelID string) ([]Cha
 // ChannelMember links an agent/human to a channel.
 type ChannelMember struct {
 	bun.BaseModel `bun:"table:channel_members"`
-	ChannelID     string `bun:"channel_id,pk"`
-	MemberID      string `bun:"member_id,pk"`
-	Kind          string `bun:"kind,pk"`
+	ChannelID     string `bun:"channel_id,pk" json:"channelId"`
+	MemberID      string `bun:"member_id,pk" json:"memberId"`
+	Kind          string `bun:"kind,pk" json:"kind"`
 }
 
 // ChannelMessage is one entry in a channel's event-sourced message log.
 type ChannelMessage struct {
 	bun.BaseModel  `bun:"table:channel_messages"`
-	Seq            int64  `bun:"seq,pk,autoincrement"`
-	ID             string `bun:"id,notnull,unique"`
-	ChannelID      string `bun:"channel_id,notnull"`
-	TS             int64  `bun:"ts,notnull"`
-	AuthorMemberID string `bun:"author_member_id,notnull,default:''"`
-	AuthorKind     string `bun:"author_kind,notnull,default:'human'"`
-	IdempotencyKey string `bun:"idempotency_key,notnull,unique"`
-	PayloadJSON    string `bun:"payload_json,notnull,default:'{}'"`
+	Seq            int64  `bun:"seq,pk,autoincrement" json:"seq"`
+	ID             string `bun:"id,notnull,unique" json:"id"`
+	ChannelID      string `bun:"channel_id,notnull" json:"channelId"`
+	TS             int64  `bun:"ts,notnull" json:"ts"`
+	AuthorMemberID string `bun:"author_member_id,notnull,default:''" json:"authorMemberId"`
+	AuthorKind     string `bun:"author_kind,notnull,default:'human'" json:"authorKind"`
+	IdempotencyKey string `bun:"idempotency_key,notnull,unique" json:"-"`
+	PayloadJSON    string `bun:"payload_json,notnull,default:'{}'" json:"payloadJson"`
 }
 
 func (s *Store) AppendChannelMessage(ctx context.Context, m *ChannelMessage) error {
