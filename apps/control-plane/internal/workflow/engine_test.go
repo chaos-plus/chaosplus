@@ -249,6 +249,38 @@ func (s *stubExecutor) Approve(ctx context.Context, node *Node) (bool, error) {
 
 var _ Executor = (*stubExecutor)(nil)
 
+func TestEngineOnEventHook(t *testing.T) {
+	def := mustDef(t, `{
+	  "id":"t1","version":"1","name":"linear",
+	  "nodes":[
+	    {"id":"start","type":"trigger","trigger":{"source":"manual"}},
+	    {"id":"a","type":"agent","agent":{"id":"a","role":"pm","executor":"mock"}}
+	  ],
+	  "edges":[{"from":"start","to":"a"}]
+	}`)
+
+	var got []Event
+	eng, err := NewEngine(def, &MockExecutor{})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	eng.OnEvent = func(ev Event) { got = append(got, ev) }
+	if _, err := eng.Run(context.Background(), nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("OnEvent not called")
+	}
+	if got[0].Status != StatusRunning {
+		t.Errorf("first event = %s, want running", got[0].Status)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].Seq <= got[i-1].Seq {
+			t.Errorf("events not ordered at %d", i)
+		}
+	}
+}
+
 func TestValidateRejectsCycle(t *testing.T) {
 	def := mustDef(t, `{
 	  "id":"t7","version":"1","name":"cycle",

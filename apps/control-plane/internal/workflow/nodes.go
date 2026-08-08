@@ -58,6 +58,7 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 }
 
 func (e *Engine) execApproval(ctx context.Context, st *nodeState) error {
+	e.mark(st.node.ID, StatusWaitingApproval, nil, "")
 	ok, err := e.exec.Approve(ctx, st.node)
 	if err != nil {
 		return err

@@ -10,11 +10,12 @@ import (
 type Status string
 
 const (
-	StatusPending   Status = "pending"
-	StatusRunning   Status = "running"
-	StatusCompleted Status = "completed"
-	StatusFailed    Status = "failed"
-	StatusSkipped   Status = "skipped"
+	StatusPending         Status = "pending"
+	StatusRunning         Status = "running"
+	StatusCompleted       Status = "completed"
+	StatusFailed          Status = "failed"
+	StatusSkipped         Status = "skipped"
+	StatusWaitingApproval Status = "waiting_approval" // human_approval gate is blocked on a human
 )
 
 // Event is one node lifecycle event in run order (PRD event log §15.1).
@@ -51,6 +52,7 @@ type Engine struct {
 	scope     map[string]any      // JSON Logic variable scope (context ∪ outputs)
 	seq       int
 	events    []Event
+	OnEvent   func(Event) // live lifecycle hook (nil-safe); fires on every mark()
 }
 
 // NewEngine validates the def and indexes the graph. Loop bodies are computed
@@ -254,6 +256,9 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 		ev.Output = output
 	}
 	e.events = append(e.events, ev)
+	if e.OnEvent != nil {
+		e.OnEvent(ev)
+	}
 }
 
 func terminal(s Status) bool {
