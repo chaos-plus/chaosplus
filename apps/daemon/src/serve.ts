@@ -2,24 +2,36 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { AgentManager } from "./agents/manager";
-import { NatsDaemonTransport, type RunnerCommand, type RunnerEvent } from "./nats/transport";
+import { WsDaemonTransport } from "./machine/client";
+import type { RunnerCommand, RunnerEvent } from "./nats/transport";
 import { startWeb } from "./web";
 
 /**
- * Daemon entry: connect to NATS, register with the control-plane, and service
- * spawn/kill/switch-provider commands by driving AgentManager sessions. Events
- * stream back to the control-plane on the runner's event subject.
+ * Daemon entry (PRD §5.3.1): connect to the control-plane over one authenticated
+ * WebSocket, register as a machine runner, and service spawn/kill/switch-provider
+ * commands by driving AgentManager sessions. Events + heartbeats stream back over
+ * the same socket. NATS is not involved.
  *
- * Usage: RUNNER_ID=myhost DAEMON_NATS_URL=nats://127.0.0.1:4222 bun run src/serve.ts
+ * Usage: bun run src/serve.ts --server http://127.0.0.1:8081 --token <token> [--name <name>]
  */
 
-const RUNNER_ID = process.env.RUNNER_ID ?? require("node:os").hostname();
-const NATS_URL = process.env.DAEMON_NATS_URL ?? "nats://127.0.0.1:4222";
+function arg(name: string): string | undefined {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+const SERVER = arg("--server") ?? "http://127.0.0.1:8081";
+const TOKEN = arg("--token");
+const NAME = arg("--name") ?? require("node:os").hostname();
+if (!TOKEN) {
+  console.error("usage: bun run src/serve.ts --server <url> --token <token> [--name <name>]");
+  process.exit(1);
+}
 
 const manager = new AgentManager();
 const sessions = new Map<string, string>(); // spawnId -> agent session id
 const spawnCwd = new Map<string, string>(); // spawnId -> workspace cwd (for read-file)
-const transport = new NatsDaemonTransport(RUNNER_ID, NATS_URL);
+const transport = new WsDaemonTransport(SERVER, TOKEN, NAME);
 
 async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown) => void): Promise<void> {
   switch (cmd.type) {
@@ -123,8 +135,8 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
 
 async function main(): Promise<void> {
   await transport.connect(onCommand);
-  await transport.register({ runtime: "bun", pid: String(process.pid) });
-  console.log(`[daemon] ${RUNNER_ID} connected to ${NATS_URL}, awaiting commands`);
+  await transport.register({ runtime: "bun", pid: String(process.pid), name: NAME });
+  console.log(`[daemon] ${NAME} connected to ${SERVER}, awaiting commands`);
 
   // Local web UI for managing agents + 1v1 chat (dev/test). Independent of NATS.
   startWeb(manager);

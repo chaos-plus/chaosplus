@@ -32,6 +32,19 @@ export type RunnerEvent =
   | { type: "spawn-done"; spawnId: string; ok: boolean; exitCode: number }
   | { type: "spawn-error"; spawnId: string; message: string };
 
+/**
+ * Transport contract shared by the NATS and WS daemon links. serve.ts only
+ * depends on this — swapping the link is a one-line change.
+ */
+export interface DaemonTransport {
+  connect(
+    handler: (cmd: RunnerCommand, reply: (ok: boolean, data?: unknown) => void) => Promise<void> | void,
+  ): Promise<void>;
+  register(meta: Record<string, string>): Promise<void>;
+  publish(event: RunnerEvent): void;
+  close(): void;
+}
+
 const cmdSubject = (runnerId: string) => `chaos.runner.${runnerId}.cmd`;
 const evtSubject = (runnerId: string) => `chaos.runner.${runnerId}.evt`;
 const REGISTER_SUBJECT = "chaos.runner.register";
