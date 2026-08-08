@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 )
 
@@ -33,8 +35,10 @@ func main() {
 	g := gateway.New(nc)
 
 	// Event-log persistence: optional (CONTROL_DB_DSN unset → in-memory only).
+	var st *store.Store
 	if dsn := os.Getenv("CONTROL_DB_DSN"); dsn != "" {
-		st, err := store.Open(ctx, dsn)
+		var err error
+		st, err = store.Open(ctx, dsn)
 		if err != nil {
 			log.Fatalf("open store: %v", err)
 		}
@@ -57,6 +61,21 @@ func main() {
 			log.Printf("gateway stopped: %v", err)
 		}
 	}()
+
+	// HTTP + WS surface (run orchestration / realtime / approvals).
+	rm := server.NewRunManager(nc, g, st, envOr("CONTROL_RUNNER_ID", ""))
+	if err := rm.Start(ctx); err != nil {
+		log.Fatalf("run manager: %v", err)
+	}
+	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
+	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm)}
+	go func() {
+		log.Printf("control-plane HTTP listening on %s", httpAddr)
+		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("http server: %v", err)
+		}
+	}()
+	defer hs.Shutdown(context.Background())
 
 	log.Printf("control-plane listening on NATS %s", url)
 	<-ctx.Done()
