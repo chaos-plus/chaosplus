@@ -128,6 +128,10 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
             const unsub = chat.subscribe((e) => {
               if (e.type === "message") {
                 send(JSON.stringify({ type: "message", role: e.message.role, text: e.message.text }));
+              } else if (e.type === "status") {
+                send(JSON.stringify({ type: "status", status: e.status }));
+              } else if (e.type === "tool") {
+                send(JSON.stringify({ type: "tool", name: e.name, input: e.input ?? null }));
               } else if (e.type === "error") {
                 send(JSON.stringify({ type: "error", error: e.error }));
                 finish();
@@ -182,6 +186,10 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
             const unsub = chat.subscribe((e) => {
               if (e.type === "message") {
                 send(`data: ${JSON.stringify({ type: "message", role: e.message.role, text: e.message.text })}\n\n`);
+              } else if (e.type === "status") {
+                send(`data: ${JSON.stringify({ type: "status", status: e.status })}\n\n`);
+              } else if (e.type === "tool") {
+                send(`data: ${JSON.stringify({ type: "tool", name: e.name, input: e.input ?? null })}\n\n`);
               } else if (e.type === "done") {
                 send(`data: ${JSON.stringify({ type: "done" })}\n\n`);
               }
@@ -229,6 +237,8 @@ const HTML = `<!doctype html>
   .msg.user{align-self:flex-end;background:#4f6ef7}
   .msg.assistant{align-self:flex-start;background:#242833}
   .msg.err{align-self:flex-start;background:#3a1d1d;color:#ff8a8a}
+  .msg.tool{align-self:flex-start;background:#1d273a;color:#7fa8d9;font-size:12px;font-family:monospace}
+  #statusbar{font-size:12px;color:#9aa0aa}
   #inputbar{display:flex;gap:8px;padding:16px;border-top:1px solid #2a2d36}
   #inputbar input{flex:1;margin:0}
   #inputbar button{width:auto;padding:8px 20px;margin:0}
@@ -260,7 +270,10 @@ const HTML = `<!doctype html>
   </section>
 </div>
 <div id="right">
-  <div id="chatbar" class="muted" style="padding:10px 24px;border-bottom:1px solid #2a2d36">选择或创建一个 Agent 开始会话</div>
+  <div id="chatbar" style="padding:10px 24px;border-bottom:1px solid #2a2d36;display:flex;justify-content:space-between;align-items:center">
+    <span id="chatname" class="muted">选择或创建一个 Agent 开始会话</span>
+    <span id="statusbar"></span>
+  </div>
   <div id="chat"></div>
   <div id="inputbar" style="display:none">
     <input id="chat-input" placeholder="输入消息…" onkeydown="if(event.key==='Enter')send()" />
@@ -275,9 +288,18 @@ async function refresh(){agents=await api('/api/agents');renderAgents()}
 function renderAgents(){const d=$('agents');d.innerHTML=agents.map(a=>\`<div class="agent \${current===a.id?'active':''}" onclick="openAgent('\${a.id}')">\${a.name||a.id}<button class="del" onclick="event.stopPropagation();delAgent('\${a.id}')">×</button></div>\`).join('')}
 async function createAgent(){await api('/api/agents',{method:'POST',body:JSON.stringify({name:$('f-name').value,systemPrompt:$('f-prompt').value,runtime:$('f-runtime').value,model:$('f-model').value||undefined,provider:$('f-provider').value||undefined,apiKey:$('f-key').value||undefined})});refresh()}
 async function delAgent(id){await api('/api/agents/'+id,{method:'DELETE'});if(current===id){current=null;currentChat=null;$('inputbar').style.display='none';$('chat').innerHTML=''};refresh()}
-async function openAgent(id){current=id;const a=agents.find(x=>x.id===id);const chat=await api('/api/agents/'+id+'/chat',{method:'POST'});currentChat=chat.chatId;$('chatbar').textContent='会话：'+(a.name||a.id);$('chat').innerHTML='';$('inputbar').style.display='flex';connectChat(chat.chatId)}
-function connectChat(chatId){if(es)es.close();es=new EventSource('/api/chats/'+chatId+'/events');es.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.type==='message')appendMsg(d.role,d.text)}}
-async function send(){const t=$('chat-input').value.trim();if(!t)return;$('chat-input').value='';
+async function openAgent(id){current=id;const a=agents.find(x=>x.id===id);const chat=await api('/api/agents/'+id+'/chat',{method:'POST'});currentChat=chat.chatId;$('chatname').textContent='会话：'+(a.name||a.id);$('statusbar').textContent='';$('chat').innerHTML='';$('inputbar').style.display='flex';connectChat(chat.chatId)}
+function connectChat(chatId){if(es)es.close();es=new EventSource('/api/chats/'+chatId+'/events');es.onmessage=(e)=>{const d=JSON.parse(e.data);
+  if(d.type==='message')appendMsg(d.role,d.text);
+  else if(d.type==='status')setStatus(d.status);
+  else if(d.type==='tool')appendTool(d.name,d.input)}}
+function setStatus(s){const map={running:'⏳ 运行中…',completed:'✓ 完成',failed:'✗ 失败',stopped:'■ 已停止'};$('statusbar').textContent=map[s]||s}
+function appendTool(name,input){
+  let label=name;
+  const inp=typeof input==='object'&&input?Object.keys(input).map(k=>String(input[k])).join(' '):(typeof input==='string'?input:'');
+  if(inp)label=name+' '+inp;
+  const el=document.createElement('div');el.className='msg tool';el.textContent='🛠 '+label;$('chat').appendChild(el);$('chat').scrollTop=$('chat').scrollHeight}
+async function send(){const t=$('chat-input').value.trim();if(!t)return;$('chat-input').value='';appendMsg('user',t);setStatus('running');
   const resp=await fetch('/api/chats/'+currentChat+'/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
   if(!resp.ok){appendMsg('err','发送失败: '+resp.status)}
 }

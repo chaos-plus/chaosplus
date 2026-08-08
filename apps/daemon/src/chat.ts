@@ -9,6 +9,8 @@ export interface ChatMessage {
 
 export type ChatEvent =
   | { type: "message"; chatId: string; message: ChatMessage }
+  | { type: "status"; chatId: string; status: string } // agent run state (running/completed/failed/stopped)
+  | { type: "tool"; chatId: string; name: string; input?: unknown } // tool activity (write file, run cmd, …)
   | { type: "done"; chatId: string }
   | { type: "error"; chatId: string; error: string };
 
@@ -62,6 +64,7 @@ export class ChatSession {
         .join("\n");
       const prompt = history ? `${history}\nUser: ${task.prompt}` : task.prompt;
 
+      this.emit({ type: "status", chatId: this.id, status: "running" });
       let reply = "";
       for await (const ev of pickBackend(task.runtime)({
         prompt,
@@ -74,11 +77,17 @@ export class ChatSession {
         if (ev.type === "message") {
           reply += ev.text;
           this.emit({ type: "message", chatId: this.id, message: { role: "assistant", text: ev.text } });
+        } else if (ev.type === "tool") {
+          // Live activity: e.g. agent writing a file / running a command.
+          this.emit({ type: "tool", chatId: this.id, name: ev.name, input: ev.input });
+        } else if (ev.type === "session") {
+          this.emit({ type: "status", chatId: this.id, status: ev.status });
         } else if (ev.type === "error") {
           this.emit({ type: "error", chatId: this.id, error: ev.message });
           return;
         }
       }
+      this.emit({ type: "status", chatId: this.id, status: "completed" });
       if (reply) this.messages.push({ role: "assistant", text: reply });
       this.emit({ type: "done", chatId: this.id });
     } finally {
