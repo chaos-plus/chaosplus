@@ -104,18 +104,26 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
         const b = await readBody(req);
         if (!b.text) return json({ error: "text is required" }, 400);
 
+        let closed = false;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             const encoder = new TextEncoder();
-            let closed = false;
             const send = (ev: string) => {
               if (closed) return;
-              controller.enqueue(encoder.encode(`data: ${ev}\n\n`));
+              try {
+                controller.enqueue(encoder.encode(`data: ${ev}\n\n`));
+              } catch {
+                closed = true; // client already gone; stop emitting
+              }
             };
             const finish = () => {
               if (closed) return;
               closed = true;
-              controller.close();
+              try {
+                controller.close();
+              } catch {
+                // already closed by client disconnect — fine
+              }
             };
             const unsub = chat.subscribe((e) => {
               if (e.type === "message") {
@@ -146,6 +154,9 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
                 unsub();
               });
           },
+          cancel() {
+            closed = true; // client disconnected mid-stream — stop emitting
+          },
         });
         return sse(stream);
       }
@@ -153,20 +164,32 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
       if (evtMatch && req.method === "GET") {
         const chat = chats.get(evtMatch[1]!);
         if (!chat) return json({ error: "chat not found" }, 404);
+        let closed = false;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             const encoder = new TextEncoder();
+            const send = (s: string) => {
+              if (closed) return;
+              try {
+                controller.enqueue(encoder.encode(s));
+              } catch {
+                closed = true;
+              }
+            };
             for (const m of chat.messages) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "message", role: m.role, text: m.text })}\n\n`));
+              send(`data: ${JSON.stringify({ type: "message", role: m.role, text: m.text })}\n\n`);
             }
             const unsub = chat.subscribe((e) => {
               if (e.type === "message") {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "message", role: e.message.role, text: e.message.text })}\n\n`));
+                send(`data: ${JSON.stringify({ type: "message", role: e.message.role, text: e.message.text })}\n\n`);
               } else if (e.type === "done") {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
+                send(`data: ${JSON.stringify({ type: "done" })}\n\n`);
               }
             });
-            req.signal.addEventListener("abort", unsub, { once: true });
+            req.signal.addEventListener("abort", () => { closed = true; unsub(); }, { once: true });
+          },
+          cancel() {
+            closed = true;
           },
         });
         return sse(stream);
