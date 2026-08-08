@@ -73,6 +73,21 @@ func (t *TokenStore) Validate(token string) (*AccessToken, error) {
 	return at, nil
 }
 
+// IssueLongTerm creates a long-lived token for an already-confirmed machine
+// (manual rotation only — never expires).
+func (t *TokenStore) IssueLongTerm(machineID string) AccessToken {
+	at := AccessToken{Token: randomToken(), MachineID: machineID, LongTerm: true}
+	key := hashToken(at.Token)
+	t.mu.Lock()
+	t.byHash[key] = &at
+	if t.byMachine[machineID] == nil {
+		t.byMachine[machineID] = make(map[string]struct{})
+	}
+	t.byMachine[machineID][key] = struct{}{}
+	t.mu.Unlock()
+	return at
+}
+
 // MakeLongTerm promotes a valid one-time token to long-term (confirm flow).
 func (t *TokenStore) MakeLongTerm(machineID, token string) error {
 	at, err := t.Validate(token)

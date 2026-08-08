@@ -52,6 +52,16 @@ func (s *Store) TouchMachineHeartbeat(ctx context.Context, id string) error {
 	return nil
 }
 
+// UpdateMachineToken rotates the stored long-term token hash (manual rotation).
+func (s *Store) UpdateMachineToken(ctx context.Context, id, tokenHash string) error {
+	if _, err := s.db.NewUpdate().Model(&Machine{}).
+		Set("token_hash = ?", tokenHash).
+		Where("id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("update machine token %s: %w", id, err)
+	}
+	return nil
+}
+
 // DeleteMachine removes a machine (cancel / force-offline).
 func (s *Store) DeleteMachine(ctx context.Context, id string) error {
 	if _, err := s.db.NewDelete().Model(&Machine{}).Where("id = ?", id).Exec(ctx); err != nil {

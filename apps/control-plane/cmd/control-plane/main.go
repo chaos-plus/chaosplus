@@ -67,12 +67,14 @@ func main() {
 	// Machine hub = NATS↔WS bridge for daemons; engine reaches daemons via the
 	// NATS gateway (any instance), never through the bridge directly.
 	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
-	rm := server.NewRunManager(nc, &workflow.NatsRunnerLink{G: g}, st, envOr("CONTROL_RUNNER_ID", ""))
+	link := &workflow.NatsRunnerLink{G: g}
+	rm := server.NewRunManager(nc, link, st, envOr("CONTROL_RUNNER_ID", ""))
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
+	chat := server.NewChatService(st, link, envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
-	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub)}
+	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}
 	go func() {
 		log.Printf("control-plane HTTP listening on %s", httpAddr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {

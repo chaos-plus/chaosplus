@@ -17,8 +17,11 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewHandler wires all control-plane HTTP routes.
-func NewHandler(m *RunManager, hub *machine.Hub) http.Handler {
+func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler {
 	mux := http.NewServeMux()
+	if chat != nil {
+		chat.register(mux)
+	}
 
 	// machines — runner onboarding (PRD §5.3.1).
 	mux.HandleFunc("POST /api/machines/tokens", func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +74,8 @@ func NewHandler(m *RunManager, hub *machine.Hub) http.Handler {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"token": token, "expiresIn": 300})
+		// 长期 token:手动轮换后长期有效,无过期时间。
+		writeJSON(w, 200, map[string]any{"token": token, "longTerm": true})
 	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -109,6 +113,19 @@ func NewHandler(m *RunManager, hub *machine.Hub) http.Handler {
 			out = append(out, sum{ID: run.ID, Status: run.Status(), Nodes: len(run.Def.Nodes), CreatedAt: run.created.Format("2006-01-02 15:04:05")})
 		}
 		writeJSON(w, 200, out)
+	})
+	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		run, ok := m.Get(r.PathValue("id"))
+		if !ok {
+			writeErr(w, 404, "run not found")
+			return
+		}
+		// 返回 run 的静态 DAG(供前端 React Flow 渲染节点/边 + 实时状态)。
+		writeJSON(w, 200, map[string]any{
+			"id":     run.ID,
+			"status": run.Status(),
+			"def":    run.Def,
+		})
 	})
 	mux.HandleFunc("GET /api/runs/{id}/events", m.handleWS)
 	mux.HandleFunc("POST /api/runs/{id}/approvals/{node}", func(w http.ResponseWriter, r *http.Request) {

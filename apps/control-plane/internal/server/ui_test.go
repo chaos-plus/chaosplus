@@ -13,7 +13,7 @@ import (
 func TestUIServesPage(t *testing.T) {
 	nc := startTestNATS(t)
 	m := NewRunManager(nc, nil, nil, "r")
-	ts := httptest.NewServer(NewHandler(m, machine.NewHub(nc, machine.NewTokenStore(), nil)))
+	ts := httptest.NewServer(NewHandler(m, machine.NewHub(nc, machine.NewTokenStore(), nil), nil))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/")

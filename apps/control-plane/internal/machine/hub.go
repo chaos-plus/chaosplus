@@ -286,8 +286,13 @@ func (h *Hub) IssueToken() (machineID, token string) {
 }
 
 func (h *Hub) RefreshToken(machineID string) (string, error) {
+	// 长期 token 仅手动轮换:失效旧的,签发新的长期 token 并落库(§5.3.1)。
 	h.tokens.Invalidate(machineID)
-	return h.tokens.Issue(machineID).Token, nil
+	at := h.tokens.IssueLongTerm(machineID)
+	if h.machines != nil {
+		_ = h.machines.UpdateMachineToken(context.Background(), machineID, hashToken(at.Token))
+	}
+	return at.Token, nil
 }
 
 func (h *Hub) Cancel(machineID string) {
