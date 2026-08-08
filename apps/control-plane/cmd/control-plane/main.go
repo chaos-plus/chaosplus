@@ -17,9 +17,9 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
 func main() {
@@ -63,13 +63,14 @@ func main() {
 		}
 	}()
 
-	// HTTP + WS surface (run orchestration / realtime / approvals).
-	rm := server.NewRunManager(nc, &workflow.NatsRunnerLink{G: g}, st, envOr("CONTROL_RUNNER_ID", ""))
+	// Machine hub (WS daemon link) + HTTP surface (run orchestration / realtime / approvals).
+	hub := machine.NewHub(machine.NewTokenStore(), st)
+	rm := server.NewRunManager(nc, hub, st, envOr("CONTROL_RUNNER_ID", ""))
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
-	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm)}
+	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub)}
 	go func() {
 		log.Printf("control-plane HTTP listening on %s", httpAddr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {

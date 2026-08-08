@@ -6,12 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
 )
 
 func TestUIServesPage(t *testing.T) {
 	nc := startTestNATS(t)
 	m := NewRunManager(nc, nil, nil, "r")
-	ts := httptest.NewServer(NewHandler(m))
+	ts := httptest.NewServer(NewHandler(m, machine.NewHub(machine.NewTokenStore(), nil)))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/")

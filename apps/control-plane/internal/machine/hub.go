@@ -2,6 +2,8 @@ package machine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -198,6 +200,71 @@ func (h *Hub) IsConnected(machineID string) bool {
 	defer h.mu.Unlock()
 	_, ok := h.conns[machineID]
 	return ok
+}
+
+// ListMachines returns confirmed machines from the store (empty when none).
+func (h *Hub) ListMachines(ctx context.Context) ([]store.Machine, error) {
+	if h.machines == nil {
+		return nil, nil
+	}
+	return h.machines.ListMachines(ctx)
+}
+
+// Confirm promotes a one-time token to long-term and persists the machine
+// (PRD §5.3.1 step 6). Idempotent on repeat confirm of the same token.
+func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) error {
+	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
+		return err
+	}
+	if h.machines != nil {
+		return h.machines.UpsertMachine(ctx, store.Machine{
+			ID: machineID, InstanceID: "desktop", Address: address,
+			Status: "confirmed", TokenHash: hashToken(token),
+		})
+	}
+	return nil
+}
+
+// Disconnect force-closes a machine's connection (cancel / force-offline).
+// unregister handles cleanup + pending-token invalidation.
+func (h *Hub) Disconnect(machineID string) {
+	h.mu.Lock()
+	c := h.conns[machineID]
+	h.mu.Unlock()
+	if c != nil {
+		_ = c.ws.Close()
+	}
+}
+
+// IssueToken mints a fresh machine id + one-time onboarding token.
+func (h *Hub) IssueToken() (machineID, token string) {
+	machineID = newMachineID()
+	at := h.tokens.Issue(machineID)
+	return machineID, at.Token
+}
+
+// RefreshToken invalidates the machine's old tokens and issues a new one
+// (§5.3.1 "刷新命令").
+func (h *Hub) RefreshToken(machineID string) (string, error) {
+	h.tokens.Invalidate(machineID)
+	return h.tokens.Issue(machineID).Token, nil
+}
+
+func newMachineID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return "m-" + hex.EncodeToString(b)
+}
+
+// Cancel revokes a machine's tokens and disconnects it (cancel / force-offline).
+func (h *Hub) Cancel(machineID string) {
+	h.tokens.Invalidate(machineID)
+	h.Disconnect(machineID)
+	if h.machines != nil {
+		_ = h.machines.DeleteMachine(context.Background(), machineID)
+	}
 }
 
 // MachineName returns the name a connected daemon registered (if any).

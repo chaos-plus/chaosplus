@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
 )
 
 var upgrader = websocket.Upgrader{
@@ -15,8 +17,62 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewHandler wires all control-plane HTTP routes.
-func NewHandler(m *RunManager) http.Handler {
+func NewHandler(m *RunManager, hub *machine.Hub) http.Handler {
 	mux := http.NewServeMux()
+
+	// machines — runner onboarding (PRD §5.3.1).
+	mux.HandleFunc("POST /api/machines/tokens", func(w http.ResponseWriter, r *http.Request) {
+		machineID, token := hub.IssueToken()
+		writeJSON(w, 201, map[string]any{"token": token, "machineId": machineID, "expiresIn": 300})
+	})
+	mux.HandleFunc("GET /api/machines/ws", hub.HandleWS)
+	mux.HandleFunc("GET /api/machines", func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := hub.ListMachines(r.Context())
+		type msum struct {
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			Address         string `json:"address"`
+			Status          string `json:"status"`
+			Online          bool   `json:"online"`
+			LastHeartbeatAt int64  `json:"lastHeartbeatAt"`
+		}
+		out := []msum{}
+		for _, m := range ms {
+			name := hub.MachineName(m.ID)
+			if name == "" {
+				name = m.ID
+			}
+			out = append(out, msum{ID: m.ID, Name: name, Address: m.Address, Status: m.Status, Online: hub.IsConnected(m.ID), LastHeartbeatAt: m.LastHeartbeatAt})
+		}
+		writeJSON(w, 200, out)
+	})
+	mux.HandleFunc("POST /api/machines/{id}/confirm", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, 400, "bad request: "+err.Error())
+			return
+		}
+		if err := hub.Confirm(r.Context(), id, body.Token, r.RemoteAddr); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("DELETE /api/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		hub.Cancel(r.PathValue("id"))
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/machines/{id}/refresh-token", func(w http.ResponseWriter, r *http.Request) {
+		token, err := hub.RefreshToken(r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"token": token, "expiresIn": 300})
+	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

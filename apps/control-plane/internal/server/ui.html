@@ -29,10 +29,24 @@
 <body>
 <aside>
   <h1>chaos.plus</h1>
+  <button class="primary" onclick="showView('runs')">运行</button>
+  <button onclick="showView('machines')">Machines</button>
   <h2>Runs</h2>
   <div id="runs"></div>
 </aside>
 <main>
+  <div id="machines" style="display:none">
+    <h2>Machines</h2>
+    <button class="primary" onclick="machineAdd()">＋ 添加 Machine</button>
+    <div id="wizard" style="display:none;border:1px solid var(--wait);border-radius:8px;padding:12px;margin:10px 0">
+      <div class="meta">在该机器上运行接入命令(token <span id="countdown">300</span>s 内确认):</div>
+      <pre id="cmd"></pre>
+      <button onclick="machineConfirm()">确认接入</button>
+      <button onclick="machineCancel()">取消</button>
+      <button onclick="machineRefresh()">刷新命令</button>
+    </div>
+    <div id="machine-list" class="meta"></div>
+  </div>
   <h2 id="title">发起工作流</h2>
   <div id="launch">
     <input id="wf" class="field" placeholder="工作流 JSON 文件路径（如 examples/e2e-real.json）" />
@@ -66,6 +80,16 @@ function render(ev){if(!ev.nodeId){refresh();return}
   else if(ev.status==='waiting_approval'){act.innerHTML=`<input id="reason-${ev.nodeId}" placeholder="原因(可选)" style="width:140px"/> <button onclick="decide('${ev.nodeId}',true)">通过</button> <button onclick="decide('${ev.nodeId}',false)">拒绝</button>`}
   else{act.innerHTML=''}}
 async function decide(node,approve){const reason=$('reason-'+node).value||'';try{await api('/api/runs/'+current+'/approvals/'+node,{method:'POST',body:JSON.stringify({approve,reason})})}catch(e){alert(e.message)}}
+// ---- Machines (PRD §5.3.1) ----
+let pending=null, countdownTimer=null;
+function showView(v){$('launch').style.display=v==='runs'?'block':'none';$('detail').style.display=v==='runs'&&current?'block':'none';$('machines').style.display=v==='machines'?'block':'none';if(v==='machines')loadMachines()}
+async function loadMachines(){const ms=await api('/api/machines');$('machine-list').innerHTML=(ms.length?ms.map(x=>`<div>${x.name} · ${x.id} · ${x.online?'<b style="color:var(--ok)">在线</b>':'离线'} · 心跳 ${new Date(x.lastHeartbeatAt).toLocaleTimeString()}</div>`).join(''):'<div>暂无已确认 machine</div>')}
+async function machineAdd(){const j=await api('/api/machines/tokens',{method:'POST'});pending=j;$('wizard').style.display='block';showCmd();machineCountdown()}
+function machineCountdown(){clearInterval(countdownTimer);let left=300;$('countdown').textContent=left;countdownTimer=setInterval(()=>{left--;$('countdown').textContent=Math.max(0,left);if(left<=0){clearInterval(countdownTimer);alert('接入命令已过期,请刷新')}},1000)}
+function showCmd(){const proto=location.protocol==='https:'?'https':'http';$('cmd').textContent=`bun run src/serve.ts --server ${proto}://${location.host} --token ${pending.token}`}
+async function machineConfirm(){await api('/api/machines/'+pending.machineId+'/confirm',{method:'POST',body:JSON.stringify({token:pending.token})});clearInterval(countdownTimer);$('wizard').style.display='none';loadMachines()}
+async function machineCancel(){if(pending)await api('/api/machines/'+pending.machineId,{method:'DELETE'});clearInterval(countdownTimer);$('wizard').style.display='none';loadMachines()}
+async function machineRefresh(){const j=await api('/api/machines/'+pending.machineId+'/refresh-token',{method:'POST'});pending={...pending,token:j.token};showCmd();machineCountdown()}
 refresh();setInterval(refresh,2000);
 </script>
 </body>
