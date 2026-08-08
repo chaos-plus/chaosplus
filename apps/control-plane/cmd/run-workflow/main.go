@@ -99,7 +99,7 @@ func main() {
 
 	log.Printf("running %s (%s) on runner %s, workspace %s", def.Name, def.ID, runnerID, workspace)
 
-	exec := workflow.NewRunnerExecutor(g, runnerID, workspace, runID)
+	exec := workflow.NewRunnerExecutor(&workflow.NatsRunnerLink{G: g}, runnerID, workspace, runID)
 	if d := os.Getenv("SPAWN_IDLE_TIMEOUT"); d != "" {
 		if t, err := time.ParseDuration(d); err == nil {
 			exec.WithSpawnTimeout(t, 0)

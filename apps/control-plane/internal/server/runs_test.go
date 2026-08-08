@@ -9,7 +9,6 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
@@ -50,7 +49,7 @@ func TestRunManagerLaunchAndApprove(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 
-	m := NewRunManager(nc, gateway.New(nc), nil, "runner-1")
+	m := NewRunManager(nc, nil, nil, "runner-1")
 	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -80,7 +79,7 @@ func TestRunManagerRejectPauses(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 
-	m := NewRunManager(nc, gateway.New(nc), nil, "runner-1")
+	m := NewRunManager(nc, nil, nil, "runner-1")
 	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -103,7 +102,7 @@ func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 
-	m := NewRunManager(nc, gateway.New(nc), nil, "runner-1")
+	m := NewRunManager(nc, nil, nil, "runner-1")
 	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)

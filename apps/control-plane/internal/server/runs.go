@@ -14,7 +14,6 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
@@ -131,7 +130,7 @@ type LaunchRequest struct {
 // RunManager owns live runs and the NATS fan-out to their WS subscribers.
 type RunManager struct {
 	nc       *nats.Conn
-	g        *gateway.Gateway
+	link     workflow.RunnerLink
 	st       *store.Store
 	runnerID string
 
@@ -142,8 +141,8 @@ type RunManager struct {
 	baseFactory func(runID string) workflow.Executor // test seam; nil → RunnerExecutor
 }
 
-func NewRunManager(nc *nats.Conn, g *gateway.Gateway, st *store.Store, runnerID string) *RunManager {
-	return &RunManager{nc: nc, g: g, st: st, runnerID: runnerID, runs: make(map[string]*Run)}
+func NewRunManager(nc *nats.Conn, link workflow.RunnerLink, st *store.Store, runnerID string) *RunManager {
+	return &RunManager{nc: nc, link: link, st: st, runnerID: runnerID, runs: make(map[string]*Run)}
 }
 
 // Start subscribes chaos.run.*.evt and fans out each event to the matching
@@ -256,14 +255,14 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			runnerID = m.runnerID
 		}
 		if runnerID == "" {
-			reg := m.g.RegisteredRunners()
+			reg := m.link.RegisteredRunners()
 			if len(reg) == 0 {
 				cancel()
 				return nil, fmt.Errorf("no runner registered; set runnerId or start a daemon")
 			}
 			runnerID = reg[0]
 		}
-		base = workflow.NewRunnerExecutor(m.g, runnerID, req.Workspace, run.ID)
+		base = workflow.NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID)
 	}
 	exec := workflow.NewApprovalExecutor(base, broker)
 

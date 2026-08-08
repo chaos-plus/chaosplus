@@ -19,6 +19,7 @@ import (
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
 func main() {
@@ -63,7 +64,7 @@ func main() {
 	}()
 
 	// HTTP + WS surface (run orchestration / realtime / approvals).
-	rm := server.NewRunManager(nc, g, st, envOr("CONTROL_RUNNER_ID", ""))
+	rm := server.NewRunManager(nc, &workflow.NatsRunnerLink{G: g}, st, envOr("CONTROL_RUNNER_ID", ""))
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}

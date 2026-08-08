@@ -20,7 +20,7 @@ import (
 // The engine runs synchronously, so at most one SpawnAndWait is in flight and
 // draining the gateway's event stream is safe.
 type RunnerExecutor struct {
-	g         *gateway.Gateway
+	link      RunnerLink
 	runnerID  string
 	workspace string // cwd every agent spawns in (workspace root, PRD artifact paths resolve here)
 	runID     string
@@ -30,9 +30,9 @@ type RunnerExecutor struct {
 	mu        sync.Mutex
 }
 
-// NewRunnerExecutor wires an Executor to one runner + workspace for a run.
-func NewRunnerExecutor(g *gateway.Gateway, runnerID, workspace, runID string) *RunnerExecutor {
-	return &RunnerExecutor{g: g, runnerID: runnerID, workspace: workspace, runID: runID}
+// NewRunnerExecutor wires an Executor to one runner link + workspace for a run.
+func NewRunnerExecutor(link RunnerLink, runnerID, workspace, runID string) *RunnerExecutor {
+	return &RunnerExecutor{link: link, runnerID: runnerID, workspace: workspace, runID: runID}
 }
 
 // WithSpawnTimeout sets the per-spawn idle timeout (reset on live activity) and
@@ -50,16 +50,8 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	spawnID := fmt.Sprintf("%s-%s-%d", r.runID, node.ID, r.seq)
 	r.mu.Unlock()
 
-	opts := []gateway.SpawnWaitOption{}
-	if r.idle > 0 {
-		opts = append(opts, gateway.WithIdleTimeout(r.idle))
-	}
-	if r.max > 0 {
-		opts = append(opts, gateway.WithMaxTimeout(r.max))
-	}
-
 	prompt := r.buildPrompt(node, input)
-	res, err := r.g.SpawnAndWaitOpts(ctx, r.runnerID, gateway.Spawn{
+	res, err := r.link.SpawnAndWait(ctx, r.runnerID, gateway.Spawn{
 		RunID:        r.runID,
 		NodeID:       node.ID,
 		Attempt:      1,
@@ -68,18 +60,18 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		Prompt:       prompt,
 		Cwd:          r.workspace,
 		SystemPrompt: node.Agent.SystemPrompt,
-	}, opts...)
+	}, r.idle, r.max)
 	if err != nil {
 		// On timeout, tell the runner to stop the stray session so it doesn't
 		// keep burning tokens/CPU after we've given up on it.
-		_ = r.g.Kill(context.Background(), r.runnerID, spawnID)
+		_ = r.link.Kill(context.Background(), r.runnerID, spawnID)
 		return nil, fmt.Errorf("node %s: spawn: %w", node.ID, err)
 	}
 	if !res.OK {
 		return nil, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, res.Error)
 	}
 
-	out, err := r.g.ReadArtifact(ctx, r.runnerID, spawnID, "output.json")
+	out, err := r.link.ReadArtifact(ctx, r.runnerID, spawnID, "output.json")
 	if err != nil {
 		return nil, fmt.Errorf("node %s: read output.json: %w", node.ID, err)
 	}
@@ -95,7 +87,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	// node. Pass overrides the output with {"result":"passed"} so downstream
 	// condition/loop nodes see the validator's verdict, not the agent's words.
 	if v := validatorCmd(node); v != "" {
-		res, err := r.g.RunCmd(ctx, r.runnerID, spawnID, v, 120000)
+		res, err := r.link.RunCmd(ctx, r.runnerID, spawnID, v, 120000)
 		if err != nil {
 			return nil, fmt.Errorf("node %s: validator: %w", node.ID, err)
 		}

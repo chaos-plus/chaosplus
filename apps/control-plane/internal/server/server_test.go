@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
@@ -19,7 +18,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	m := NewRunManager(nc, gateway.New(nc), nil, "r")
+	m := NewRunManager(nc, nil, nil, "r")
 	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -96,7 +95,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 
 func TestHTTPErrors(t *testing.T) {
 	nc := startTestNATS(t)
-	m := NewRunManager(nc, gateway.New(nc), nil, "r")
+	m := NewRunManager(nc, nil, nil, "r")
 	ts := httptest.NewServer(NewHandler(m))
 	defer ts.Close()
 
