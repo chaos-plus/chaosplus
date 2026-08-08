@@ -52,6 +52,9 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
       if (path === "/") {
         return new Response(HTML, { headers: { "Content-Type": "text/html" } });
       }
+      if (path === "/favicon.ico") {
+        return new Response(null, { status: 204 });
+      }
 
       // ---- agents ----
       if (path === "/api/agents" && req.method === "GET") {
@@ -104,15 +107,26 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             const encoder = new TextEncoder();
-            const send = (ev: string) => controller.enqueue(encoder.encode(`data: ${ev}\n\n`));
+            let closed = false;
+            const send = (ev: string) => {
+              if (closed) return;
+              controller.enqueue(encoder.encode(`data: ${ev}\n\n`));
+            };
+            const finish = () => {
+              if (closed) return;
+              closed = true;
+              controller.close();
+            };
             const unsub = chat.subscribe((e) => {
               if (e.type === "message") {
                 send(JSON.stringify({ type: "message", role: e.message.role, text: e.message.text }));
               } else if (e.type === "error") {
                 send(JSON.stringify({ type: "error", error: e.error }));
+                finish();
+                unsub();
               } else if (e.type === "done") {
                 send(JSON.stringify({ type: "done" }));
-                controller.close();
+                finish();
                 unsub();
               }
             });
@@ -128,7 +142,7 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
               })
               .catch((e) => {
                 send(JSON.stringify({ type: "error", error: (e as Error).message }));
-                controller.close();
+                finish();
                 unsub();
               });
           },
@@ -235,10 +249,10 @@ let agents=[],current=null,currentChat=null,es=null;
 const $=id=>document.getElementById(id);
 async function api(p,o={}){const r=await fetch(p,{headers:{'Content-Type':'application/json'},...o});return r.json()}
 async function refresh(){agents=await api('/api/agents');renderAgents()}
-function renderAgents(){const d=$('agents');d.innerHTML=agents.map(a=>\`<div class="agent \${current===a.id?'active':''}" onclick="openAgent('\${a.id}')">\${a.spec.name||a.spec.id}<button class="del" onclick="event.stopPropagation();delAgent('\${a.id}')">×</button></div>\`).join('')}
+function renderAgents(){const d=$('agents');d.innerHTML=agents.map(a=>\`<div class="agent \${current===a.id?'active':''}" onclick="openAgent('\${a.id}')">\${a.name||a.id}<button class="del" onclick="event.stopPropagation();delAgent('\${a.id}')">×</button></div>\`).join('')}
 async function createAgent(){await api('/api/agents',{method:'POST',body:JSON.stringify({name:$('f-name').value,systemPrompt:$('f-prompt').value,runtime:$('f-runtime').value,model:$('f-model').value||undefined,provider:$('f-provider').value||undefined,apiKey:$('f-key').value||undefined})});refresh()}
 async function delAgent(id){await api('/api/agents/'+id,{method:'DELETE'});if(current===id){current=null;currentChat=null;$('inputbar').style.display='none';$('chat').innerHTML=''};refresh()}
-async function openAgent(id){current=id;const a=agents.find(x=>x.id===id);const chat=await api('/api/agents/'+id+'/chat',{method:'POST'});currentChat=chat.chatId;$('chatbar').textContent='会话：'+(a.spec.name||a.spec.id);$('chat').innerHTML='';$('inputbar').style.display='flex';connectChat(chat.chatId)}
+async function openAgent(id){current=id;const a=agents.find(x=>x.id===id);const chat=await api('/api/agents/'+id+'/chat',{method:'POST'});currentChat=chat.chatId;$('chatbar').textContent='会话：'+(a.name||a.id);$('chat').innerHTML='';$('inputbar').style.display='flex';connectChat(chat.chatId)}
 function connectChat(chatId){if(es)es.close();es=new EventSource('/api/chats/'+chatId+'/events');es.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.type==='message')appendMsg(d.role,d.text)}}
 async function send(){const t=$('chat-input').value.trim();if(!t)return;$('chat-input').value='';
   const resp=await fetch('/api/chats/'+currentChat+'/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
