@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>chaos.plus · 控制面</title>
+<style>
+  :root { --bg:#12141a; --panel:#1b1e26; --line:#2a2d36; --txt:#e6e8ee; --mut:#8a90a0;
+          --ok:#3fb96f; --run:#d9a13c; --err:#e0564e; --wait:#4aa3e8; --skip:#5b6270; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 system-ui, sans-serif; display:flex; height:100vh }
+  aside { width:240px; border-right:1px solid var(--line); padding:12px; overflow:auto }
+  main { flex:1; padding:16px; overflow:auto }
+  h1,h2 { margin:0 0 10px; font-weight:600 }
+  input,textarea,select,button { background:#0f1116; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit }
+  button { cursor:pointer }
+  button.primary { background:var(--wait); color:#fff; border-color:transparent }
+  .field { display:block; width:100%; margin-bottom:8px }
+  .run { padding:6px 8px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; cursor:pointer }
+  .run.active { border-color:var(--wait) }
+  .node { display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--skip); flex:none }
+  .dot.running{ background:var(--run) } .dot.completed{ background:var(--ok) } .dot.failed{ background:var(--err) }
+  .dot.waiting_approval{ background:var(--wait); animation:pulse 1.2s infinite } .dot.skipped{ background:var(--skip) }
+  .dot.rejected{ background:var(--err) }
+  @keyframes pulse { 50% { opacity:.4 } }
+  .meta { color:var(--mut); font-size:12px }
+</style>
+</head>
+<body>
+<aside>
+  <h1>chaos.plus</h1>
+  <h2>Runs</h2>
+  <div id="runs"></div>
+</aside>
+<main>
+  <h2 id="title">发起工作流</h2>
+  <div id="launch">
+    <input id="wf" class="field" placeholder="工作流 JSON 文件路径（如 examples/e2e-real.json）" />
+    <input id="ws" class="field" placeholder="workspace 目录路径（agent 工作的目录）" />
+    <textarea id="ctx" class="field" rows="3" placeholder='context JSON（可选）'></textarea>
+    <button class="primary" onclick="launch()">运行</button>
+  </div>
+  <div id="detail" style="display:none">
+    <h2 id="runhead"></h2>
+    <div id="nodes"></div>
+  </div>
+</main>
+<script>
+let ws=null, current=null;
+const $=id=>document.getElementById(id);
+async function api(p,o={}){const r=await fetch(p,{headers:{'Content-Type':'application/json'},...o});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
+async function refresh(){const runs=await api('/api/runs');$('runs').innerHTML=runs.map(r=>`<div class="run ${r.id===current?'active':''}" onclick="openRun('${r.id}')">${r.id} · ${r.status}<div class="meta">${r.nodes} 节点 · ${r.createdAt}</div></div>`).join('')}
+async function launch(){let ctx;const v=$('ctx').value;if(v){try{ctx=JSON.parse(v)}catch(e){alert('context 不是合法 JSON');return}}
+  const j=await api('/api/runs',{method:'POST',body:JSON.stringify({workflowFile:$('wf').value||undefined,workspace:$('ws').value,context:ctx})});openRun(j.runId)}
+function openRun(id){current=id;$('title').textContent='Run '+id;$('launch').style.display='none';$('detail').style.display='block';$('runhead').textContent='Run '+id;$('nodes').innerHTML='';if(ws)ws.close()
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/runs/'+id+'/events');
+  ws.onmessage=e=>render(JSON.parse(e.data));ws.onclose=()=>refresh();refresh()}
+function render(ev){if(!ev.nodeId){refresh();return}
+  const status=ev.review?(ev.review.approved?'completed':'rejected'):ev.status;
+  let el=document.getElementById('n-'+ev.nodeId);
+  if(!el){el=document.createElement('div');el.id='n-'+ev.nodeId;el.className='node';el.innerHTML='<span class="dot"></span><span></span><div style="flex:1"></div><div class="act"></div>';$('nodes').appendChild(el)}
+  el.querySelector('.dot').className='dot '+status;
+  el.querySelectorAll('span')[1].textContent=ev.nodeId;
+  const act=el.querySelector('.act');
+  if(ev.review){act.innerHTML=`<span class="meta">${ev.review.approved?'已通过':'已拒绝'}${ev.review.reason?' · '+ev.review.reason:''}</span>`}
+  else if(ev.status==='waiting_approval'){act.innerHTML=`<input id="reason-${ev.nodeId}" placeholder="原因(可选)" style="width:140px"/> <button onclick="decide('${ev.nodeId}',true)">通过</button> <button onclick="decide('${ev.nodeId}',false)">拒绝</button>`}
+  else{act.innerHTML=''}}
+async function decide(node,approve){const reason=$('reason-'+node).value||'';try{await api('/api/runs/'+current+'/approvals/'+node,{method:'POST',body:JSON.stringify({approve,reason})})}catch(e){alert(e.message)}}
+refresh();setInterval(refresh,2000);
+</script>
+</body>
+</html>
