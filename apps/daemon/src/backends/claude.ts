@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AgentTask } from "../types";
+import { detectBinary, missingBinary } from "./detect";
 
 /** Map provider name → the SDK's cloud-switch env flag (Bedrock/Vertex/Foundry). */
 const PROVIDER_ENV: Record<string, string> = {
@@ -22,6 +23,10 @@ function exePath(p?: string): string | undefined {
  */
 export async function* runClaude(task: AgentTask): AsyncGenerator<AgentEvent> {
   const providerEnv = PROVIDER_ENV[task.provider ?? "anthropic"];
+  // Auto-detect the installed claude CLI (cc-switch profile applies); a missing
+  // binary fails fast with a clear message instead of an obscure SDK spawn error.
+  const claudeBin = task.env?.CLAUDE_BINARY ?? detectBinary(["claude"], "CLAUDE_BINARY");
+  if (!claudeBin) throw missingBinary("claude", "CLAUDE_BINARY");
   const gen = query({
     prompt: task.systemPrompt
       ? `${task.systemPrompt}\n\n${task.prompt}`
@@ -32,8 +37,7 @@ export async function* runClaude(task: AgentTask): AsyncGenerator<AgentEvent> {
       allowedTools: task.allowedTools,
       maxTurns: task.maxTurns,
       permissionMode: task.permissionMode ?? "acceptEdits",
-      pathToClaudeCodeExecutable:
-        exePath(task.env?.CLAUDE_BINARY ?? process.env.CLAUDE_BINARY) ?? "claude",
+      pathToClaudeCodeExecutable: exePath(claudeBin),
       env: {
         ...process.env,
         ...task.env,
