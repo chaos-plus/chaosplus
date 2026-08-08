@@ -1,0 +1,90 @@
+{
+  "id": "software-dev-agile",
+  "version": "1.0.0",
+  "name": "软件开发（敏捷）",
+  "contextSchema": {
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 }
+    }
+  },
+  "nodes": [
+    { "id": "trigger", "type": "trigger", "trigger": { "source": "manual" } },
+    {
+      "id": "requirements",
+      "type": "agent",
+      "agent": {
+        "id": "requirements", "role": "pm", "executor": "mock",
+        "systemPrompt": "产出需求文档 requirements.md",
+        "outputSpec": { "produces": [{ "id": "requirements.md", "path": "requirements.md", "type": "markdown", "required": true }] }
+      }
+    },
+    {
+      "id": "prd",
+      "type": "agent",
+      "agent": {
+        "id": "prd", "role": "pm", "executor": "mock",
+        "systemPrompt": "基于 requirements.md 产出 PRD.md",
+        "outputSpec": { "produces": [{ "id": "PRD.md", "path": "PRD.md", "type": "markdown", "required": true }] }
+      }
+    },
+    { "id": "prd-approval", "type": "human_approval", "humanApproval": { "approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause" } },
+    {
+      "id": "design",
+      "type": "agent",
+      "agent": {
+        "id": "design", "role": "arch", "executor": "mock",
+        "systemPrompt": "基于 PRD.md 产出技术设计",
+        "outputSpec": { "produces": [{ "id": "design.md", "path": "design.md", "type": "markdown", "required": true }] }
+      }
+    },
+    { "id": "arch-approval", "type": "human_approval", "humanApproval": { "approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause" } },
+    {
+      "id": "sprint-plan",
+      "type": "agent",
+      "agent": {
+        "id": "sprint-plan", "role": "pm", "executor": "mock",
+        "systemPrompt": "拆解 sprint 任务为子任务列表",
+        "outputSpec": { "produces": [{ "id": "sprint.md", "path": "sprint.md", "type": "markdown", "required": true }] }
+      }
+    },
+    { "id": "fork", "type": "parallel_fork", "fanOut": { "itemsExpr": { "var": "sprint-plan.tasks" }, "templateNodeId": "coding" } },
+    {
+      "id": "coding",
+      "type": "agent",
+      "agent": {
+        "id": "coding", "role": "coder", "executor": "mock",
+        "systemPrompt": "实现一个子任务并自测",
+        "inputSpec": { "consumes": [{ "id": "sprint.md", "type": "markdown", "required": true }] },
+        "outputSpec": { "produces": [{ "id": "code", "path": "src/", "type": "code", "required": true }] }
+      }
+    },
+    { "id": "join", "type": "join" },
+    { "id": "qa", "type": "agent", "agent": { "id": "qa", "role": "qa", "executor": "mock", "systemPrompt": "运行测试并报告 passed/failed" } },
+    { "id": "bug-fix", "type": "agent", "agent": { "id": "bug-fix", "role": "coder", "executor": "mock", "systemPrompt": "修复 QA 指出的缺陷" } },
+    {
+      "id": "qa-loop",
+      "type": "loop",
+      "loop": {
+        "bodyEntry": "qa",
+        "condition": { "==": [{ "var": "qa.result" }, "passed"] },
+        "maxIterations": 5
+      }
+    },
+    { "id": "sprint-delivery", "type": "human_approval", "humanApproval": { "approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause" } }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "requirements" },
+    { "from": "requirements", "to": "prd" },
+    { "from": "prd", "to": "prd-approval" },
+    { "from": "prd-approval", "to": "design", "condition": "approved" },
+    { "from": "design", "to": "arch-approval" },
+    { "from": "arch-approval", "to": "sprint-plan", "condition": "approved" },
+    { "from": "sprint-plan", "to": "fork" },
+    { "from": "fork", "to": "join", "condition": "always" },
+    { "from": "join", "to": "qa-loop" },
+    { "from": "qa", "to": "bug-fix", "condition": "always" },
+    { "from": "qa-loop", "to": "sprint-delivery" }
+  ]
+}

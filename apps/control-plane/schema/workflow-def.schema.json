@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaos.plus/schema/workflow-def.schema.json",
+  "title": "WorkflowDef",
+  "description": "chaos.plus workflow definition — JSON is the single source of truth (PRD §7.1, F.4). Runtime always executes a static DAG; authoring surfaces (JSON/YAML, visual, AI) all converge to this shape.",
+  "type": "object",
+  "required": ["id", "version", "name", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "contextSchema": { "$ref": "#/$defs/jsonSchema" },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/nodeType" },
+        "name": { "type": "string" },
+        "agent": { "anyOf": [{ "$ref": "#/$defs/executorAgentSpec" }, { "type": "object", "required": ["ref"], "properties": { "ref": { "type": "string" } }, "additionalProperties": false }] },
+        "humanApproval": { "$ref": "#/$defs/humanApprovalSpec" },
+        "condition": { "$ref": "#/$defs/conditionSpec" },
+        "transform": { "$ref": "#/$defs/transformSpec" },
+        "trigger": { "$ref": "#/$defs/triggerSpec" },
+        "loop": { "$ref": "#/$defs/loopSpec" },
+        "subworkflow": { "$ref": "#/$defs/subworkflowSpec" },
+        "fanOut": { "$ref": "#/$defs/fanOutSpec" }
+      }
+    },
+    "nodeType": {
+      "enum": ["agent", "human_approval", "condition", "parallel_fork", "join", "transform", "trigger", "loop", "subworkflow"]
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "condition": { "enum": ["success", "failed", "approved", "rejected", "always"] },
+        "branchKey": { "type": "string" }
+      }
+    },
+    "executorAgentSpec": {
+      "type": "object",
+      "required": ["id", "role", "executor"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "executor": { "type": "string", "minLength": 1 },
+        "tokenProfile": { "enum": ["budget", "balanced", "quality"] },
+        "maxContextTokens": { "type": "integer", "minimum": 1 },
+        "systemPrompt": { "type": "string" },
+        "allowedTools": { "type": "array", "items": { "type": "string" } },
+        "forbiddenActions": { "type": "array", "items": { "type": "string" } },
+        "allowedMCPTools": { "type": "array", "items": { "type": "string" } },
+        "requiredSkills": { "type": "array", "items": { "type": "string" } },
+        "inputSpec": { "$ref": "#/$defs/inputSpec" },
+        "outputSpec": { "$ref": "#/$defs/outputSpec" },
+        "artifactSpecs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/artifactSpec" } },
+        "validatorSpecs": { "type": "array", "items": { "$ref": "#/$defs/validatorSpec" } },
+        "humanApproval": { "$ref": "#/$defs/humanApprovalSpec" },
+        "retry": { "$ref": "#/$defs/retrySpec" },
+        "hooks": { "$ref": "#/$defs/hooksSpec" }
+      }
+    },
+    "inputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "consumes": { "type": "array", "items": { "$ref": "#/$defs/consumeSpec" } },
+        "inputValidator": { "$ref": "#/$defs/validatorRef" }
+      }
+    },
+    "consumeSpec": {
+      "type": "object",
+      "required": ["id", "type", "required"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "outputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "produces": { "type": "array", "items": { "$ref": "#/$defs/produceSpec" } },
+        "outputValidator": { "$ref": "#/$defs/validatorRef" }
+      }
+    },
+    "produceSpec": {
+      "type": "object",
+      "required": ["id", "path", "type", "required"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "artifactSpec": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "schemaRef": { "type": "string" },
+        "validators": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "validatorSpec": {
+      "type": "object",
+      "required": ["ref", "layer", "required"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/validatorRef" },
+        "layer": { "enum": ["automated", "ai_assisted", "human"] },
+        "required": { "type": "boolean" },
+        "timeoutMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "validatorRef": {
+      "type": "string",
+      "pattern": "^(builtin:|cmd:).+"
+    },
+    "humanApprovalSpec": {
+      "type": "object",
+      "required": ["approvers", "timeoutMs", "onTimeout", "onReject"],
+      "additionalProperties": false,
+      "properties": {
+        "approvers": { "anyOf": [{ "const": "any_human" }, { "type": "array", "items": { "type": "string", "minLength": 1 } }] },
+        "channel": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 0 },
+        "onTimeout": { "enum": ["pause", "auto_reject"] },
+        "onReject": { "enum": ["retry", "pause"] }
+      }
+    },
+    "retrySpec": {
+      "type": "object",
+      "required": ["maxAttempts", "backoffSeconds", "notifyThreshold"],
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "backoffSeconds": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "notifyThreshold": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hooksSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pre": { "$ref": "#/$defs/hookRef" },
+        "post": { "$ref": "#/$defs/hookRef" },
+        "onError": { "$ref": "#/$defs/hookRef" }
+      }
+    },
+    "hookRef": {
+      "type": "string",
+      "pattern": "^cmd:.+"
+    },
+    "conditionSpec": {
+      "type": "object",
+      "required": ["expr"],
+      "additionalProperties": false,
+      "properties": {
+        "expr": { "$ref": "#/$defs/jsonLogic" }
+      }
+    },
+    "transformSpec": {
+      "type": "object",
+      "required": ["expr", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "expr": { "$ref": "#/$defs/jsonLogic" },
+        "output": { "type": "string", "minLength": 1 }
+      }
+    },
+    "triggerSpec": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["manual", "schedule", "webhook", "connector"] },
+        "scheduleCron": { "type": "string" }
+      }
+    },
+    "loopSpec": {
+      "type": "object",
+      "required": ["bodyEntry", "condition", "maxIterations"],
+      "additionalProperties": false,
+      "properties": {
+        "bodyEntry": { "type": "string", "minLength": 1 },
+        "condition": { "$ref": "#/$defs/jsonLogic" },
+        "maxIterations": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "subworkflowSpec": {
+      "type": "object",
+      "required": ["ref"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "inputMapping": { "type": "object", "additionalProperties": { "type": "string" } },
+        "outputMapping": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "fanOutSpec": {
+      "type": "object",
+      "required": ["itemsExpr", "templateNodeId"],
+      "additionalProperties": false,
+      "properties": {
+        "itemsExpr": { "$ref": "#/$defs/jsonLogic" },
+        "templateNodeId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "jsonLogic": {
+      "description": "JSON Logic expression. Variables are limited to run context ∪ completed node outputs (PRD F.4). Any valid JSON is accepted here; semantic sandboxing is enforced at runtime.",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "jsonSchema": {
+      "description": "A JSON Schema used to validate the run's context_json.",
+      "type": ["object", "boolean"]
+    }
+  }
+}
