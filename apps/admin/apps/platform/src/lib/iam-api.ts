@@ -783,6 +783,20 @@ export function getTenant(): string {
   )
 }
 
+const entityKey = "platform-entity"
+
+export function getEntity(): string {
+  return (
+    (typeof localStorage === "undefined" ? undefined : localStorage.getItem(entityKey)) ??
+    ""
+  )
+}
+
+export function setEntity(value: string): void {
+  localStorage.setItem(entityKey, value.trim())
+  window.dispatchEvent(new Event("entity-change"))
+}
+
 export function setTenant(value: string): void {
   localStorage.setItem(tenantKey, value.trim())
   window.dispatchEvent(new Event("tenant-change"))

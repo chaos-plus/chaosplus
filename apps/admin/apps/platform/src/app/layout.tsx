@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  Building2,
   FolderKanban,
   Gauge,
   GitBranch,
@@ -31,7 +30,7 @@ import { Toaster } from "@workspace/ui/components/sonner"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
 import { controlApi, type Channel } from "../lib/control-api"
-import { getTenant, iamApi, setTenant, type Tenant } from "../lib/iam-api"
+import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity, type Tenant } from "../lib/iam-api"
 
 interface NavItem {
   /** i18n key,位于 platform.nav.*。 */
@@ -93,8 +92,9 @@ export default function PlatformLayout() {
   const top = activeTop(location.pathname)
   const secondary = SECONDARY[top] ?? []
 
-  const [tenantDraft, setTenantDraft] = useState(getTenant())
   const [tenantValue, setTenantValue] = useState(getTenant())
+  const [entityValue, setEntityValue] = useState(getEntity())
+  const [tenantEntities, setTenantEntities] = useState<Entity[]>([])
   const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
   const { setLocale } = useClientLocale()
   const [lang, setLang] = useState<Locale>(() => currentLocale())
@@ -111,10 +111,25 @@ export default function PlatformLayout() {
   }, [status])
 
   useEffect(() => {
+    if (!tenantValue) {
+      setTenantEntities([])
+      return
+    }
+    const loadEntities = () => {
+      void iamApi
+        .entities()
+        .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
+        .catch(() => setTenantEntities([]))
+    }
+    loadEntities()
+    const t = setInterval(loadEntities, 5000)
+    return () => clearInterval(t)
+  }, [tenantValue])
+
+  useEffect(() => {
     const sync = () => {
       const next = getTenant()
       setTenantValue(next)
-      setTenantDraft(next)
     }
     window.addEventListener("tenant-change", sync)
     return () => window.removeEventListener("tenant-change", sync)
@@ -133,6 +148,22 @@ export default function PlatformLayout() {
 
   // 顶部头像展示个人中心里设置的昵称。
   const [displayName, setDisplayName] = useState("未登录")
+  useEffect(() => {
+    if (!tenantValue) {
+      setTenantEntities([])
+      return
+    }
+    const loadEntities = () => {
+      void iamApi
+        .entities()
+        .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
+        .catch(() => setTenantEntities([]))
+    }
+    loadEntities()
+    const t = setInterval(loadEntities, 5000)
+    return () => clearInterval(t)
+  }, [tenantValue])
+
   useEffect(() => {
     const sync = () => {
       try {
@@ -178,15 +209,6 @@ export default function PlatformLayout() {
       </div>
     )
 
-  const commitTenant = () => {
-    const next = tenantDraft.trim()
-    if (!next || next === tenantValue) return
-    setTenant(next)
-    setTenantValue(next)
-    setTenantDraft(next)
-    navigate("/")
-  }
-
   return (
     <div className="flex h-svh flex-col bg-background">
       <header className="sticky top-0 z-40 border-b bg-background shadow-sm">
@@ -216,32 +238,59 @@ export default function PlatformLayout() {
             ))}
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
-            <div className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-input px-2">
-              <Building2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <label htmlFor="tenant" className="sr-only">
-                当前租户
-              </label>
-              <input
-                id="tenant"
-                list={platformTenants ? "tenant-options" : undefined}
-                className="w-24 min-w-0 bg-transparent text-sm outline-none sm:w-36"
-                value={tenantDraft}
-                onChange={(event) => setTenantDraft(event.target.value)}
-                onBlur={commitTenant}
-                onKeyDown={(event) => event.key === "Enter" && commitTenant()}
-              />
-              {platformTenants && (
-                <datalist id="tenant-options">
-                  {platformTenants
-                    .filter((tenant) => tenant.status === "active")
-                    .map((tenant) => (
-                      <option key={tenant.id} value={tenant.id}>
-                        {tenant.name} ({tenant.slug})
-                      </option>
-                    ))}
-                </datalist>
-              )}
-            </div>
+            {/* 当前租户(下拉选择 + 可新建) */}
+            <label htmlFor="tenant-select" className="sr-only">当前租户</label>
+            <select
+              id="tenant-select"
+              value={tenantValue}
+              onChange={(e) => {
+                const v = e.target.value
+                if (!v) return
+                setTenant(v)
+                setTenantValue(v)
+                setEntity("") // 切租户 → 清空实体
+                navigate("/")
+              }}
+              className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
+            >
+              <option value="">选择租户…</option>
+              {(platformTenants ?? []).map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </option>
+              ))}
+            </select>
+            {/* 当前实体(instance):租户下的 entity + 新建 */}
+            <label htmlFor="entity-select" className="sr-only">当前实体</label>
+            <select
+              id="entity-select"
+              value={entityValue}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === "__new__") {
+                  const name = window.prompt("新实体(instance)名称:", "my-instance")
+                  if (name?.trim()) {
+                    void iamApi.createEntity({ type: "instance", name: name.trim(), status: "active", metadata: {} }).then((en) => {
+                      setEntity(en.id)
+                      setEntityValue(en.id)
+                      setTenantEntities((prev) => [...prev, en])
+                    })
+                  }
+                  return
+                }
+                setEntity(v)
+                setEntityValue(v)
+              }}
+              className="h-9 max-w-40 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
+            >
+              <option value="">选择实体…</option>
+              {tenantEntities.map((en) => (
+                <option key={en.id} value={en.id}>
+                  {en.name}
+                </option>
+              ))}
+              <option value="__new__">＋ 新建实体</option>
+            </select>
             {/* 配置管理 */}
             <DropdownMenu>
               <DropdownMenuTrigger

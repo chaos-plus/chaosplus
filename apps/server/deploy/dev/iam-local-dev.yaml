@@ -139,7 +139,7 @@ provisioning:
     http_timeout: 10s # outbound SCIM request timeout
     sync_interval: "0" # background reconciliation interval for outbound SCIM targets; 0 disables
 authz:
-    enabled: false # enable local database-backed authorization
+    enabled: true # enable local database-backed authorization
 plugins:
     enabled: false # enable signed WASM claim plugins
     manifests: [] # JSON plugin manifest paths
