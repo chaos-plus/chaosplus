@@ -14,16 +14,17 @@ import (
 )
 
 const (
-	guardMetadataKey        = "authz.guard"
-	tenantMemberMetadataKey = "authz.tenant-member"
-	platformMetadataKey     = "authz.platform"
-	publicMetadataKey       = "authz.public"
-	GuardExtensionKey       = "x-authz-permission"
-	TenantHeader            = "X-Tenant-Id"
-	BearerScheme            = "bearerAuth"
-	SessionScheme           = "sessionCookie"
-	ClientBasicScheme       = "clientBasic"
-	defaultCookieName       = "cp_session"
+	guardMetadataKey         = "authz.guard"
+	tenantMemberMetadataKey  = "authz.tenant-member"
+	authenticatedMetadataKey = "authz.authenticated"
+	platformMetadataKey      = "authz.platform"
+	publicMetadataKey        = "authz.public"
+	GuardExtensionKey        = "x-authz-permission"
+	TenantHeader             = "X-Tenant-Id"
+	BearerScheme             = "bearerAuth"
+	SessionScheme            = "sessionCookie"
+	ClientBasicScheme        = "clientBasic"
+	defaultCookieName        = "cp_session"
 )
 
 // PermissionChecker is the narrow local authorization capability needed on the request path.
@@ -113,6 +114,45 @@ func RegisterTenantMember[I, O any](r *Registrar, api huma.API, op huma.Operatio
 		op.Middlewares = append(op.Middlewares, r.middleware(api, nil))
 	}
 	huma.Register(api, op, handler)
+}
+
+// RegisterAuthenticated declares an authenticated operation that does NOT bind a
+// tenant (no X-Tenant-Id required, no membership check). Claims are injected so
+// the handler can resolve the caller. Use for personal/cross-tenant queries like
+// "my tenants".
+func RegisterAuthenticated[I, O any](r *Registrar, api huma.API, op huma.Operation, handler func(context.Context, *I) (*O, error)) {
+	if r == nil {
+		panic("authz registrar is nil")
+	}
+	if op.OperationID == "" {
+		panic("authenticated operation requires operation id")
+	}
+	if op.Metadata == nil {
+		op.Metadata = map[string]any{}
+	}
+	op.Metadata[authenticatedMetadataKey] = true
+	r.prepareAuthenticated(api, &op, false)
+	if r.verifier != nil {
+		op.Middlewares = append(op.Middlewares, r.authenticatedOnly(api))
+	}
+	huma.Register(api, op, handler)
+}
+
+// authenticatedOnly verifies the session and injects claims without requiring a
+// tenant selector or membership.
+func (r *Registrar) authenticatedOnly(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		claims, err := r.verifier.Authenticate(ctx.Context(), ctx.Header("Authorization"), ctx.Header("Cookie"))
+		if err != nil {
+			slog.Debug("authn token rejected", "operation", ctx.Operation().OperationID, "err", err)
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		trusted := policyx.WithTrustedContext(ctx.Context(), policyx.TrustedContext{
+			ACR: claims.ACR, AMR: claims.AMR, ClientID: claims.ClientID, NetworkZone: claims.NetworkZone,
+		})
+		next(huma.WithContext(ctx, authn.WithClaims(trusted, claims)))
+	}
 }
 
 // RegisterPlatform declares an authenticated platform operation. Platform
@@ -345,6 +385,11 @@ func isPublic(op *huma.Operation) bool {
 		return false
 	}
 	value, _ := op.Metadata[publicMetadataKey].(bool)
+	return value
+}
+
+func isAuthenticated(op *huma.Operation) bool {
+	value, _ := op.Metadata[authenticatedMetadataKey].(bool)
 	return value
 }
 

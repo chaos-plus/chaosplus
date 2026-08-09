@@ -111,6 +111,24 @@ func (s *TenantService) List(ctx context.Context, includeDeleted bool) ([]Tenant
 	return tenants, nil
 }
 
+// ListByMember 返回指定用户所属的活跃租户(PRD:注册用户=租户主人)。
+func (s *TenantService) ListByMember(ctx context.Context, subject string) ([]Tenant, error) {
+	rows := make([]tenantRow, 0)
+	if err := s.repo.executor.NewRaw(`
+SELECT t.id, t.slug, t.name, t.status, t.version, t.created_at, t.updated_at
+FROM iam_tenants t
+JOIN iam_tenant_members m ON m.tenant_id = t.id AND m.user_subject = ?
+WHERE t.status <> ? AND m.status = 'active'
+ORDER BY t.name ASC, t.id ASC`, subject, TenantDeleted).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("list member tenants: %w", err)
+	}
+	tenants := make([]Tenant, 0, len(rows))
+	for _, row := range rows {
+		tenants = append(tenants, tenantFromRow(row))
+	}
+	return tenants, nil
+}
+
 func (s *TenantService) Get(ctx context.Context, id string) (Tenant, error) {
 	row, err := getTenantRow(ctx, s.repo.executor, strings.TrimSpace(id))
 	if err != nil {

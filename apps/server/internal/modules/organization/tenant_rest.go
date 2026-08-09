@@ -5,10 +5,17 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+type myTenantsInput struct {
+	IncludeDeleted bool `query:"include_deleted" doc:"include deleted tenants"`
+
+	listTenantsInput
+}
 
 type listTenantsInput struct {
 	IncludeDeleted bool `query:"include_deleted"`
@@ -44,6 +51,20 @@ type deletedTenant struct {
 }
 
 func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.Registrar) {
+	// 当前用户自己的租户(登录即可,不要求平台管理员)。解决注册用户无法列出
+	// 自己租户的问题 —— /iam/tenants 是平台级操作。
+	authz.RegisterAuthenticated(registrar, api, huma.Operation{OperationID: "organization-my-tenants", Method: http.MethodGet, Path: "/iam/me/tenants", Summary: "List the caller's tenants", Tags: []string{"organization"}}, func(ctx context.Context, in *myTenantsInput) (*respx.Body[[]Tenant], error) {
+		claims, ok := authn.FromContext(ctx)
+		if !ok || claims.Subject == "" {
+			return nil, errors.New("not authenticated")
+		}
+		items, err := service.ListByMember(ctx, claims.Subject)
+		if err != nil {
+			return nil, tenantError(err)
+		}
+		return respx.OK(ctx, items), nil
+	})
+
 	authz.RegisterPlatform(registrar, api, huma.Operation{OperationID: "organization-list-tenants", Method: http.MethodGet, Path: "/iam/tenants", Summary: "List platform tenants", Tags: []string{"organization"}}, authz.Guard{Resource: "tenant", Verb: "view"}, func(ctx context.Context, in *listTenantsInput) (*respx.Body[[]Tenant], error) {
 		items, err := service.List(ctx, in.IncludeDeleted)
 		if err != nil {
