@@ -35,6 +35,64 @@ import (
 // services (timezone, logging, database), then the application modules through
 // their migrate and start phases. It returns an error so a failed migration or
 // module start aborts startup instead of leaving the app half-initialised.
+// ensureAllTenantOwners 幂等地给所有租户成员补 owner 角色 + tenant_administer,
+// 修复注册于 owner 角色逻辑之前的存量用户(否则管理自己租户会 403)。
+func ensureAllTenantOwners(ctx context.Context, db *bun.DB) error {
+	if db == nil {
+		return nil
+	}
+	var members []struct {
+		TenantID    string
+		UserSubject string
+	}
+	if err := db.NewRaw(`SELECT tenant_id, user_subject FROM iam_tenant_members WHERE status = 'active'`).Scan(ctx, &members); err != nil {
+		return fmt.Errorf("scan tenant members: %w", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	for _, m := range members {
+		err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			role := struct {
+				bun.BaseModel `bun:"table:iam_roles"`
+				TenantID      string
+				ID            string
+				Name          string
+				Description   string
+				CreatedAt     int64
+				UpdatedAt     int64
+			}{TenantID: m.TenantID, ID: "owner", Name: "Owner", Description: "自动创建的租户所有者", CreatedAt: now, UpdatedAt: now}
+			if _, err := tx.NewInsert().Model(&role).Ignore().Exec(ctx); err != nil {
+				return err
+			}
+			perm := struct {
+				bun.BaseModel  `bun:"table:iam_role_permissions"`
+				TenantID       string
+				RoleID         string
+				PermissionCode string
+				ConditionJSON  string
+				CreatedAt      int64
+			}{TenantID: m.TenantID, RoleID: "owner", PermissionCode: "tenant_administer", ConditionJSON: "", CreatedAt: now}
+			if _, err := tx.NewInsert().Model(&perm).Ignore().Exec(ctx); err != nil {
+				return err
+			}
+			rm := struct {
+				bun.BaseModel `bun:"table:iam_role_members"`
+				TenantID      string
+				RoleID        string
+				UserSubject   string
+				CreatedAt     int64
+			}{TenantID: m.TenantID, RoleID: "owner", UserSubject: m.UserSubject, CreatedAt: now}
+			if _, err := tx.NewInsert().Model(&rm).Ignore().Exec(ctx); err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("ensure owner %s/%s: %w", m.TenantID, m.UserSubject, err)
+		}
+	}
+	return nil
+}
+
 // bootstrapTenantForVerifiedUser 给注册激活的用户自动创建一个租户,并把该用户
 // 挂为成员(PRD:每个注册用户是一个租户)。幂等:slug 冲突或成员已存在即跳过。
 func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID, email string) error {
@@ -61,26 +119,26 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 	return db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		tenant := struct {
 			bun.BaseModel `bun:"table:iam_tenants"`
-			ID           string
-			Slug         string
-			Name         string
-			Status       string
-			Version      int64
-			CreatedAt    int64
-			UpdatedAt    int64
+			ID            string
+			Slug          string
+			Name          string
+			Status        string
+			Version       int64
+			CreatedAt     int64
+			UpdatedAt     int64
 		}{ID: tenantID, Slug: slug, Name: email, Status: "active", Version: 1, CreatedAt: now, UpdatedAt: now}
 		if _, err := tx.NewInsert().Model(&tenant).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: create: %w", err)
 		}
 		member := struct {
 			bun.BaseModel `bun:"table:iam_tenant_members"`
-			TenantID    string
-			UserSubject string
-			DisplayName string
-			Email       string
-			Status      string
-			CreatedAt   int64
-			UpdatedAt   int64
+			TenantID      string
+			UserSubject   string
+			DisplayName   string
+			Email         string
+			Status        string
+			CreatedAt     int64
+			UpdatedAt     int64
 		}{TenantID: tenantID, UserSubject: principalID, DisplayName: email, Email: email, Status: "active", CreatedAt: now, UpdatedAt: now}
 		if _, err := tx.NewInsert().Model(&member).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: member: %w", err)
@@ -90,18 +148,18 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		roleID := "owner"
 		role := struct {
 			bun.BaseModel `bun:"table:iam_roles"`
-			TenantID    string
-			ID          string
-			Name        string
-			Description string
-			CreatedAt   int64
-			UpdatedAt   int64
+			TenantID      string
+			ID            string
+			Name          string
+			Description   string
+			CreatedAt     int64
+			UpdatedAt     int64
 		}{TenantID: tenantID, ID: roleID, Name: "Owner", Description: "自动创建的租户所有者", CreatedAt: now, UpdatedAt: now}
 		if _, err := tx.NewInsert().Model(&role).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: role: %w", err)
 		}
 		perm := struct {
-			bun.BaseModel `bun:"table:iam_role_permissions"`
+			bun.BaseModel  `bun:"table:iam_role_permissions"`
 			TenantID       string
 			RoleID         string
 			PermissionCode string
@@ -113,10 +171,10 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		}
 		roleMember := struct {
 			bun.BaseModel `bun:"table:iam_role_members"`
-			TenantID    string
-			RoleID      string
-			UserSubject string
-			CreatedAt   int64
+			TenantID      string
+			RoleID        string
+			UserSubject   string
+			CreatedAt     int64
 		}{TenantID: tenantID, RoleID: roleID, UserSubject: principalID, CreatedAt: now}
 		if _, err := tx.NewInsert().Model(&roleMember).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: role member: %w", err)
@@ -124,7 +182,6 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		return nil
 	})
 }
-
 
 func (app *App) Bootstrap() error {
 
@@ -200,6 +257,12 @@ func (app *App) Bootstrap() error {
 		}
 		app.authnWeb = web
 		app.authnRequest = web
+
+		// 存量用户补 owner:注册于 owner 角色逻辑之前的用户缺 tenant_administer,
+		// 无法管理自己租户(列表/建实体 403)。幂等补上。
+		if err := ensureAllTenantOwners(app.ctx, app.dbr.Write()); err != nil {
+			slog.Warn("ensure existing tenant owners", "err", err)
+		}
 	}
 
 	if app.cfg.Authz.Enabled {
