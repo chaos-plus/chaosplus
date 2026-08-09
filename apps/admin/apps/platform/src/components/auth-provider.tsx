@@ -24,22 +24,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    let active = true
-    void iamApi.session().then(
-      (next) => {
-        if (!active) return
-        setSession(next)
-        setStatus("authenticated")
-      },
-      () => {
-        if (!active) return
-        setSession(null)
-        setStatus("anonymous")
-      }
-    )
-    return () => {
-      active = false
-    }
+    // 平台是本地单用户工具,无登录体系:跳过挂载时的会话探测,直接匿名。
+    // 避免对不存在的 /api/authn/session 发请求产生 404 噪音。
+    setStatus("anonymous")
   }, [])
 
   const finishLogin = useCallback(

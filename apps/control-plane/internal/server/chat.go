@@ -264,7 +264,8 @@ func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agen
 		ID: "msg-" + randHex(8), ChannelID: channelID,
 		AuthorMemberID: agent.ID, AuthorKind: "agent",
 		IdempotencyKey: fmt.Sprintf("%s:agent:%s", channelID, randHex(8)),
-		PayloadJSON:    mustJSON(map[string]any{"text": replyText}),
+		// task 随消息带回,前端失败时可用它「重试」。
+		PayloadJSON: mustJSON(map[string]any{"text": replyText, "task": task}),
 	}
 	_ = cs.st.AppendChannelMessage(ctx, agentMsg)
 }

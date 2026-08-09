@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bot, Hash, MoreHorizontal, Plus, Send, Trash2, User as UserIcon } from "lucide-react"
+import { Bot, Hash, MoreHorizontal, Plus, RotateCw, Send, Trash2, User as UserIcon } from "lucide-react"
+import ReactMarkdown from "react-markdown"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
@@ -20,6 +21,14 @@ function messageText(m: ChannelMessage): string {
     return (JSON.parse(m.payloadJson) as { text?: string }).text ?? ""
   } catch {
     return m.payloadJson
+  }
+}
+
+function messageTask(m: ChannelMessage): string {
+  try {
+    return (JSON.parse(m.payloadJson) as { task?: string }).task ?? ""
+  } catch {
+    return ""
   }
 }
 
@@ -107,6 +116,23 @@ export default function SessionsPage() {
     await controlApi.addMember(channelId, addTarget, kind)
     setAddTarget("")
     void controlApi.members(channelId).then((x) => setMembers(x ?? []))
+  }
+
+  // 重试失败的任务(agent 报错时,消息 payload 带回了 task)。
+  const retryTask = async (task: string) => {
+    if (!channelId || busy) return
+    const hasAgent = members.some((x) => x.kind === "agent")
+    if (hasAgent) {
+      pendingAgentSeq.current = Math.max(0, ...messages.filter((x) => x.authorKind === "agent").map((x) => x.seq))
+      waitingReply.current = true
+      setBusy(true)
+    }
+    try {
+      await controlApi.postMessage(channelId, task)
+      void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
+    } finally {
+      if (!hasAgent) setBusy(false)
+    }
   }
 
   const removeMember = async (memberId: string, kind: string) => {
@@ -284,14 +310,25 @@ export default function SessionsPage() {
                     <span>{timeStr(m.ts)}</span>
                   </div>
                   <div
-                    className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                    className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-black/30 [&_pre]:p-2 [&_pre]:text-xs ${
                       isAgent
                         ? "rounded-tl-sm border border-border bg-muted text-foreground"
                         : "rounded-tr-sm bg-primary text-primary-foreground"
                     }`}
                   >
-                    {messageText(m)}
+                    <ReactMarkdown>{messageText(m)}</ReactMarkdown>
                   </div>
+                  {isAgent && messageText(m).startsWith("⚠️") && messageTask(m) && (
+                    <div className={`mt-1 ${isAgent ? "" : "hidden"}`}>
+                      <button
+                        onClick={() => void retryTask(messageTask(m))}
+                        className="inline-flex items-center gap-1 rounded-full border border-input px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <RotateCw className="size-3" aria-hidden="true" />
+                        重试
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )
