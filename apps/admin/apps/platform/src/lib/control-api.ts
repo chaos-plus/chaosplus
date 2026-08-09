@@ -39,6 +39,12 @@ export interface ChannelMember {
   kind: string
 }
 
+export interface ProgressEntry {
+  ts: number
+  kind: string // message | tool | spawn | done | error
+  content: string
+}
+
 export interface ChannelMessage {
   seq: number
   id: string
@@ -99,6 +105,7 @@ export const controlApi = {
     req<{ ok: boolean }>(`/channels/${id}/members/${memberId}/${kind}`, { method: "DELETE" }),
   members: (id: string) => req<ChannelMember[]>(`/channels/${id}/members`),
   messages: (id: string) => req<ChannelMessage[]>(`/channels/${id}/messages`),
+  execution: (id: string) => req<ProgressEntry[]>(`/channels/${id}/execution`),
   postMessage: (id: string, text: string) =>
     req<{ ok: boolean }>(`/channels/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
 }

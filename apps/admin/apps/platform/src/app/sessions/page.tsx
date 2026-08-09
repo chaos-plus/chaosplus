@@ -13,7 +13,7 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
-import { controlApi, type Agent, type Channel, type ChannelMessage } from "../../lib/control-api"
+import { controlApi, type Agent, type Channel, type ChannelMessage, type ProgressEntry } from "../../lib/control-api"
 
 function messageText(m: ChannelMessage): string {
   try {
@@ -41,6 +41,8 @@ export default function SessionsPage() {
   const [createName, setCreateName] = useState("")
   const [membersOpen, setMembersOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [execOpen, setExecOpen] = useState(false)
+  const [execution, setExecution] = useState<ProgressEntry[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const waitingReply = useRef(false)      // 正在等待 agent 回执
   const pendingAgentSeq = useRef(0)       // 发送时已知的最大 agent 消息 seq
@@ -81,6 +83,15 @@ export default function SessionsPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  // 执行过程弹窗:打开时每秒轮询 agent 实时活动。
+  useEffect(() => {
+    if (!channelId || !execOpen) return
+    const load = () => void controlApi.execution(channelId).then((x) => setExecution(x ?? [])).catch(() => setExecution([]))
+    load()
+    const t = setInterval(load, 1000)
+    return () => clearInterval(t)
+  }, [channelId, execOpen])
 
   const createChannel = async () => {
     if (!createName.trim()) return
@@ -296,6 +307,7 @@ export default function SessionsPage() {
                 <span className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:300ms]" />
                 agent 执行中…
               </span>
+              <Button size="sm" variant="outline" onClick={() => setExecOpen(true)}>查看执行过程</Button>
             </div>
           )}
           <div ref={bottomRef} />
@@ -362,6 +374,34 @@ export default function SessionsPage() {
               {members.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">暂无成员。</p>}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 执行过程 */}
+      <Dialog open={execOpen} onOpenChange={setExecOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Agent 执行过程</DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="h-72 rounded-md border p-3">
+            <div className="space-y-2 text-sm">
+              {execution.map((p, i) => (
+                <div key={i} className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">{new Date(p.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                  {p.kind === "tool" ? (
+                    <span className="text-primary">🔧 {p.content}</span>
+                  ) : p.kind === "error" ? (
+                    <span className="text-destructive">⚠️ {p.content}</span>
+                  ) : p.kind === "done" ? (
+                    <span className="text-green-600">✅ {p.content}</span>
+                  ) : (
+                    <span className="whitespace-pre-wrap text-foreground/90">{p.content}</span>
+                  )}
+                </div>
+              ))}
+              {execution.length === 0 && <p className="text-muted-foreground">暂无执行记录。</p>}
+            </div>
+          </ScrollArea>
         </DialogContent>
       </Dialog>
 

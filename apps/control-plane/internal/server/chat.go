@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,12 +27,41 @@ import (
 type ChatService struct {
 	st     *store.Store
 	link   workflow.RunnerLink
+	g      *gateway.Gateway
 	wsRoot string
 	seq    atomic.Int64
+
+	execMu  sync.Mutex
+	execLog map[string][]ProgressEntry // channelID → 本次 agent 执行的实时活动
 }
 
-func NewChatService(st *store.Store, link workflow.RunnerLink, wsRoot string) *ChatService {
-	return &ChatService{st: st, link: link, wsRoot: wsRoot}
+// ProgressEntry is one agent-activity line surfaced to the frontend (chat
+// execution popup), e.g. a tool call or an agent message.
+type ProgressEntry struct {
+	TS      int64  `json:"ts"`
+	Kind    string `json:"kind"` // message | tool | spawn | done | error
+	Content string `json:"content"`
+}
+
+func NewChatService(st *store.Store, link workflow.RunnerLink, g *gateway.Gateway, wsRoot string) *ChatService {
+	return &ChatService{st: st, link: link, g: g, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry)}
+}
+
+func (cs *ChatService) appendExec(channelID, kind, content string) {
+	cs.execMu.Lock()
+	defer cs.execMu.Unlock()
+	log := cs.execLog[channelID]
+	log = append(log, ProgressEntry{TS: time.Now().UnixMilli(), Kind: kind, Content: content})
+	if n := len(log); n > 300 {
+		log = log[n-300:]
+	}
+	cs.execLog[channelID] = log
+}
+
+func (cs *ChatService) execution(channelID string) []ProgressEntry {
+	cs.execMu.Lock()
+	defer cs.execMu.Unlock()
+	return append([]ProgressEntry(nil), cs.execLog[channelID]...)
 }
 
 func (cs *ChatService) register(mux *http.ServeMux) {
@@ -146,6 +176,9 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, items)
 	})
+	mux.HandleFunc("GET /api/channels/{id}/execution", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, cs.execution(r.PathValue("id")))
+	})
 	mux.HandleFunc("POST /api/channels/{id}/messages", cs.postMessage)
 }
 
@@ -202,7 +235,7 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 // The chat shows the agent's conversational `reply` (or `summary`), NOT the raw
 // output.json — output.json is the machine artifact, not the conversation.
 func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agent *store.AgentSpec, task string) {
-	out, aerr := cs.runAgent(ctx, agent, task)
+	out, aerr := cs.runAgent(ctx, channelID, agent, task)
 	replyText := string(out)
 	if aerr != nil {
 		replyText = "⚠️ " + aerr.Error()
@@ -229,8 +262,10 @@ func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agen
 }
 
 // runAgent executes the agent on the first connected machine, in the channel's
-// workspace, asking it to complete the task and write output.json.
-func (cs *ChatService) runAgent(ctx context.Context, agent *store.AgentSpec, task string) (string, error) {
+// workspace, asking it to complete the task and write output.json. It records the
+// daemon's live activity (messages/tool calls) into the channel's execution log
+// so the frontend can show progress in a popup without disturbing the chat.
+func (cs *ChatService) runAgent(ctx context.Context, channelID string, agent *store.AgentSpec, task string) (string, error) {
 	runners := cs.link.RegisteredRunners()
 	if len(runners) == 0 {
 		return "", errors.New("没有在线的 machine")
@@ -242,21 +277,63 @@ func (cs *ChatService) runAgent(ctx context.Context, agent *store.AgentSpec, tas
 	}
 	spawnID := fmt.Sprintf("chat-%s-%d", agent.ID, cs.seq.Add(1))
 	prompt := fmt.Sprintf("用户任务: %s\n\n请完成任务,并把结果写入 workspace 根目录的 output.json(单个 JSON 对象,含 ok、summary(执行摘要)与 reply(你用聊天口吻给用户的回复,直接回答用户,不要提 output.json))。", task)
-	res, err := cs.link.SpawnAndWait(ctx, runnerID, gateway.Spawn{
+
+	cs.appendExec(channelID, "spawn", "已调度 agent 执行任务…")
+	if err := cs.g.Spawn(ctx, runnerID, gateway.Spawn{
 		RunID: "chat", NodeID: agent.ID, Attempt: 1, SpawnID: spawnID,
 		ExecutorType: agent.Runtime, Prompt: prompt, Cwd: ws, SystemPrompt: agent.SystemPrompt,
-	}, 0, 5*time.Minute)
-	if err != nil {
-		return "", fmt.Errorf("agent 执行失败: %w", err)
+	}); err != nil {
+		cs.appendExec(channelID, "error", "调度失败: "+err.Error())
+		return "", fmt.Errorf("agent 调度失败: %w", err)
 	}
-	if !res.OK {
-		return "", fmt.Errorf("agent 退出码 %d: %s", res.ExitCode, res.Error)
+
+	maxCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	for {
+		select {
+		case ev := <-cs.g.Events():
+			if ev.RunnerID != runnerID {
+				continue
+			}
+			var p struct {
+				SpawnID string `json:"spawnId"`
+				Message string `json:"message"`
+				Event   struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+					Name string `json:"name"`
+				} `json:"event"`
+			}
+			if err := json.Unmarshal(ev.Payload, &p); err != nil {
+				continue
+			}
+			if p.SpawnID != spawnID {
+				continue
+			}
+			switch ev.Type {
+			case "spawn-event":
+				content := p.Event.Text
+				if p.Event.Type == "tool" {
+					content = "🔧 " + p.Event.Name
+				}
+				cs.appendExec(channelID, p.Event.Type, content)
+			case "spawn-done":
+				out, err := cs.link.ReadArtifact(ctx, runnerID, spawnID, "output.json")
+				if err != nil {
+					cs.appendExec(channelID, "error", "读取产物失败")
+					return "", err
+				}
+				cs.appendExec(channelID, "done", "agent 执行完成")
+				return string(out), nil
+			case "spawn-error":
+				cs.appendExec(channelID, "error", p.Message)
+				return "", errors.New(p.Message)
+			}
+		case <-maxCtx.Done():
+			cs.appendExec(channelID, "error", "执行超时")
+			return "", maxCtx.Err()
+		}
 	}
-	out, err := cs.link.ReadArtifact(ctx, runnerID, spawnID, "output.json")
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }
 
 func randHex(n int) string {

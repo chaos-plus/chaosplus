@@ -35,11 +35,12 @@ type wsCommand struct {
 
 // wsEvent is a daemon→control unsolicited event (heartbeat / spawn lifecycle).
 type wsEvent struct {
-	Type     string `json:"type"`
-	SpawnID  string `json:"spawnId,omitempty"`
-	OK       *bool  `json:"ok,omitempty"`
-	ExitCode int    `json:"exitCode,omitempty"`
-	Message  string `json:"message,omitempty"`
+	Type     string          `json:"type"`
+	SpawnID  string          `json:"spawnId,omitempty"`
+	OK       *bool           `json:"ok,omitempty"`
+	ExitCode int             `json:"exitCode,omitempty"`
+	Message  string          `json:"message,omitempty"`
+	Event    json.RawMessage `json:"event,omitempty"` // AgentEvent (message/tool) content, kept for progress
 }
 
 // pendingReq pairs a forwarded command's reqId with the NATS request to answer.

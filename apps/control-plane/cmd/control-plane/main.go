@@ -72,7 +72,7 @@ func main() {
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
-	chat := server.NewChatService(st, link, envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
+	chat := server.NewChatService(st, link, g, envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
 	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}
 	go func() {
