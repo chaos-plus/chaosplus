@@ -109,36 +109,3 @@ func TestBootstrapTenantGrantsOwnerRole(t *testing.T) {
 		t.Fatalf("expected owner role member, got %d", roleMembers)
 	}
 }
-
-// owner 角色与 tenant_administer 权限也要一起建,否则用户只是普通成员,
-// 无法管理自己的租户(/iam/tenants 会 403)。
-func TestBootstrapTenantGrantsOwnerRole(t *testing.T) {
-	ctx := context.Background()
-	db := openTestDB(t)
-	for _, ddl := range []string{
-		`CREATE TABLE iam_roles (tenant_id TEXT, id TEXT, name TEXT, description TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id,id))`,
-		`CREATE TABLE iam_role_permissions (tenant_id TEXT, role_id TEXT, permission_code TEXT, condition_json TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,permission_code))`,
-		`CREATE TABLE iam_role_members (tenant_id TEXT, role_id TEXT, user_subject TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,user_subject))`,
-	} {
-		if _, err := db.Exec(ddl); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
-	if err := bootstrapTenantForVerifiedUser(ctx, db, "pr-owner", "o@chaos.plus"); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
-	var perms int
-	if err := db.NewSelect().Table("iam_role_permissions").Where("permission_code = ?", "tenant_administer").ColumnExpr("COUNT(*)").Scan(ctx, &perms); err != nil {
-		t.Fatalf("count perms: %v", err)
-	}
-	if perms != 1 {
-		t.Fatalf("expected tenant_administer permission, got %d", perms)
-	}
-	var roleMembers int
-	if err := db.NewSelect().Table("iam_role_members").Where("user_subject = ?", "pr-owner").ColumnExpr("COUNT(*)").Scan(ctx, &roleMembers); err != nil {
-		t.Fatalf("count role members: %v", err)
-	}
-	if roleMembers != 1 {
-		t.Fatalf("expected owner role member, got %d", roleMembers)
-	}
-}
