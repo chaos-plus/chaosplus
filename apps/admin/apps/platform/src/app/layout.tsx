@@ -102,13 +102,18 @@ export default function PlatformLayout() {
 
   useEffect(() => {
     if (status !== "authenticated") return
+    // 当前租户:session 里的 organization_id 最可靠(平台级 /iam/tenants 需管理员)。
+    if (session?.organization_id) {
+      setTenantValue(session.organization_id)
+      setTenant(session.organization_id)
+    }
     const refresh = () => {
       void iamApi.tenants().then(setPlatformTenants).catch(() => setPlatformTenants(null))
     }
     refresh()
     window.addEventListener("tenant-catalog-change", refresh)
     return () => window.removeEventListener("tenant-catalog-change", refresh)
-  }, [status])
+  }, [status, session?.organization_id])
 
   useEffect(() => {
     if (!tenantValue) {
@@ -253,7 +258,11 @@ export default function PlatformLayout() {
               }}
               className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
             >
-              <option value="">选择租户…</option>
+              {session?.organization_id && (
+                <option value={session.organization_id}>
+                  {session.organization_id}
+                </option>
+              )}
               {(platformTenants ?? []).map((tenant) => (
                 <option key={tenant.id} value={tenant.id}>
                   {tenant.name}
