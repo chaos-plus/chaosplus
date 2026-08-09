@@ -60,9 +60,11 @@ func TestCrashRecoverRunning(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	for _, id := range []string{"r-running", "r-paused", "r-done"} {
+	for _, id := range []string{"r-running", "r-waiting", "r-paused", "r-done"} {
 		status := "running"
-		if id == "r-paused" {
+		if id == "r-waiting" {
+			status = "waiting_approval"
+		} else if id == "r-paused" {
 			status = "paused"
 		} else if id == "r-done" {
 			status = "completed"
@@ -76,14 +78,15 @@ func TestCrashRecoverRunning(t *testing.T) {
 		t.Fatalf("crash recover: %v", err)
 	}
 	if n != 2 {
-		t.Fatalf("recovered %d runs, want 2", n)
+		t.Fatalf("recovered %d runs, want 2 (running + waiting_approval)", n)
 	}
 	runs, _ := s.ListRuns(ctx, 10)
 	byID := map[string]string{}
 	for _, r := range runs {
 		byID[r.ID] = r.Status
 	}
-	if byID["r-running"] != "failed" || byID["r-paused"] != "failed" || byID["r-done"] != "completed" {
+	// running/waiting_approval → failed; paused (terminal-by-design, F.5) stays.
+	if byID["r-running"] != "failed" || byID["r-waiting"] != "failed" || byID["r-paused"] != "paused" || byID["r-done"] != "completed" {
 		t.Fatalf("crash recovery statuses wrong: %+v", byID)
 	}
 }

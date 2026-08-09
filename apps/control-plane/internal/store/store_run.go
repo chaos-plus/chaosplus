@@ -78,6 +78,15 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]RunRecord, error) {
 	return out, nil
 }
 
+// GetRun returns a single persisted run by ID.
+func (s *Store) GetRun(ctx context.Context, runID string) (RunRecord, error) {
+	var r RunRecord
+	if err := s.db.NewSelect().Model(&r).Where("id = ?", runID).Scan(ctx); err != nil {
+		return r, fmt.Errorf("store get run: %w", err)
+	}
+	return r, nil
+}
+
 // ListNodeExecutions returns a run's node attempts, oldest first.
 func (s *Store) ListNodeExecutions(ctx context.Context, runID string) ([]NodeExecution, error) {
 	out := []NodeExecution{}
@@ -87,13 +96,17 @@ func (s *Store) ListNodeExecutions(ctx context.Context, runID string) ([]NodeExe
 	return out, nil
 }
 
-// CrashRecoverRunning marks any run still mid-flight as failed (the process
-// died mid-run: PRD F.3 infra failure). Returns the count recovered.
+// CrashRecoverRunning marks any run still genuinely mid-flight as failed (the
+// process died mid-run: PRD F.3 infra failure). `paused` is a deliberate
+// terminal outcome (F.5 onReject=pause) and must NOT be flipped to failed;
+// `waiting_approval` runs are stranded by the crash and consumed as failed (the
+// pending decision is lost — documented tradeoff until live rehydration).
+// Returns the count recovered.
 func (s *Store) CrashRecoverRunning(ctx context.Context) (int, error) {
 	res, err := s.db.NewUpdate().Model((*RunRecord)(nil)).
 		Set("status = 'failed'").
 		Set("completed_at = ?", time.Now().UnixMilli()).
-		Where("status IN ('running','waiting_approval','paused')").
+		Where("status IN ('running','waiting_approval')").
 		Exec(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("store crash recover: %w", err)

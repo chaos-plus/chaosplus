@@ -210,17 +210,24 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		run, ok := m.Get(r.PathValue("id"))
-		if !ok {
-			writeErr(w, 404, "run not found")
+		id := r.PathValue("id")
+		run, ok := m.Get(id)
+		if ok {
+			// 返回 run 的静态 DAG(供前端 React Flow 渲染节点/边 + 实时状态)。
+			writeJSON(w, 200, map[string]any{"id": run.ID, "status": run.Status(), "def": run.Def})
 			return
 		}
-		// 返回 run 的静态 DAG(供前端 React Flow 渲染节点/边 + 实时状态)。
-		writeJSON(w, 200, map[string]any{
-			"id":     run.ID,
-			"status": run.Status(),
-			"def":    run.Def,
-		})
+		// 历史 run(重启后保留):从 workflow_runs 重建 DAG 快照(PRD §15.1)。
+		if m.st != nil {
+			if rec, err := m.st.GetRun(r.Context(), id); err == nil {
+				var def workflow.WorkflowDef
+				if json.Unmarshal([]byte(rec.DefSnapshot), &def) == nil {
+					writeJSON(w, 200, map[string]any{"id": rec.ID, "status": RunStatus(rec.Status), "def": &def})
+					return
+				}
+			}
+		}
+		writeErr(w, 404, "run not found")
 	})
 	// PRD D.1 仪表盘:活跃 run 状态分布 / runner 健康 / 待审批队列 / 今日成本。
 	mux.HandleFunc("GET /api/stats/dashboard", func(w http.ResponseWriter, r *http.Request) {

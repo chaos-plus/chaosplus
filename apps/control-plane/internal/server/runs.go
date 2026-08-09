@@ -303,6 +303,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			reg := m.link.RegisteredRunners()
 			if len(reg) == 0 {
 				cancel()
+				m.failPersistedRun(run.ID)
 				return nil, fmt.Errorf("no runner registered; set runnerId or start a daemon")
 			}
 			runnerID = reg[0]
@@ -314,6 +315,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	eng, err := workflow.NewEngine(&def, exec)
 	if err != nil {
 		cancel()
+		m.failPersistedRun(run.ID)
 		return nil, err
 	}
 	m.emit(run, RunEvent{Status: workflow.StatusPending})
@@ -426,6 +428,17 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 			// 事件必须可重放:落库失败要看得见,不能吞。
 			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
 		}
+	}
+}
+
+// failPersistedRun marks a run failed in the store after a launch error, so a
+// run that never started does not linger as an active (running) row.
+func (m *RunManager) failPersistedRun(runID string) {
+	if m.st == nil {
+		return
+	}
+	if err := m.st.UpdateRunStatus(context.Background(), runID, string(RunFailed), time.Now().UnixMilli()); err != nil {
+		slog.Warn("mark failed launch run", "run", runID, "err", err)
 	}
 }
 
