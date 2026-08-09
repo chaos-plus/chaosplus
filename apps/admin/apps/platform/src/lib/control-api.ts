@@ -56,6 +56,17 @@ export interface WorkItem {
   updatedAt: number
 }
 
+/** 结构化拒绝反馈(PRD §13):category 与 detail 必填。 */
+export const FEEDBACK_CATEGORIES = ["功能缺陷", "样式", "需求偏差", "其他"] as const
+export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number]
+
+export interface Feedback {
+  category: FeedbackCategory
+  location?: string
+  expected?: string
+  detail: string
+}
+
 export interface Attachment {
   id: string
   ownerType: string
@@ -119,10 +130,10 @@ export const controlApi = {
   runs: () => req<Run[]>("/runs"),
   launchRun: (workflowJSON: unknown, workspace: string) =>
     req<{ runId: string }>("/runs", { method: "POST", body: JSON.stringify({ workflowJSON, workspace }) }),
-  approve: (runId: string, nodeId: string, approve: boolean, reason?: string) =>
+  approve: (runId: string, nodeId: string, approve: boolean, reason?: string, feedback?: Feedback) =>
     req<{ ok: boolean }>(`/runs/${runId}/approvals/${nodeId}`, {
       method: "POST",
-      body: JSON.stringify({ approve, reason }),
+      body: JSON.stringify({ approve, reason, feedback }),
     }),
 
   // agents (团队管理)

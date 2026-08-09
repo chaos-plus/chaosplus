@@ -29,6 +29,9 @@ export default defineConfig({
       "/control": {
         target: CONTROL_TARGET,
         changeOrigin: true,
+        // run 事件流走 WebSocket(/control/api/runs/:id/events),必须开升级,
+        // 否则前端拿不到节点状态,审批卡片永远不出现。
+        ws: true,
         rewrite: (requestPath) => requestPath.replace(/^\/control/u, ""),
       },
     },

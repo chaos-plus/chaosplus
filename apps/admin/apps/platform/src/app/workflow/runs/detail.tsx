@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from "react"
 import { useParams } from "react-router"
 import { ReactFlow, Background, Controls, Handle, Position, type Edge, type Node, type NodeProps } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
+import { Check, ShieldQuestion, X } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
-import { controlApi } from "../../../lib/control-api"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
+import { Input } from "@workspace/ui/components/input"
+import { Textarea } from "@workspace/ui/components/textarea"
+import { controlApi, FEEDBACK_CATEGORIES, type FeedbackCategory } from "../../../lib/control-api"
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "#5b6270",
@@ -129,11 +133,41 @@ export default function RunDetail() {
     [nodes, statuses],
   )
 
+  const [reject, setReject] = useState<{ nodeId: string } | null>(null)
+  const [fb, setFb] = useState<{ category: FeedbackCategory; location: string; expected: string; detail: string }>({
+    category: "功能缺陷",
+    location: "",
+    expected: "",
+    detail: "",
+  })
+  const [fbError, setFbError] = useState("")
+
   const waitingNodes = flowNodes.filter((n) => (n.data as { status: string }).status === "waiting_approval")
 
-  const decide = async (nodeId: string, approve: boolean) => {
+  const approveNode = async (nodeId: string) => {
     if (!runId) return
-    await controlApi.approve(runId, nodeId, approve)
+    await controlApi.approve(runId, nodeId, true)
+  }
+
+  const submitRejection = async () => {
+    if (!runId || !reject) return
+    if (!fb.detail.trim()) {
+      setFbError("请填写问题描述")
+      return
+    }
+    try {
+      await controlApi.approve(runId, reject.nodeId, false, fb.detail, {
+        category: fb.category,
+        location: fb.location || undefined,
+        expected: fb.expected || undefined,
+        detail: fb.detail.trim(),
+      })
+      setReject(null)
+      setFb({ category: "功能缺陷", location: "", expected: "", detail: "" })
+      setFbError("")
+    } catch (e) {
+      setFbError(e instanceof Error ? e.message : "提交失败")
+    }
   }
 
   if (!detail) return <div className="text-sm text-muted-foreground">加载中…</div>
@@ -146,12 +180,104 @@ export default function RunDetail() {
       </div>
 
       {waitingNodes.map((n) => (
-        <div key={n.id} className="flex items-center gap-2 rounded-md border border-primary/50 p-3 text-sm">
-          <span>审批节点「{n.id}」等待审批:</span>
-          <Button size="sm" onClick={() => decide(n.id, true)}>通过</Button>
-          <Button size="sm" variant="outline" onClick={() => decide(n.id, false)}>拒绝</Button>
+        <div key={n.id} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+          <div className="flex items-start gap-3">
+            <ShieldQuestion className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">审批节点「{n.id}」等待人工确认</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">通过后工作流继续;拒绝需填写结构化反馈,供下一次执行改进。</p>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" className="cursor-pointer gap-1.5" onClick={() => approveNode(n.id)}>
+                  <Check className="size-3.5" />
+                  通过
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="cursor-pointer gap-1.5"
+                  onClick={() => {
+                    setReject({ nodeId: n.id })
+                    setFbError("")
+                  }}
+                >
+                  <X className="size-3.5" />
+                  拒绝
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
       ))}
+
+      <Dialog open={!!reject} onOpenChange={(v) => !v && setReject(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>拒绝审批 —— 填写反馈</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-1.5">
+              <label htmlFor="fb-cat" className="text-sm font-medium">
+                问题类别 <span className="text-destructive">*</span>
+              </label>
+              <select
+                id="fb-cat"
+                value={fb.category}
+                onChange={(e) => setFb({ ...fb, category: e.target.value as FeedbackCategory })}
+                className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
+              >
+                {FEEDBACK_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="fb-loc" className="text-sm font-medium">
+                位置
+              </label>
+              <Input
+                id="fb-loc"
+                value={fb.location}
+                onChange={(e) => setFb({ ...fb, location: e.target.value })}
+                placeholder="如:login.tsx:42 或 结算页"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="fb-exp" className="text-sm font-medium">
+                期望结果
+              </label>
+              <Input
+                id="fb-exp"
+                value={fb.expected}
+                onChange={(e) => setFb({ ...fb, expected: e.target.value })}
+                placeholder="如:点击后跳转首页"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="fb-detail" className="text-sm font-medium">
+                问题描述 <span className="text-destructive">*</span>
+              </label>
+              <Textarea
+                id="fb-detail"
+                rows={3}
+                value={fb.detail}
+                onChange={(e) => setFb({ ...fb, detail: e.target.value })}
+                placeholder="具体哪里不对、怎么复现"
+              />
+            </div>
+            {fbError && <p className="text-sm text-destructive">{fbError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setReject(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" className="cursor-pointer" onClick={submitRejection} disabled={!fb.detail.trim()}>
+              提交拒绝
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="h-[520px] rounded-md border">
         <ReactFlow nodes={flowNodes} edges={edges} nodeTypes={{ flow: FlowNode }} fitView>

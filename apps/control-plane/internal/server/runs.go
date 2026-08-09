@@ -5,6 +5,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -191,10 +193,21 @@ func (m *RunManager) Get(id string) (*Run, bool) {
 	return r, ok
 }
 
+// randRunSuffix returns a short random hex so run IDs stay unique across restarts.
+func randRunSuffix() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "x"
+	}
+	return hex.EncodeToString(b)
+}
+
 func (m *RunManager) newRun(def *workflow.WorkflowDef) *Run {
 	m.mu.Lock()
 	m.seq++
-	id := fmt.Sprintf("run-%d", m.seq)
+	// 进程内计数器 + 随机后缀:重启后计数器归零,若只用序号就会与历史 run 的
+	// 事件主键/幂等键碰撞,导致新事件被静默丢弃(§15.1 事件溯源被破坏)。
+	id := fmt.Sprintf("run-%d-%s", m.seq, randRunSuffix())
 	run := &Run{
 		ID:      id,
 		Def:     def,
@@ -345,14 +358,17 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 	if m.st != nil {
 		typ := storeTypeFor(ev)
 		payload, _ := json.Marshal(ev)
-		_ = m.st.Append(context.Background(), store.Event{
+		if err := m.st.Append(context.Background(), store.Event{
 			ID:             fmt.Sprintf("%s-%d", run.ID, ev.Seq),
 			InstanceID:     "desktop",
 			RunID:          run.ID,
 			Type:           typ,
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, typ, ev.Seq),
 			PayloadJSON:    string(payload),
-		})
+		}); err != nil {
+			// 事件必须可重放:落库失败要看得见,不能吞。
+			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
+		}
 	}
 	run.publish(ev) // local delivery; the NATS round-trip also lands async
 }
