@@ -45,8 +45,8 @@ type Engine struct {
 	def       *WorkflowDef
 	exec      Executor
 	states    map[string]*nodeState
-	out       map[string][]Edge // nodeID -> outgoing edges
-	in        map[string][]Edge // nodeID -> incoming edges
+	out       map[string][]Edge   // nodeID -> outgoing edges
+	in        map[string][]Edge   // nodeID -> incoming edges
 	bodyOf    map[string][]string // loop nodeID -> its body node IDs
 	templates map[string]bool     // fork template node IDs (not scheduled directly)
 	scope     map[string]any      // JSON Logic variable scope (context ∪ outputs)

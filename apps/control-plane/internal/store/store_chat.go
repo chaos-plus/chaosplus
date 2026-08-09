@@ -21,6 +21,7 @@ type AgentSpec struct {
 	Provider      string `bun:"provider,notnull,default:''" json:"provider"`
 	SystemPrompt  string `bun:"system_prompt,notnull,default:''" json:"systemPrompt"`
 	EntityID      string `bun:"entity_id,notnull,default:''" json:"entityId"`
+	OwnerID       string `bun:"owner_id,notnull,default:''" json:"ownerId"`
 	Description   string `bun:"description,notnull,default:''" json:"description"`
 	// MachineID 是数字人所属的 machine(PRD D.4);空表示未绑定。
 	MachineID       string `bun:"machine_id,notnull,default:''" json:"machineId"`
@@ -45,6 +46,9 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentSpec, error) {
 	if e := EntityOf(ctx); e != "" {
 		q = q.Where("entity_id = ?", e)
 	}
+	if o := OwnerOf(ctx); o != "" {
+		q = q.Where("owner_id = ?", o)
+	}
 	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -65,7 +69,7 @@ func (s *Store) UpdateAgent(ctx context.Context, a *AgentSpec) error {
 		Set("runtime = ?", a.Runtime).Set("model = ?", a.Model).
 		Set("provider = ?", a.Provider).Set("system_prompt = ?", a.SystemPrompt).
 		Set("description = ?", a.Description).Set("machine_id = ?", a.MachineID).
-		Set("status = ?", a.Status).Set("default_channels = ?", a.DefaultChannels).
+		Set("status = ?", a.Status).Set("default_channels = ?", a.DefaultChannels).Set("owner_id = ?", a.OwnerID).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("update agent: %w", err)
 	}
@@ -154,6 +158,9 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	q := s.db.NewSelect().Model(&out)
 	if e := EntityOf(ctx); e != "" {
 		q = q.Where("entity_id = ?", e)
+	}
+	if o := OwnerOf(ctx); o != "" {
+		q = q.Where("owner_id = ?", o)
 	}
 	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)

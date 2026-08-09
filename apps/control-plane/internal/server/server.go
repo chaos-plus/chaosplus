@@ -306,6 +306,9 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		if e := r.Header.Get("X-Entity"); e != "" {
 			ctx = store.WithEntity(ctx, e)
 		}
+		if o := r.Header.Get("X-Actor"); o != "" {
+			ctx = store.WithOwner(ctx, o)
+		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

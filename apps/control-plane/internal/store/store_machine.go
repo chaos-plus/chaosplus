@@ -19,6 +19,7 @@ type Machine struct {
 	TokenHash       string `bun:"token_hash,notnull,default:''"`
 	OS              string `bun:"os,notnull,default:''"`
 	EntityID        string `bun:"entity_id,notnull,default:''"`
+	OwnerID         string `bun:"owner_id,notnull,default:''"`
 	RegisteredAt    int64  `bun:"registered_at,notnull,default:0"` // unix ms,首次确认时间
 }
 
@@ -33,7 +34,7 @@ func (s *Store) UpsertMachine(ctx context.Context, m Machine) error {
 		Set("status = EXCLUDED.status").
 		Set("last_heartbeat_at = EXCLUDED.last_heartbeat_at").
 		Set("token_hash = EXCLUDED.token_hash").
-		Set("os = EXCLUDED.os").
+		Set("os = EXCLUDED.os").Set("owner_id = EXCLUDED.owner_id").
 		// registered_at 只在首次写入,重连不刷新。SQLite 的 UPSERT 里裸列名即旧值,
 		// 带表名前缀会被当成未知列。
 		Set("registered_at = CASE WHEN registered_at = 0 THEN EXCLUDED.registered_at ELSE registered_at END").
@@ -44,6 +45,15 @@ func (s *Store) UpsertMachine(ctx context.Context, m Machine) error {
 }
 
 // ListMachines returns all confirmed machines (id ascending).
+// UpdateMachineOwner 给已确认的 machine 绑定 owner(human)。
+func (s *Store) UpdateMachineOwner(ctx context.Context, id, ownerID string) error {
+	if _, err := s.db.NewUpdate().Model(&Machine{}).Where("id = ?", id).
+		Set("owner_id = ?", ownerID).Exec(ctx); err != nil {
+		return fmt.Errorf("update machine owner: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListMachines(ctx context.Context) ([]Machine, error) {
 	out := []Machine{}
 	if err := s.db.NewSelect().Model(&out).Order("id ASC").Scan(ctx); err != nil {

@@ -109,23 +109,23 @@ type FanOutSpec struct {
 
 // ExecutorAgentSpec is a hard-constraint agent contract (PRD §6.1.1).
 type ExecutorAgentSpec struct {
-	ID               string               `json:"id"`
-	Role             string               `json:"role"`
-	Executor         string               `json:"executor"`
-	TokenProfile     string               `json:"tokenProfile,omitempty"`
-	MaxContextTokens int                  `json:"maxContextTokens,omitempty"`
-	SystemPrompt     string               `json:"systemPrompt,omitempty"`
-	AllowedTools     []string             `json:"allowedTools,omitempty"`
-	ForbiddenActions []string             `json:"forbiddenActions,omitempty"`
-	AllowedMCPTools  []string             `json:"allowedMCPTools,omitempty"`
-	RequiredSkills   []string             `json:"requiredSkills,omitempty"`
-	InputSpec        *InputSpec           `json:"inputSpec,omitempty"`
-	OutputSpec       *OutputSpec          `json:"outputSpec,omitempty"`
+	ID               string                  `json:"id"`
+	Role             string                  `json:"role"`
+	Executor         string                  `json:"executor"`
+	TokenProfile     string                  `json:"tokenProfile,omitempty"`
+	MaxContextTokens int                     `json:"maxContextTokens,omitempty"`
+	SystemPrompt     string                  `json:"systemPrompt,omitempty"`
+	AllowedTools     []string                `json:"allowedTools,omitempty"`
+	ForbiddenActions []string                `json:"forbiddenActions,omitempty"`
+	AllowedMCPTools  []string                `json:"allowedMCPTools,omitempty"`
+	RequiredSkills   []string                `json:"requiredSkills,omitempty"`
+	InputSpec        *InputSpec              `json:"inputSpec,omitempty"`
+	OutputSpec       *OutputSpec             `json:"outputSpec,omitempty"`
 	ArtifactSpecs    map[string]ArtifactSpec `json:"artifactSpecs,omitempty"`
-	ValidatorSpecs   []ValidatorSpec      `json:"validatorSpecs,omitempty"`
-	HumanApproval    *HumanApprovalSpec   `json:"humanApproval,omitempty"`
-	Retry            *RetrySpec           `json:"retry,omitempty"`
-	Hooks            *HooksSpec           `json:"hooks,omitempty"`
+	ValidatorSpecs   []ValidatorSpec         `json:"validatorSpecs,omitempty"`
+	HumanApproval    *HumanApprovalSpec      `json:"humanApproval,omitempty"`
+	Retry            *RetrySpec              `json:"retry,omitempty"`
+	Hooks            *HooksSpec              `json:"hooks,omitempty"`
 }
 
 // InputSpec is the in-spec (consumes) of an executor agent.

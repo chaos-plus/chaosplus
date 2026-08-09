@@ -111,6 +111,7 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		}
 		a.ID = "ag-" + randHex(6)
 		a.EntityID = store.EntityOf(r.Context())
+		a.OwnerID = store.OwnerOf(r.Context())
 		if err := cs.st.CreateAgent(r.Context(), &a); err != nil {
 			writeErr(w, 500, err.Error())
 			return
