@@ -85,6 +85,42 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		if _, err := tx.NewInsert().Model(&member).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: member: %w", err)
 		}
+		// 注册用户是该租户的 owner:建角色 + 授予 tenant_administer + 挂角色成员,
+		// 否则 authz 只把他当普通成员,无权管理租户(/iam/tenants 403)。
+		roleID := "owner"
+		role := struct {
+			bun.BaseModel `bun:"table:iam_roles"`
+			TenantID    string
+			ID          string
+			Name        string
+			Description string
+			CreatedAt   int64
+			UpdatedAt   int64
+		}{TenantID: tenantID, ID: roleID, Name: "Owner", Description: "自动创建的租户所有者", CreatedAt: now, UpdatedAt: now}
+		if _, err := tx.NewInsert().Model(&role).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("bootstrap tenant: role: %w", err)
+		}
+		perm := struct {
+			bun.BaseModel `bun:"table:iam_role_permissions"`
+			TenantID       string
+			RoleID         string
+			PermissionCode string
+			ConditionJSON  string
+			CreatedAt      int64
+		}{TenantID: tenantID, RoleID: roleID, PermissionCode: "tenant_administer", ConditionJSON: "", CreatedAt: now}
+		if _, err := tx.NewInsert().Model(&perm).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("bootstrap tenant: permission: %w", err)
+		}
+		roleMember := struct {
+			bun.BaseModel `bun:"table:iam_role_members"`
+			TenantID    string
+			RoleID      string
+			UserSubject string
+			CreatedAt   int64
+		}{TenantID: tenantID, RoleID: roleID, UserSubject: principalID, CreatedAt: now}
+		if _, err := tx.NewInsert().Model(&roleMember).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("bootstrap tenant: role member: %w", err)
+		}
 		return nil
 	})
 }
