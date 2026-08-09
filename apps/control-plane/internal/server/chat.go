@@ -129,6 +129,43 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, a)
 	})
+	// PRD D.4:启动 / 停止(生命周期操作,不改配置)。
+	mux.HandleFunc("POST /api/agents/{id}/status", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, 400, "请求体格式不正确")
+			return
+		}
+		if body.Status != "running" && body.Status != "stopped" {
+			writeErr(w, 400, "status 只能是 running 或 stopped")
+			return
+		}
+		a, err := cs.st.GetAgent(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 404, "agent not found")
+			return
+		}
+		if a.Status == "retired" {
+			writeErr(w, 409, "已注销的数字人不能再启动")
+			return
+		}
+		if body.Status == "running" && a.MachineID == "" {
+			writeErr(w, 400, "启动前需要先指定所属 machine")
+			return
+		}
+		if err := cs.st.SetAgentStatus(r.Context(), a.ID, body.Status); err != nil {
+			slog.Error("set agent status", "agent", a.ID, "err", err)
+			writeErr(w, 500, "更新状态失败")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "status": body.Status})
+	})
+
+	// PRD D.4 / §6.2.1:注销。正常注销产出交接文档;强制注销跳过交接。
+	mux.HandleFunc("POST /api/agents/{id}/retire", cs.retireAgent)
+
 	mux.HandleFunc("DELETE /api/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := cs.st.DeleteAgent(r.Context(), r.PathValue("id")); err != nil {
 			writeErr(w, 500, err.Error())
@@ -1038,6 +1075,74 @@ func (cs *ChatService) updateOkr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, o)
+}
+
+// retireAgent 注销数字人:正常注销生成交接文档并落库(可查),强制注销直接下线。
+// 两种方式都会把 agent 移出活跃列表,并从其所在频道退出。
+func (cs *ChatService) retireAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Force     bool   `json:"force"`
+		Confirm   string `json:"confirm"`   // 强制注销必须回填数字人名称
+		Successor string `json:"successor"` // 接手人 agentID,可空(稍后再定)
+		Reason    string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, "请求体格式不正确")
+		return
+	}
+	a, err := cs.st.GetAgent(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, 404, "agent not found")
+		return
+	}
+	if a.Status == "retired" {
+		writeErr(w, 409, "该数字人已注销")
+		return
+	}
+	if body.Force && body.Confirm != a.Name {
+		writeErr(w, 400, "强制注销需要输入数字人名称二次确认")
+		return
+	}
+
+	doc := ""
+	if !body.Force {
+		doc = buildHandoverDoc(a, body.Successor, body.Reason)
+	}
+	if err := cs.st.RetireAgent(r.Context(), a.ID, doc); err != nil {
+		slog.Error("retire agent", "agent", a.ID, "err", err)
+		writeErr(w, 500, "注销失败")
+		return
+	}
+	// 退出所有频道:注销后不应再被路由到任务。
+	if channels, err := cs.st.ListChannels(r.Context()); err == nil {
+		for _, ch := range channels {
+			_ = cs.st.RemoveChannelMember(r.Context(), ch.ID, a.ID, "agent")
+		}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "handoverDoc": doc})
+}
+
+// buildHandoverDoc 生成交接文档(§6.2.1 正常注销的产出物)。
+func buildHandoverDoc(a *store.AgentSpec, successor, reason string) string {
+	successorText := successor
+	if successorText == "" {
+		successorText = "(稍后指定)"
+	}
+	if reason == "" {
+		reason = "(未填写)"
+	}
+	return fmt.Sprintf(`# 交接文档:%s
+
+- 数字人 ID:%s
+- 职责(系统提示词):%s
+- 描述:%s
+- 所属 machine:%s
+- 运行时:%s / 模型:%s
+- 接手人:%s
+- 注销原因:%s
+- 注销时间:%s
+`, a.Name, a.ID, a.SystemPrompt, a.Description, a.MachineID, a.Runtime, a.Model,
+		successorText, reason, time.Now().Format("2006-01-02 15:04:05"))
 }
 
 // mentionName extracts "@name" from a message (letters/digits/underscore).

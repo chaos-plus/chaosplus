@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { detectBinary } from "./backends/detect";
 import { AgentManager } from "./agents/manager";
 import { WsDaemonTransport } from "./machine/client";
 import type { RunnerCommand, RunnerEvent } from "./nats/transport";
@@ -141,7 +142,19 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
 
 async function main(): Promise<void> {
   await transport.connect(onCommand);
-  await transport.register({ runtime: "bun", pid: String(process.pid), name: NAME });
+  // 上报本机检测到的执行器:控制面据此给"新建数字人"的 runtime 下拉(PRD D.4)。
+  const runtimes = [
+    detectBinary(["claude"], "CLAUDE_BINARY") ? "claude" : "",
+    detectBinary(["codex"], "CODEX_BINARY") ? "codex" : "",
+    "mock",
+  ].filter(Boolean);
+  await transport.register({
+    runtime: "bun",
+    pid: String(process.pid),
+    name: NAME,
+    runtimes: runtimes.join(","),
+  });
+  console.log(`[daemon] detected runtimes: ${runtimes.join(", ")}`);
   console.log(`[daemon] ${NAME} connected to ${SERVER}, awaiting commands`);
 
   // Local web UI is a dev/test surface for 1v1 agent chat — only when explicitly

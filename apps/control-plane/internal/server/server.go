@@ -41,6 +41,16 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			Status          string `json:"status"`
 			Online          bool   `json:"online"`
 			LastHeartbeatAt int64  `json:"lastHeartbeatAt"`
+			// AgentCount 是该机托管的数字人数(PRD D.3 列表列)。
+			AgentCount int `json:"agentCount"`
+			// Runtimes 是该机可用的执行器(数字人表单的 runtime 下拉来源)。
+			Runtimes []string `json:"runtimes"`
+		}
+		counts := map[string]int{}
+		if chat != nil && chat.st != nil {
+			if c, err := chat.st.CountAgentsByMachine(r.Context()); err == nil {
+				counts = c
+			}
 		}
 		out := []msum{}
 		for _, m := range ms {
@@ -48,7 +58,16 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			if name == "" {
 				name = m.ID
 			}
-			out = append(out, msum{ID: m.ID, Name: name, Address: m.Address, Status: m.Status, Online: hub.IsConnected(m.ID), LastHeartbeatAt: m.LastHeartbeatAt})
+			online := hub.IsConnected(m.ID)
+			runtimes := []string{}
+			if online {
+				runtimes = hub.MachineRuntimes(m.ID)
+			}
+			out = append(out, msum{
+				ID: m.ID, Name: name, Address: m.Address, Status: m.Status,
+				Online: online, LastHeartbeatAt: m.LastHeartbeatAt,
+				AgentCount: counts[m.ID], Runtimes: runtimes,
+			})
 		}
 		writeJSON(w, 200, out)
 	})

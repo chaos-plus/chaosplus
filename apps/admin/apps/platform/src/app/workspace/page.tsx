@@ -208,10 +208,10 @@ export default function WorkspacePage() {
                   setCreateFor({ open: true, parent: it.id })
                   setForm({ title: "", description: "", estimateHours: "" })
                 }}
-                title="新建子任务"
                 aria-label={`为 ${it.title} 新建子任务`}
               >
                 <Plus className="size-3.5" />
+                子任务
               </Button>
               <Button
                 size="icon"
@@ -280,7 +280,17 @@ export default function WorkspacePage() {
         )}
       </div>
 
-      <DetailSheet item={detail} onClose={() => setDetail(null)} onChanged={load} onExecute={execute} />
+      <DetailSheet
+        item={detail}
+        onClose={() => setDetail(null)}
+        onChanged={load}
+        onExecute={execute}
+        onAddSubtask={(parentId) => {
+          setDetail(null)
+          setCreateFor({ open: true, parent: parentId })
+          setForm({ title: "", description: "", estimateHours: "" })
+        }}
+      />
 
       <Dialog
         open={createFor.open}
@@ -352,11 +362,13 @@ function DetailSheet({
   onClose,
   onChanged,
   onExecute,
+  onAddSubtask,
 }: {
   item: WorkItem | null
   onClose: () => void
   onChanged: () => void | Promise<void>
   onExecute: (id: string) => void
+  onAddSubtask: (parentId: string) => void
 }) {
   const [atts, setAtts] = useState<Attachment[]>([])
   const [desc, setDesc] = useState("")
@@ -524,6 +536,10 @@ function DetailSheet({
             >
               <CirclePlay className="size-4" />
               执行工作流
+            </Button>
+            <Button variant="outline" className="cursor-pointer gap-1.5" onClick={() => onAddSubtask(item.id)}>
+              <Plus className="size-4" />
+              新建子任务
             </Button>
             <Button variant="ghost" className="cursor-pointer" onClick={onClose}>
               关闭

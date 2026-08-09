@@ -7,6 +7,10 @@ export interface Machine {
   status: string
   online: boolean
   lastHeartbeatAt: number
+  /** 该机托管的数字人数(PRD D.3)。 */
+  agentCount: number
+  /** 该机检测到的执行器,供数字人 runtime 下拉。 */
+  runtimes: string[]
 }
 
 export interface Run {
@@ -24,6 +28,12 @@ export interface Agent {
   model: string
   provider: string
   systemPrompt: string
+  description: string
+  machineId: string
+  status: string // running | stopped | retired
+  defaultChannels: string
+  handoverDoc: string
+  retiredAt: number
   createdAt: number
 }
 
@@ -168,11 +178,15 @@ export const controlApi = {
 
   // agents (团队管理)
   agents: () => req<Agent[]>("/agents"),
-  createAgent: (a: Omit<Agent, "id" | "createdAt">) =>
+  createAgent: (a: Partial<Omit<Agent, "id" | "createdAt">>) =>
     req<Agent>("/agents", { method: "POST", body: JSON.stringify(a) }),
-  updateAgent: (id: string, a: Omit<Agent, "id" | "createdAt">) =>
+  updateAgent: (id: string, a: Partial<Omit<Agent, "id" | "createdAt">>) =>
     req<Agent>(`/agents/${id}`, { method: "PUT", body: JSON.stringify(a) }),
   deleteAgent: (id: string) => req<{ ok: boolean }>(`/agents/${id}`, { method: "DELETE" }),
+  setAgentStatus: (id: string, status: "running" | "stopped") =>
+    req<{ ok: boolean; status: string }>(`/agents/${id}/status`, { method: "POST", body: JSON.stringify({ status }) }),
+  retireAgent: (id: string, body: { force?: boolean; confirm?: string; successor?: string; reason?: string }) =>
+    req<{ ok: boolean; handoverDoc: string }>(`/agents/${id}/retire`, { method: "POST", body: JSON.stringify(body) }),
 
   // channels (会话区)
   channels: () => req<Channel[]>("/channels"),

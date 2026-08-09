@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
@@ -197,5 +198,99 @@ func TestAgentHTTPCRUD(t *testing.T) {
 	}
 	if code := doJSON(t, "DELETE", srv.URL+"/api/agents/"+a.ID, nil, nil); code != 200 {
 		t.Fatalf("delete: %d", code)
+	}
+}
+
+// PRD D.4:数字人生命周期 —— 绑定 machine、启停、注销(交接文档 / 强制二次确认)。
+func TestAgentLifecycleStatusAndRetire(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+	ctx := context.Background()
+
+	var a store.AgentSpec
+	doJSON(t, "POST", srv.URL+"/api/agents",
+		map[string]any{"name": "bot", "runtime": "claude", "systemPrompt": "职责", "description": "desc"}, &a)
+	if a.Status != "stopped" {
+		t.Fatalf("new agent should start stopped, got %q", a.Status)
+	}
+
+	// 未绑定 machine 不能启动。
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/status", map[string]any{"status": "running"}, nil); code != 400 {
+		t.Fatalf("starting without a machine should 400, got %d", code)
+	}
+	// 非法状态被拒。
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/status", map[string]any{"status": "zombie"}, nil); code != 400 {
+		t.Fatalf("invalid status should 400, got %d", code)
+	}
+
+	// 绑定 machine 后可启停。
+	doJSON(t, "PUT", srv.URL+"/api/agents/"+a.ID,
+		map[string]any{"name": "bot", "runtime": "claude", "systemPrompt": "职责", "machineId": "m-1"}, nil)
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/status", map[string]any{"status": "running"}, nil); code != 200 {
+		t.Fatalf("start: %d", code)
+	}
+	if g, _ := st.GetAgent(ctx, a.ID); g.Status != "running" || g.MachineID != "m-1" {
+		t.Fatalf("agent not running on its machine: %+v", g)
+	}
+	// 托管数按 machine 统计。
+	counts, err := st.CountAgentsByMachine(ctx)
+	if err != nil || counts["m-1"] != 1 {
+		t.Fatalf("CountAgentsByMachine = %+v, %v", counts, err)
+	}
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/status", map[string]any{"status": "stopped"}, nil); code != 200 {
+		t.Fatalf("stop: %d", code)
+	}
+
+	// 强制注销必须回填名称。
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/retire", map[string]any{"force": true, "confirm": "nope"}, nil); code != 400 {
+		t.Fatalf("force retire without confirmation should 400, got %d", code)
+	}
+
+	// 正常注销产出交接文档并落库。
+	var res struct {
+		HandoverDoc string `json:"handoverDoc"`
+	}
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/retire",
+		map[string]any{"successor": "peer", "reason": "项目结束"}, &res); code != 200 {
+		t.Fatalf("retire: %d", code)
+	}
+	if !strings.Contains(res.HandoverDoc, "bot") || !strings.Contains(res.HandoverDoc, "peer") {
+		t.Fatalf("handover doc missing agent/successor: %q", res.HandoverDoc)
+	}
+	g, _ := st.GetAgent(ctx, a.ID)
+	if g.Status != "retired" || g.HandoverDoc == "" || g.RetiredAt == 0 {
+		t.Fatalf("retire not persisted: %+v", g)
+	}
+	// 注销后不再计入托管数。
+	counts, _ = st.CountAgentsByMachine(ctx)
+	if counts["m-1"] != 0 {
+		t.Fatalf("retired agent still counted: %+v", counts)
+	}
+	// 重复注销 / 注销后启动都要被拒。
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/retire", map[string]any{}, nil); code != 409 {
+		t.Fatalf("double retire should 409, got %d", code)
+	}
+	if code := doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/status", map[string]any{"status": "running"}, nil); code != 409 {
+		t.Fatalf("starting a retired agent should 409, got %d", code)
+	}
+}
+
+// 注销要把 agent 从所有频道移除,否则还会被路由到任务。
+func TestRetireRemovesAgentFromChannels(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+	ctx := context.Background()
+
+	var a store.AgentSpec
+	doJSON(t, "POST", srv.URL+"/api/agents", map[string]any{"name": "leaver", "runtime": "claude"}, &a)
+	var ch store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "team"}, &ch)
+	doJSON(t, "POST", srv.URL+"/api/channels/"+ch.ID+"/members", map[string]any{"memberId": a.ID, "kind": "agent"}, nil)
+
+	doJSON(t, "POST", srv.URL+"/api/agents/"+a.ID+"/retire", map[string]any{}, nil)
+
+	members, _ := st.ListChannelMembers(ctx, ch.ID)
+	for _, m := range members {
+		if m.Kind == "agent" && m.MemberID == a.ID {
+			t.Fatalf("retired agent still in channel: %+v", members)
+		}
 	}
 }

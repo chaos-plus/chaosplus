@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -87,6 +88,8 @@ type Hub struct {
 	subs    map[string]*nats.Subscription // machineID -> its chaos.runner.{id}.cmd sub
 	pending map[string]bool               // machineID connected with an unconfirmed one-time token
 	names   map[string]string
+	// runtimes 是每台机上报的可用执行器(claude/codex/...),数字人表单据此给下拉。
+	runtimes map[string][]string
 }
 
 func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
@@ -98,6 +101,7 @@ func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
 		subs:     make(map[string]*nats.Subscription),
 		pending:  make(map[string]bool),
 		names:    make(map[string]string),
+		runtimes: make(map[string][]string),
 	}
 }
 
@@ -193,6 +197,9 @@ func (h *Hub) serve(c *daemonConn, sub *nats.Subscription) {
 		case "register":
 			h.mu.Lock()
 			h.names[c.machineID] = m.Meta["name"]
+			if rt := m.Meta["runtimes"]; rt != "" {
+				h.runtimes[c.machineID] = strings.Split(rt, ",")
+			}
 			h.mu.Unlock()
 			// Let the gateway's register subscription see this runner too.
 			reg, _ := json.Marshal(map[string]any{"runnerId": c.machineID, "meta": m.Meta})
@@ -244,6 +251,13 @@ func (h *Hub) IsConnected(machineID string) bool {
 	defer h.mu.Unlock()
 	_, ok := h.conns[machineID]
 	return ok
+}
+
+// MachineRuntimes 返回该机注册时上报的可用执行器列表。
+func (h *Hub) MachineRuntimes(runnerID string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string{}, h.runtimes[runnerID]...)
 }
 
 func (h *Hub) MachineName(runnerID string) string {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
@@ -279,5 +280,52 @@ func TestDashboardStatsDegradesWithoutHubOrStore(t *testing.T) {
 	}
 	if s["machinesTotal"].(float64) != 0 || s["costTodayUsd"].(float64) != 0 {
 		t.Fatalf("expected zeroed stats, got %+v", s)
+	}
+}
+
+// PRD D.3/D.4:machines 列表要带托管 agent 数与可用运行时(runtime 下拉的数据源)。
+func TestMachinesListCarriesAgentCountAndRuntimes(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "mach.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	rm := NewRunManager(nc, nil, st, "runner-1")
+	rm.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
+	if err := rm.Start(ctx); err != nil {
+		t.Fatalf("run manager: %v", err)
+	}
+	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
+	cs := NewChatService(st, nil, nil, rm, "runner-1", t.TempDir())
+	srv := httptest.NewServer(NewHandler(rm, hub, cs))
+	defer srv.Close()
+
+	if err := st.UpsertMachine(ctx, store.Machine{ID: "m-x", Address: "127.0.0.1", Status: "confirmed"}); err != nil {
+		t.Fatalf("seed machine: %v", err)
+	}
+	// 两个 agent 绑到该机,其中一个已注销 —— 注销的不该计入。
+	for _, a := range []*store.AgentSpec{
+		{ID: "ag-1", Name: "a1", Runtime: "claude", MachineID: "m-x", Status: "running"},
+		{ID: "ag-2", Name: "a2", Runtime: "claude", MachineID: "m-x", Status: "retired"},
+	} {
+		if err := st.CreateAgent(ctx, a); err != nil {
+			t.Fatalf("seed agent: %v", err)
+		}
+	}
+
+	var list []map[string]any
+	if code := doJSON(t, "GET", srv.URL+"/api/machines", nil, &list); code != 200 || len(list) != 1 {
+		t.Fatalf("machines: %d %+v", code, list)
+	}
+	if list[0]["agentCount"].(float64) != 1 {
+		t.Fatalf("agentCount should exclude retired agents: %+v", list[0])
+	}
+	// 离线机器没有运行时,但字段必须是数组而非 null。
+	if _, ok := list[0]["runtimes"].([]any); !ok {
+		t.Fatalf("runtimes must be an array, got %T", list[0]["runtimes"])
 	}
 }

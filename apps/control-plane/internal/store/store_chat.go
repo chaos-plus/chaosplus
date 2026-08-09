@@ -20,7 +20,14 @@ type AgentSpec struct {
 	Model         string `bun:"model,notnull,default:''" json:"model"`
 	Provider      string `bun:"provider,notnull,default:''" json:"provider"`
 	SystemPrompt  string `bun:"system_prompt,notnull,default:''" json:"systemPrompt"`
-	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
+	Description   string `bun:"description,notnull,default:''" json:"description"`
+	// MachineID 是数字人所属的 machine(PRD D.4);空表示未绑定。
+	MachineID       string `bun:"machine_id,notnull,default:''" json:"machineId"`
+	Status          string `bun:"status,notnull,default:'stopped'" json:"status"` // running | stopped | retired
+	DefaultChannels string `bun:"default_channels,notnull,default:''" json:"defaultChannels"`
+	HandoverDoc     string `bun:"handover_doc,notnull,default:''" json:"handoverDoc"`
+	RetiredAt       int64  `bun:"retired_at,notnull,default:0" json:"retiredAt"`
+	CreatedAt       int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 }
 
 func (s *Store) CreateAgent(ctx context.Context, a *AgentSpec) error {
@@ -52,10 +59,47 @@ func (s *Store) UpdateAgent(ctx context.Context, a *AgentSpec) error {
 		Set("name = ?", a.Name).Set("kind = ?", a.Kind).
 		Set("runtime = ?", a.Runtime).Set("model = ?", a.Model).
 		Set("provider = ?", a.Provider).Set("system_prompt = ?", a.SystemPrompt).
+		Set("description = ?", a.Description).Set("machine_id = ?", a.MachineID).
+		Set("status = ?", a.Status).Set("default_channels = ?", a.DefaultChannels).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("update agent: %w", err)
 	}
 	return nil
+}
+
+// SetAgentStatus 只改生命周期状态(启动/停止),不碰配置字段。
+func (s *Store) SetAgentStatus(ctx context.Context, id, status string) error {
+	if _, err := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).
+		Set("status = ?", status).Exec(ctx); err != nil {
+		return fmt.Errorf("set agent status: %w", err)
+	}
+	return nil
+}
+
+// RetireAgent 注销数字人:落交接文档 + 置 retired(§6.2.1)。保留记录而不是删除,
+// 交接文档必须可查。
+func (s *Store) RetireAgent(ctx context.Context, id, handoverDoc string) error {
+	if _, err := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).
+		Set("status = ?", "retired").Set("handover_doc = ?", handoverDoc).
+		Set("retired_at = ?", time.Now().UnixMilli()).Exec(ctx); err != nil {
+		return fmt.Errorf("retire agent: %w", err)
+	}
+	return nil
+}
+
+// CountAgentsByMachine 统计每台 machine 托管的数字人数(PRD D.3 列表列)。
+func (s *Store) CountAgentsByMachine(ctx context.Context) (map[string]int, error) {
+	agents, err := s.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	for _, a := range agents {
+		if a.MachineID != "" && a.Status != "retired" {
+			out[a.MachineID]++
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteAgent(ctx context.Context, id string) error {
@@ -69,10 +113,10 @@ func (s *Store) DeleteAgent(ctx context.Context, id string) error {
 // (agents/humans) and an event-sourced message log.
 type Channel struct {
 	bun.BaseModel `bun:"table:channels"`
-	ID           string `bun:"id,pk" json:"id"`
-	InstanceID   string `bun:"instance_id,notnull,default:''" json:"instanceId"`
-	Name         string `bun:"name,notnull" json:"name"`
-	CreatedAt    int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
+	ID            string `bun:"id,pk" json:"id"`
+	InstanceID    string `bun:"instance_id,notnull,default:''" json:"instanceId"`
+	Name          string `bun:"name,notnull" json:"name"`
+	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 }
 
 func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {
