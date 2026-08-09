@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Bot, Hash, Plus, Send, User as UserIcon } from "lucide-react"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { controlApi, type Agent, type Channel, type ChannelMessage } from "../../lib/control-api"
@@ -28,6 +29,8 @@ export default function SessionsPage() {
   const [draft, setDraft] = useState("")
   const [addTarget, setAddTarget] = useState("")
   const [busy, setBusy] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createName, setCreateName] = useState("")
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(() => {
@@ -60,9 +63,10 @@ export default function SessionsPage() {
   }, [messages])
 
   const createChannel = async () => {
-    const name = prompt("频道名称")
-    if (!name?.trim()) return
-    const c = await controlApi.createChannel(name.trim())
+    if (!createName.trim()) return
+    const c = await controlApi.createChannel(createName.trim())
+    setCreateName("")
+    setCreateOpen(false)
     navigate(`/sessions/${c.id}`)
   }
 
@@ -88,16 +92,44 @@ export default function SessionsPage() {
     }
   }
 
+  const channelDialog = (
+    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>新建频道</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          <label className="text-sm font-medium">频道名称</label>
+          <Input
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            placeholder="如:dev-讨论"
+            onKeyDown={(e) => e.key === "Enter" && void createChannel()}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setCreateOpen(false)}>
+            取消
+          </Button>
+          <Button onClick={createChannel} disabled={!createName.trim()}>
+            创建
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
   // ---- 频道列表视图 ----
   if (!channelId) {
     return (
+      <>
       <div className="mx-auto max-w-3xl space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">会话区</h1>
             <p className="text-sm text-muted-foreground">创建 room/channel,邀请 agent 或 human,用聊天完成任务。</p>
           </div>
-          <Button onClick={createChannel}>
+          <Button onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" aria-hidden="true" />
             新建频道
           </Button>
@@ -125,6 +157,8 @@ export default function SessionsPage() {
           )}
         </div>
       </div>
+      {channelDialog}
+      </>
     )
   }
 
@@ -239,6 +273,7 @@ export default function SessionsPage() {
           <span className="sr-only">发送</span>
         </Button>
       </form>
+      {channelDialog}
     </div>
   )
 }

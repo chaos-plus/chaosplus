@@ -25,6 +25,7 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
+import { controlApi, type Channel } from "../lib/control-api"
 import { getTenant, iamApi, setTenant, type Tenant } from "../lib/iam-api"
 
 interface NavItem {
@@ -77,6 +78,7 @@ export default function PlatformLayout() {
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
   const [lang, setLang] = useState<string>(() => localStorage.getItem("platform-lang") ?? "zh")
+  const [channels, setChannels] = useState<Channel[]>([])
 
   useEffect(() => {
     if (status !== "authenticated") return
@@ -97,6 +99,17 @@ export default function PlatformLayout() {
     window.addEventListener("tenant-change", sync)
     return () => window.removeEventListener("tenant-change", sync)
   }, [])
+
+  // 会话区左侧菜单:实时列出频道。
+  useEffect(() => {
+    if (top !== "sessions") return
+    const load = () => {
+      void controlApi.channels().then((x) => setChannels(x ?? [])).catch(() => setChannels([]))
+    }
+    load()
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [top])
 
   // 本地单用户工具:无登录体系,shell 直接渲染(租户默认 platform)。
   if (status === "loading" && session)
@@ -277,6 +290,26 @@ export default function PlatformLayout() {
                 {item.label}
               </NavLink>
             ))}
+            {top === "sessions" && (
+              <div className="mt-2 space-y-0.5 border-t pt-2">
+                {channels.map((c) => (
+                  <NavLink
+                    key={c.id}
+                    to={`/sessions/${c.id}`}
+                    className={({ isActive }) =>
+                      `mb-0.5 flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors ${
+                        isActive
+                          ? "bg-accent/60 text-accent-foreground"
+                          : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+                      }`
+                    }
+                  >
+                    <Hash className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{c.name}</span>
+                  </NavLink>
+                ))}
+              </div>
+            )}
           </nav>
         )}
         <main className="min-w-0 flex-1 overflow-auto">
