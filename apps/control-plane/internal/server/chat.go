@@ -125,6 +125,15 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 			return
 		}
 		a.ID = r.PathValue("id")
+		existing, gerr := cs.st.GetAgent(r.Context(), a.ID)
+		if gerr != nil {
+			writeErr(w, 404, "agent not found")
+			return
+		}
+		if !canManageAgent(r.Header.Get("X-Actor"), existing) {
+			writeErr(w, 403, "只有 agent 创建者可以编辑")
+			return
+		}
 		if err := cs.st.UpdateAgent(r.Context(), &a); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -147,6 +156,10 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		a, err := cs.st.GetAgent(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeErr(w, 404, "agent not found")
+			return
+		}
+		if !canManageAgent(r.Header.Get("X-Actor"), a) {
+			writeErr(w, 403, "只有 agent 创建者可以操作")
 			return
 		}
 		if a.Status == "retired" {
@@ -1108,6 +1121,14 @@ func (cs *ChatService) updateOkr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, o)
+}
+
+// canManageAgent 校验 actor 是否有权编辑/管理该 agent(仅 owner)。
+func canManageAgent(actor string, a *store.AgentSpec) bool {
+	if actor == "" {
+		return true // 无身份上下文(本地模式)放行
+	}
+	return a.OwnerID == "" || a.OwnerID == actor
 }
 
 // retireAgent 注销数字人:正常注销生成交接文档并落库(可查),强制注销直接下线。

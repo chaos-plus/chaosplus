@@ -46,9 +46,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentSpec, error) {
 	if e := EntityOf(ctx); e != "" {
 		q = q.Where("entity_id = ?", e)
 	}
-	if o := OwnerOf(ctx); o != "" {
-		q = q.Where("owner_id = ?", o)
-	}
+	// 实体下所有 agent 可见;编辑/管理由 server 层校验 owner。
 	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -159,9 +157,7 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	if e := EntityOf(ctx); e != "" {
 		q = q.Where("entity_id = ?", e)
 	}
-	if o := OwnerOf(ctx); o != "" {
-		q = q.Where("owner_id = ?", o)
-	}
+	// 实体下所有 agent 可见;编辑/管理由 server 层校验 owner。
 	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)
 	}
