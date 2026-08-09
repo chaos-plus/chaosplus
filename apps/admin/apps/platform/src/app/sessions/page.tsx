@@ -76,10 +76,11 @@ export default function SessionsPage() {
 
   const send = async () => {
     if (!channelId || !draft.trim() || busy) return
+    const text = draft.trim()
+    setDraft("") // 发送瞬间即清空,不等 agent 执行完(控制面同步执行 ~30s)
     setBusy(true)
     try {
-      await controlApi.postMessage(channelId, draft.trim())
-      setDraft("")
+      await controlApi.postMessage(channelId, text)
       await new Promise((r) => setTimeout(r, 600))
       void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
     } finally {
