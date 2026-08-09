@@ -1011,10 +1011,10 @@ export function createIamApi(
         { method: "POST" },
         false
       ),
-    completeEmailVerification: (token: string) =>
+    completeEmailVerification: (token: string, code?: string) =>
       request<{ verified: boolean }>(
         "/authn/email/verification/complete",
-        { method: "POST", body: JSON.stringify({ token }) },
+        { method: "POST", body: JSON.stringify({ token, code }) },
         false
       ),
     mfaStatus: () => request<MfaStatus>("/authn/mfa", {}, false),
