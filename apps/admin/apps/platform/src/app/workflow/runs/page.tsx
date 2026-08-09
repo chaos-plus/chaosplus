@@ -29,8 +29,9 @@ export const smokeWorkflow = {
 export default function RunsPage() {
   const navigate = useNavigate()
   const [runs, setRuns] = useState<Run[]>([])
-  const [workflowJSON, setWorkflowJSON] = useState(JSON.stringify(smokeWorkflow, null, 2))
-  const [workspace, setWorkspace] = useState("C:/tmp/chaos-smoke-ws")
+  // 默认不预填示例,避免用户以为是自己的数据;要演示可点「载入示例」。
+  const [workflowJSON, setWorkflowJSON] = useState("")
+  const [workspace, setWorkspace] = useState("")
   const [busy, setBusy] = useState(false)
 
   // 实时解析工作流 JSON,渲染 React Flow 预览。
