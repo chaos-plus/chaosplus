@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,11 +27,13 @@ import (
 // its deliverable to output.json in the channel's workspace; the result is
 // appended back into the channel as the agent's reply (PRD §9, §23).
 type ChatService struct {
-	st     *store.Store
-	link   workflow.RunnerLink
-	g      *gateway.Gateway
-	wsRoot string
-	seq    atomic.Int64
+	st       *store.Store
+	link     workflow.RunnerLink
+	g        *gateway.Gateway
+	rm       *RunManager
+	runnerID string
+	wsRoot   string
+	seq      atomic.Int64
 
 	execMu  sync.Mutex
 	execLog map[string][]ProgressEntry // channelID → 本次 agent 执行的实时活动
@@ -47,8 +50,8 @@ type ProgressEntry struct {
 	Content string `json:"content"`
 }
 
-func NewChatService(st *store.Store, link workflow.RunnerLink, g *gateway.Gateway, wsRoot string) *ChatService {
-	return &ChatService{st: st, link: link, g: g, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry), agentBusy: make(map[string]int)}
+func NewChatService(st *store.Store, link workflow.RunnerLink, g *gateway.Gateway, rm *RunManager, runnerID, wsRoot string) *ChatService {
+	return &ChatService{st: st, link: link, g: g, rm: rm, runnerID: runnerID, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry), agentBusy: make(map[string]int)}
 }
 
 func (cs *ChatService) busyOf(agentID string) int {
@@ -200,9 +203,9 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/channels/{id}/messages", cs.postMessage)
 
-	// ---- 工作区 work-items(需求/任务/缺陷)+ 群聊订阅 ----
+	// ---- 工作区 work-items(需求/任务/测试/缺陷)+ 执行 + 附件 + OKR + 群聊订阅 ----
 	mux.HandleFunc("GET /api/work-items", func(w http.ResponseWriter, r *http.Request) {
-		items, err := cs.st.ListWorkItems(r.Context(), r.URL.Query().Get("type"), r.URL.Query().Get("status"))
+		items, err := cs.st.ListWorkItems(r.Context(), r.URL.Query().Get("type"), r.URL.Query().Get("status"), r.URL.Query().Get("parent"))
 		if err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -213,6 +216,34 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/work-items/{id}", cs.updateWorkItem)
 	mux.HandleFunc("DELETE /api/work-items/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := cs.st.DeleteWorkItem(r.Context(), r.PathValue("id")); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/work-items/{id}/execute", cs.executeWorkItem)
+	mux.HandleFunc("GET /api/work-items/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		items, err := cs.st.ListAttachments(r.Context(), "work_item", r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
+	})
+	mux.HandleFunc("POST /api/work-items/{id}/attachments", cs.uploadAttachment)
+	mux.HandleFunc("GET /api/attachments/{id}", cs.serveAttachment)
+	mux.HandleFunc("GET /api/okrs", func(w http.ResponseWriter, r *http.Request) {
+		items, err := cs.st.ListOkrs(r.Context())
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
+	})
+	mux.HandleFunc("POST /api/okrs", cs.createOkr)
+	mux.HandleFunc("PUT /api/okrs/{id}", cs.updateOkr)
+	mux.HandleFunc("DELETE /api/okrs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := cs.st.DeleteOkr(r.Context(), r.PathValue("id")); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -545,6 +576,185 @@ func tokenSet(s string) map[string]int {
 	}
 	flush()
 	return set
+}
+
+// executeWorkItem 用工作项上下文发起一个 workflow run,并把进度/状态投影回工作项。
+func (cs *ChatService) executeWorkItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	it, err := cs.st.GetWorkItem(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, "work item not found")
+		return
+	}
+	if it.Status == "in_progress" && it.WorkflowRunID != "" {
+		writeErr(w, 409, "该工作项正在执行中")
+		return
+	}
+	def, ctxJSON := taskWorkflowDef(it)
+	defJSON, _ := json.Marshal(def)
+	workspace := filepath.Join(cs.wsRoot, "workitem-"+it.ID)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	run, err := cs.rm.Launch(r.Context(), LaunchRequest{WorkflowJSON: defJSON, Context: ctxJSON, Workspace: workspace, RunnerID: cs.runnerID})
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	it.Status = "in_progress"
+	it.WorkflowRunID = run.ID
+	_ = cs.st.UpdateWorkItem(r.Context(), it)
+	cs.notifyWorkItemChange(r.Context(), it, "status")
+	go cs.trackRunProgress(it, run)
+	writeJSON(w, 200, map[string]any{"runId": run.ID})
+}
+
+// trackRunProgress 轮询 run 直到终态,把 progress/status/spent_hours 投影回 work_items
+// (RunManager 是内存态,必须持久化投影,事件表仍是重放真相)。
+func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
+	start := time.Now()
+	ctx := context.Background()
+	for {
+		time.Sleep(2 * time.Second)
+		st := run.Status()
+		if st == RunCompleted || st == RunFailed || st == RunPaused {
+			break
+		}
+		evs := run.Events()
+		var done, total int
+		seen := map[string]bool{}
+		for _, ev := range evs {
+			if ev.NodeID == "" || seen[ev.NodeID] {
+				continue
+			}
+			seen[ev.NodeID] = true
+			total++
+			if ev.Status == workflow.StatusCompleted || ev.Status == workflow.StatusFailed {
+				done++
+			}
+		}
+		progress := 0
+		if total > 0 {
+			progress = done * 100 / total
+		}
+		_ = cs.st.UpdateWorkItemRun(ctx, it.ID, progress, "in_progress", time.Since(start).Hours())
+	}
+	final := "done"
+	if run.Status() == RunFailed || run.Status() == RunPaused {
+		final = "review"
+	}
+	_ = cs.st.UpdateWorkItemRun(ctx, it.ID, 100, final, time.Since(start).Hours())
+	it.Status = final
+	cs.notifyWorkItemChange(ctx, it, "status")
+}
+
+// taskWorkflowDef 构造「trigger→agent(完成任务)」的静态 DAG,以工作项为上下文。
+func taskWorkflowDef(it *store.WorkItem) (map[string]any, json.RawMessage) {
+	def := map[string]any{
+		"id": "task-" + it.ID, "version": "1",
+		"nodes": []map[string]any{
+			{"id": "trigger", "type": "trigger", "trigger": map[string]any{"source": "manual"}},
+			{"id": "do", "type": "agent", "agent": map[string]any{
+				"id": "do", "role": "executor", "executor": "claude",
+				"systemPrompt": "你是任务执行 agent。根据 context 里的任务要求完成工作,并把结果写入 workspace 根目录的 output.json(含 ok、summary、reply)。",
+			}},
+		},
+		"edges": []map[string]any{{"from": "trigger", "to": "do"}},
+	}
+	ctx, _ := json.Marshal(map[string]any{"title": it.Title, "description": it.Description, "type": it.Type})
+	return def, ctx
+}
+
+// uploadAttachment 接收 multipart 文件,存控制面 ARTIFACT_ROOT,元数据落库。
+func (cs *ChatService) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(20 << 20); err != nil { // 20MB
+		writeErr(w, 400, "bad multipart: "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, 400, "file field required")
+		return
+	}
+	defer file.Close()
+	root := os.Getenv("ARTIFACT_ROOT")
+	if root == "" {
+		root = filepath.Join(cs.wsRoot, "attachments")
+	}
+	id := "att-" + randHex(8)
+	dir := filepath.Join(root, "attachments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	path := filepath.Join(dir, id)
+	dst, err := os.Create(path)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	n, err := io.Copy(dst, file)
+	dst.Close()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	a := &store.Attachment{
+		ID: id, OwnerType: "work_item", OwnerID: r.PathValue("id"),
+		Filename: header.Filename, Mime: header.Header.Get("Content-Type"),
+		SizeBytes: n, StorePath: path,
+	}
+	if a.Mime == "" {
+		a.Mime = "application/octet-stream"
+	}
+	if err := cs.st.CreateAttachment(r.Context(), a); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, a)
+}
+
+// serveAttachment 按 id 返回文件(路径仅来自 DB,杜绝客户端路径注入)。
+func (cs *ChatService) serveAttachment(w http.ResponseWriter, r *http.Request) {
+	a, err := cs.st.GetAttachment(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, 404, "attachment not found")
+		return
+	}
+	w.Header().Set("Content-Type", a.Mime)
+	http.ServeFile(w, r, a.StorePath)
+}
+
+func (cs *ChatService) createOkr(w http.ResponseWriter, r *http.Request) {
+	var o store.Okr
+	if err := json.NewDecoder(r.Body).Decode(&o); err != nil || o.Title == "" {
+		writeErr(w, 400, "title is required")
+		return
+	}
+	o.ID = "okr-" + randHex(6)
+	if o.KeyResults == "" {
+		o.KeyResults = "[]"
+	}
+	if err := cs.st.CreateOkr(r.Context(), &o); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, o)
+}
+
+func (cs *ChatService) updateOkr(w http.ResponseWriter, r *http.Request) {
+	var o store.Okr
+	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	o.ID = r.PathValue("id")
+	if err := cs.st.UpdateOkr(r.Context(), &o); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, o)
 }
 
 // mentionName extracts "@name" from a message (letters/digits/underscore).

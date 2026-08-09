@@ -11,16 +11,21 @@ import (
 // WorkItem is a workspace item (requirement / task / bug) — the system of record
 // that chat channels reference and subscribe to.
 type WorkItem struct {
-	bun.BaseModel `bun:"table:work_items"`
-	ID            string `bun:"id,pk" json:"id"`
-	Type          string `bun:"type,notnull,default:'task'" json:"type"`
-	Title         string `bun:"title,notnull" json:"title"`
-	Description   string `bun:"description,notnull,default:''" json:"description"`
-	Status        string `bun:"status,notnull,default:'open'" json:"status"`
-	AssigneeAgent string `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
-	ChannelID     string `bun:"channel_id,notnull,default:''" json:"channelId"`
-	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
-	UpdatedAt     int64  `bun:"updated_at,notnull,default:0" json:"updatedAt"`
+	bun.BaseModel  `bun:"table:work_items"`
+	ID             string  `bun:"id,pk" json:"id"`
+	Type           string  `bun:"type,notnull,default:'task'" json:"type"`
+	Title          string  `bun:"title,notnull" json:"title"`
+	Description    string  `bun:"description,notnull,default:''" json:"description"`
+	Status         string  `bun:"status,notnull,default:'open'" json:"status"`
+	ParentID       string  `bun:"parent_id,notnull,default:''" json:"parentId"`
+	EstimateHours  float64 `bun:"estimate_hours,notnull,default:0" json:"estimateHours"`
+	SpentHours     float64 `bun:"spent_hours,notnull,default:0" json:"spentHours"`
+	Progress       int     `bun:"progress,notnull,default:0" json:"progress"`
+	WorkflowRunID  string  `bun:"workflow_run_id,notnull,default:''" json:"workflowRunId"`
+	AssigneeAgent  string  `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
+	ChannelID      string  `bun:"channel_id,notnull,default:''" json:"channelId"`
+	CreatedAt      int64   `bun:"created_at,notnull,default:0" json:"createdAt"`
+	UpdatedAt      int64   `bun:"updated_at,notnull,default:0" json:"updatedAt"`
 }
 
 func (s *Store) CreateWorkItem(ctx context.Context, w *WorkItem) error {
@@ -32,7 +37,7 @@ func (s *Store) CreateWorkItem(ctx context.Context, w *WorkItem) error {
 	return nil
 }
 
-func (s *Store) ListWorkItems(ctx context.Context, itemType, status string) ([]WorkItem, error) {
+func (s *Store) ListWorkItems(ctx context.Context, itemType, status, parent string) ([]WorkItem, error) {
 	out := []WorkItem{}
 	q := s.db.NewSelect().Model(&out)
 	if itemType != "" {
@@ -40,6 +45,9 @@ func (s *Store) ListWorkItems(ctx context.Context, itemType, status string) ([]W
 	}
 	if status != "" {
 		q = q.Where("status = ?", status)
+	}
+	if parent != "" {
+		q = q.Where("parent_id = ?", parent)
 	}
 	if err := q.Order("updated_at DESC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list work items: %w", err)
@@ -59,10 +67,25 @@ func (s *Store) UpdateWorkItem(ctx context.Context, w *WorkItem) error {
 	w.UpdatedAt = time.Now().UnixMilli()
 	if _, err := s.db.NewUpdate().Model(w).Where("id = ?", w.ID).
 		Set("type = ?", w.Type).Set("title = ?", w.Title).Set("description = ?", w.Description).
-		Set("status = ?", w.Status).Set("assignee_agent = ?", w.AssigneeAgent).
+		Set("status = ?", w.Status).Set("parent_id = ?", w.ParentID).
+		Set("estimate_hours = ?", w.EstimateHours).Set("spent_hours = ?", w.SpentHours).
+		Set("progress = ?", w.Progress).Set("workflow_run_id = ?", w.WorkflowRunID).
+		Set("assignee_agent = ?", w.AssigneeAgent).
 		Set("channel_id = ?", w.ChannelID).Set("updated_at = ?", w.UpdatedAt).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("update work item: %w", err)
+	}
+	return nil
+}
+
+// UpdateWorkItemRun 只在 run 推进时更新 progress/status/spent_hours(投影,不覆盖人工字段)。
+func (s *Store) UpdateWorkItemRun(ctx context.Context, id string, progress int, status string, spentHours float64) error {
+	now := time.Now().UnixMilli()
+	if _, err := s.db.NewUpdate().Model(&WorkItem{}).Where("id = ?", id).
+		Set("progress = ?", progress).Set("status = ?", status).
+		Set("spent_hours = ?", spentHours).Set("updated_at = ?", now).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("update work item run: %w", err)
 	}
 	return nil
 }
