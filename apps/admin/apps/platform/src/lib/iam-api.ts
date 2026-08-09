@@ -1198,6 +1198,7 @@ export function createIamApi(
         { method: "POST", body: JSON.stringify(body) },
         false
       ),
+    myTenants: () => request<Tenant[]>("/iam/me/tenants", {}, false),
     tenants: (includeDeleted = false) =>
       request<Tenant[]>(
         `/iam/tenants?include_deleted=${includeDeleted}`,

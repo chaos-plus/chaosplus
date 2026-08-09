@@ -107,8 +107,16 @@ export default function PlatformLayout() {
       setTenantValue(session.organization_id)
       setTenant(session.organization_id)
     }
+    // 登录用户自己的租户(注册即自动创建);平台级 /iam/tenants 需管理员。
     const refresh = () => {
-      void iamApi.tenants().then(setPlatformTenants).catch(() => setPlatformTenants(null))
+      void iamApi.myTenants().then((x) => {
+        setPlatformTenants(x ?? [])
+        const mine = (x ?? [])[0]
+        if (mine && !session?.organization_id && !getEntity()) {
+          setTenantValue(mine.id)
+          setTenant(mine.id)
+        }
+      }).catch(() => setPlatformTenants(null))
     }
     refresh()
     window.addEventListener("tenant-catalog-change", refresh)
