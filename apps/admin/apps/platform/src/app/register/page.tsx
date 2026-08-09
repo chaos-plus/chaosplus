@@ -218,7 +218,7 @@ function PasswordField({
 function registrationError(cause: unknown): string {
   if (!(cause instanceof ApiError)) return "身份服务暂时不可用"
   if (cause.status === 403) return "请从已配置的应用地址发起注册"
-  if (cause.status === 422) return "请输入有效邮箱和至少 12 个字符的密码"
+  if (cause.status === 422) return "请输入有效邮箱和至少 8 个字符的密码"
   if (cause.status === 503) return "当前未开放自助注册"
   return "身份服务暂时不可用"
 }
