@@ -70,7 +70,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Append/update the relevant entry: what was done, why, and any non-obvious context needed to resume.
 - Keep it concise — record what helps recover work later, not what the code, git history, or `.rules/` already capture. Rule bodies live in `.rules/`; memory keeps only pointers.
 
-**Shared specs live in `.rules/` at the repo root** (moved out of `docs/.rules/`), shared by `apps/`, `docs/`, and `.claude/skills/`. Reference them as repo-root-relative `.rules/<file>.md`.
+**Shared specs live in `.rules/` at the repo root** (moved out of `docs/.rules/`), shared by `apps/` and `.claude/skills/`. Reference them as repo-root-relative `.rules/<file>.md`.
 
 **When in doubt, follow `.rules/`.** If a task, PRD, skill, or even this file says something different from `.rules/<file>.md`, use `.rules/` as the source of truth. Record the discrepancy in `MEMORY.md` so it can be resolved explicitly.
 

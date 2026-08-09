@@ -25,7 +25,7 @@ Use every matching domain skill:
 | --- | --- |
 | `cmd/**`, `internal/**`, `pkg/**`, `go.mod`, `go.sum`, backend deployment | `$dev-backend` |
 | `apps/admin/**`, frontend container or proxy | `$dev-frontend` |
-| `docs/**`, `docs/**`, `README.md` | `$dev-docs` |
+| `apps/docs/**`, `README.md` | `$dev-docs` |
 | `.claude/**`, `AGENTS.md`, `.github/**`, cross-domain release | `$dev-quality-gate` plus every affected domain |
 
 When a contract crosses domains, inspect the producer first, then the consumers. For example, backend OpenAPI precedes the frontend API client and public docs.

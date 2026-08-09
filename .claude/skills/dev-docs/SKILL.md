@@ -11,8 +11,8 @@ Maintain an understandable, executable documentation system: readers must be abl
 
 1. Run `python .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh` from the repository root.
 2. Read `../dev-quality-gate/references/repository-facts.md` and `references/lessons.md`.
-3. Treat root `README.md` and `docs/*.md` as authoritative engineering documents.
-4. Treat `docs` as the Astro/Starlight publication layer. Use its sync script for mirrored source pages; do not hand-edit generated copies.
+3. Treat root `README.md` and `apps/docs/*.md` as authoritative engineering documents.
+4. Treat `apps/docs` as the Astro/Starlight publication layer. Use its sync script for mirrored source pages; do not hand-edit generated copies.
 5. Verify claims in production code, tests, configuration structs, migrations, and OpenAPI output.
 
 Do not retain SevenLink product names, mall-specific assumptions, Figma ledgers, routes, or business rules merely because the site engine was copied from that project.

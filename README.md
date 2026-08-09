@@ -1,12 +1,12 @@
 # Chaosplus API
 
 IAM 的纯自研目标架构、模块边界、数据模型和迁移计划见
-[架构文档](docs/architecture/iam-platform/)。
+[架构文档](apps/docs/architecture/iam-platform/)。
 访问申请、四眼审批与临时授权契约见
-[访问治理](docs/iam/access-governance/)。
+[访问治理](apps/docs/iam/access-governance/)。
 
 Production bootstrap, Docker Compose quick start, TLS, and external-service
-configuration are documented in [部署指南](docs/operations/deployment/).
+configuration are documented in [部署指南](apps/docs/operations/deployment/).
 
 Go backend for Chaosplus. It exposes an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0)
 HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over a
@@ -44,10 +44,10 @@ HTTP API built with [huma v2](https://github.com/danielgtaylor/huma) served over
   use the configured primary database. Native SCIM 2.0 inbound provisioning provides
   tenant-bound directories, hashed Bearer credentials, Users, Groups, PATCH, Bulk,
   filtering, discovery, ETags, deprovisioning, and transactional audit; see
-  [docs/scim-provisioning.md](docs/scim-provisioning.md).
+  [docs/scim-provisioning.md](apps/docs/scim-provisioning.md).
 - **Signed WebAssembly claim plugins** — capability-limited WASM modules can enrich
   issued JWT claims under an Ed25519-signed manifest; see
-  [docs/plugin-system.md](docs/plugin-system.md).
+  [docs/plugin-system.md](apps/docs/plugin-system.md).
 - **Feature modules** — the composition root (`internal/app/modules.go`) wires
   identity, authn, OAuth, IAM, organization, provisioning, governance, audit, GUID and GeoIP modules.
   Supporting infrastructure includes WUID worker leases and distributed

@@ -8,7 +8,7 @@ quality gates. Pull requests must keep every gate green.
 - `apps/server/` — Go backend. Domain code lives in
   `apps/server/internal/modules/<module>`; every module registers its own i18n catalog.
 - `apps/admin` — React admin console (Bun/Turborepo workspace).
-- `docs/` — documentation site (Astro/Starlight).
+- `apps/docs/` — documentation site (Astro/Starlight).
 - `.claude/skills/` — agent skills; the quality gate is
   `.claude/skills/dev-quality-gate`.
 

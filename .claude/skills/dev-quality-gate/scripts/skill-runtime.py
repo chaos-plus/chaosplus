@@ -129,7 +129,7 @@ def render_repository_facts(repo_root: Path) -> str:
 
     admin = _read_json(repo_root / "apps" / "admin" / "package.json")
     admin_app = _read_json(repo_root / "apps" / "admin" / "apps" / "web" / "package.json")
-    docs = _read_json(repo_root / "docs" / "package.json")
+    docs = _read_json(repo_root / "apps" / "docs" / "package.json")
     workspaces = ", ".join(str(value) for value in admin["workspaces"])
 
     return f"""# Dev Repository Facts
@@ -160,10 +160,10 @@ This file is generated from repository manifests and source trees. Do not edit i
 ## Documentation
 
 - Package: `{docs['name']}`
-- Site: `docs`
+- Site: `apps/docs`
 - Generator: Astro {docs['dependencies']['astro']}
 - Theme: Starlight {docs['dependencies']['@astrojs/starlight']}
-- Authoritative engineering sources: `README.md` and `docs/*.md`
+- Authoritative engineering sources: `README.md` and `apps/docs/*.md`
 
 ## Required Invariants
 

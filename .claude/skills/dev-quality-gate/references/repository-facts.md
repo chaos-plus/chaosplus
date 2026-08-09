@@ -26,10 +26,10 @@ This file is generated from repository manifests and source trees. Do not edit i
 ## Documentation
 
 - Package: `dev-docs`
-- Site: `docs`
+- Site: `apps/docs`
 - Generator: Astro ^7.0.2
 - Theme: Starlight ^0.41.3
-- Authoritative engineering sources: `README.md` and `docs/*.md`
+- Authoritative engineering sources: `README.md` and `apps/docs/*.md`
 
 ## Required Invariants
 

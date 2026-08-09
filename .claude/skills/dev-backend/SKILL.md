@@ -12,7 +12,7 @@ Build backend changes that preserve the repository's modular Go architecture and
 1. Run `python .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh` from the repository root.
 2. Read `../dev-quality-gate/references/repository-facts.md`.
 3. Read the nearest production files and their exact-name tests before editing.
-4. Read the relevant architecture document under `docs/`; use `docs/iam-platform-architecture.md` for IAM boundaries.
+4. Read the relevant architecture document under `apps/docs/`; use `apps/docs/iam-platform-architecture.md` for IAM boundaries.
 5. Read `references/lessons.md` when the task touches a previously recorded failure class.
 
 Never infer a contract from test names, old deployment files, or copied projects when production code provides the answer.

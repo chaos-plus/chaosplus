@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           test -z "$(find internal/app -type f \( -name '*.yml' -o -name '*.yaml' \) -print)"
-          ! rg -n 'CHAOSPLUS_DATABASE_TYPE' --glob '!docs/**' --glob '!README.md' .
+          ! rg -n 'CHAOSPLUS_DATABASE_TYPE' --glob '!apps/docs/**' --glob '!README.md' .
           while IFS= read -r test_file; do
             implementation="${test_file%_test.go}.go"
             test -f "$implementation" || { echo "missing $implementation for $test_file"; exit 1; }
@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: docs
+        working-directory: apps/docs
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -184,7 +184,7 @@ jobs:
       - name: Build admin image
         run: docker build --tag chaosplus-admin:ci apps/admin
       - name: Build documentation image
-        run: docker build --tag dev-docs:ci docs
+        run: docker build --tag dev-docs:ci apps/docs
 
   skills:
     runs-on: ubuntu-latest

@@ -185,7 +185,7 @@ function Resolve-Scopes {
     return @{
         backend = [bool]($paths | Where-Object { $_ -match '^(cmd|internal|pkg|deploy)/|^go\.(mod|sum)$|^Dockerfile$|^\.claude/skills/dev-backend/' })
         frontend = [bool]($paths | Where-Object { $_ -match '^apps/admin/|^\.claude/skills/dev-frontend/' })
-        docs = [bool]($paths | Where-Object { $_ -match '^(docs|docs)/|^README\.md$|^\.claude/skills/dev-docs/' })
+        docs = [bool]($paths | Where-Object { $_ -match '^apps/docs/|^README\.md$|^\.claude/skills/dev-docs/' })
     }
 }
 
