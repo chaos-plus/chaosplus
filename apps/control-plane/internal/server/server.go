@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -186,8 +187,25 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			CreatedAt string    `json:"createdAt"`
 		}
 		out := []sum{}
+		seen := map[string]bool{}
 		for _, run := range m.List() {
+			seen[run.ID] = true
 			out = append(out, sum{ID: run.ID, Status: run.Status(), Nodes: len(run.Def.Nodes), CreatedAt: run.created.Format("2006-01-02 15:04:05")})
+		}
+		// Historical runs survive restarts via workflow_runs (PRD §15.1).
+		if m.st != nil {
+			if recs, err := m.st.ListRuns(r.Context(), 200); err != nil {
+				slog.Warn("list persisted runs", "err", err)
+			} else {
+				for _, rec := range recs {
+					if seen[rec.ID] {
+						continue
+					}
+					out = append(out, sum{ID: rec.ID, Status: RunStatus(rec.Status),
+						Nodes:     nodeCountFromSnapshot(rec.DefSnapshot),
+						CreatedAt: time.UnixMilli(rec.StartedAt).Format("2006-01-02 15:04:05")})
+				}
+			}
 		}
 		writeJSON(w, 200, out)
 	})

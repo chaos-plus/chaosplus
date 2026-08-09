@@ -217,6 +217,50 @@ func TestRunManagerWritesReviewProjections(t *testing.T) {
 	}
 }
 
+// PRD §15.1: a launched run is persisted and survives as history.
+func TestRunManagerPersistsRunToStore(t *testing.T) {
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	m := NewRunManager(nc, nil, st, "runner-1")
+	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	run, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: json.RawMessage(testDefRaw), Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
+	if err := m.Approve(run.ID, "ap", true, "", nil); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
+
+	recs, err := st.ListRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(recs) != 1 || recs[0].ID != run.ID || recs[0].Status != "completed" {
+		t.Fatalf("persisted run = %+v, want %s completed", recs, run.ID)
+	}
+	nodes, err := st.ListNodeExecutions(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list node executions: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("expected node executions persisted, got %d", len(nodes))
+	}
+}
+
 func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())

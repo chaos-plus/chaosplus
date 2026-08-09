@@ -46,6 +46,13 @@ func main() {
 			log.Fatalf("open store: %v", err)
 		}
 		defer st.Close()
+		// Crash recovery: a previous process that died mid-run left runs in a
+		// non-terminal state — mark them failed so history is consistent (§15.1).
+		if n, err := st.CrashRecoverRunning(ctx); err != nil {
+			log.Printf("crash recovery: %v", err)
+		} else if n > 0 {
+			log.Printf("crash recovery: marked %d in-flight run(s) as failed", n)
+		}
 		g.OnEvent(func(ev gateway.RunnerEvent) {
 			payload, _ := json.Marshal(ev.Payload)
 			_ = st.Append(ctx, store.Event{

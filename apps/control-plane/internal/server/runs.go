@@ -267,6 +267,17 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	}
 
 	run := m.newRun(&def)
+	// Persist the run so it survives a restart as history and enables crash
+	// recovery of in-flight runs (PRD §15.1/§16).
+	if m.st != nil {
+		snap, _ := json.Marshal(def)
+		if err := m.st.CreateRun(context.Background(), store.RunRecord{
+			ID: run.ID, WorkflowID: def.ID, WorkflowVer: def.Version,
+			DefSnapshot: string(snap), Status: string(RunRunning), Workspace: req.Workspace,
+		}); err != nil {
+			slog.Warn("persist run", "run", run.ID, "err", err)
+		}
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	run.mu.Lock()
 	run.cancel = cancel
@@ -319,6 +330,11 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		}
 		_, err := eng.Run(runCtx, req.Context)
 		run.setStatus(m.finalStatus(run, err))
+		if m.st != nil {
+			if err := m.st.UpdateRunStatus(context.Background(), run.ID, string(run.Status()), time.Now().UnixMilli()); err != nil {
+				slog.Warn("persist run status", "run", run.ID, "err", err)
+			}
+		}
 	}()
 	return run, nil
 }
@@ -355,6 +371,16 @@ func (m *RunManager) finalStatus(run *Run, err error) RunStatus {
 	return RunCompleted
 }
 
+// nodeCountFromSnapshot counts the nodes in a persisted def snapshot (best
+// effort; 0 on a malformed snapshot).
+func nodeCountFromSnapshot(snap string) int {
+	var def workflow.WorkflowDef
+	if err := json.Unmarshal([]byte(snap), &def); err != nil {
+		return 0
+	}
+	return len(def.Nodes)
+}
+
 func nodeByID(def *workflow.WorkflowDef, id string) *workflow.Node {
 	for i := range def.Nodes {
 		if def.Nodes[i].ID == id {
@@ -381,6 +407,7 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 	ev.Seq = run.nextSeq()
 	ev.RunID = run.ID
 	run.publish(ev)
+	m.persistNodeExecution(run, ev)
 	data, _ := json.Marshal(ev)
 	if err := m.nc.Publish(runSubjectPrefix+run.ID+".evt", data); err != nil {
 		slog.Warn("publish run event", "err", err)
@@ -399,6 +426,25 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 			// 事件必须可重放:落库失败要看得见,不能吞。
 			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
 		}
+	}
+}
+
+// persistNodeExecution mirrors a node lifecycle event into the node_executions
+// projection (PRD §16). Best-effort; the events table remains authoritative.
+func (m *RunManager) persistNodeExecution(run *Run, ev RunEvent) {
+	if m.st == nil || ev.NodeID == "" {
+		return
+	}
+	completedAt := int64(0)
+	switch ev.Status {
+	case workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusSkipped, workflow.StatusRetrying:
+		completedAt = time.Now().UnixMilli()
+	}
+	if err := m.st.UpsertNodeExecution(context.Background(), store.NodeExecution{
+		RunID: run.ID, NodeID: ev.NodeID, Attempt: 1,
+		Status: string(ev.Status), Error: ev.Error, CompletedAt: completedAt,
+	}); err != nil {
+		slog.Warn("persist node execution", "run", run.ID, "node", ev.NodeID, "err", err)
 	}
 }
 
