@@ -104,6 +104,8 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 			writeErr(w, 500, err.Error())
 			return
 		}
+		// 创建者自动加入频道(当前 human)。
+		_ = cs.st.AddChannelMember(r.Context(), c.ID, "human", "human")
 		writeJSON(w, 201, c)
 	})
 	mux.HandleFunc("POST /api/channels/{id}/members", func(w http.ResponseWriter, r *http.Request) {
