@@ -199,10 +199,25 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 // runAgentReply executes an agent in the background and appends its reply.
+// The chat shows the agent's conversational `reply` (or `summary`), NOT the raw
+// output.json — output.json is the machine artifact, not the conversation.
 func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agent *store.AgentSpec, task string) {
-	replyText, aerr := cs.runAgent(ctx, agent, task)
+	out, aerr := cs.runAgent(ctx, agent, task)
+	replyText := string(out)
 	if aerr != nil {
 		replyText = "⚠️ " + aerr.Error()
+	} else {
+		var parsed struct {
+			Reply   string `json:"reply"`
+			Summary string `json:"summary"`
+		}
+		if json.Unmarshal([]byte(out), &parsed) == nil {
+			if parsed.Reply != "" {
+				replyText = parsed.Reply
+			} else if parsed.Summary != "" {
+				replyText = parsed.Summary
+			}
+		}
 	}
 	agentMsg := &store.ChannelMessage{
 		ID: "msg-" + randHex(8), ChannelID: channelID,
@@ -226,7 +241,7 @@ func (cs *ChatService) runAgent(ctx context.Context, agent *store.AgentSpec, tas
 		return "", err
 	}
 	spawnID := fmt.Sprintf("chat-%s-%d", agent.ID, cs.seq.Add(1))
-	prompt := fmt.Sprintf("用户任务: %s\n\n请完成任务,并把结果写入 workspace 根目录的 output.json(单个 JSON 对象,含 ok 与 summary 字段)。", task)
+	prompt := fmt.Sprintf("用户任务: %s\n\n请完成任务,并把结果写入 workspace 根目录的 output.json(单个 JSON 对象,含 ok、summary(执行摘要)与 reply(你用聊天口吻给用户的回复,直接回答用户,不要提 output.json))。", task)
 	res, err := cs.link.SpawnAndWait(ctx, runnerID, gateway.Spawn{
 		RunID: "chat", NodeID: agent.ID, Attempt: 1, SpawnID: spawnID,
 		ExecutorType: agent.Runtime, Prompt: prompt, Cwd: ws, SystemPrompt: agent.SystemPrompt,
