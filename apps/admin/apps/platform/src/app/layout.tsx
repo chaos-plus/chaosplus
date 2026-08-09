@@ -128,7 +128,7 @@ export default function PlatformLayout() {
     }
     const loadEntities = () => {
       void iamApi
-        .entities()
+        .entities(tenantValue)
         .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
         .catch(() => setTenantEntities([]))
     }
@@ -166,7 +166,7 @@ export default function PlatformLayout() {
     }
     const loadEntities = () => {
       void iamApi
-        .entities()
+        .entities(tenantValue)
         .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
         .catch(() => setTenantEntities([]))
     }

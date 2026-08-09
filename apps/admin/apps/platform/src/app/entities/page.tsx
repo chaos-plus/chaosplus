@@ -13,6 +13,7 @@ export default function EntitiesPage() {
   const navigate = useNavigate()
   const [entities, setEntities] = useState<Entity[]>([])
   const [current, setCurrent] = useState(getEntity())
+  const [tenant, setTenantId] = useState(getTenant())
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
   // tab:默认创建;URL 带 ?invite= 时切到加入并预填邀请码。
@@ -23,16 +24,25 @@ export default function EntitiesPage() {
   const [inviteErr, setInviteErr] = useState("")
   const [joining, setJoining] = useState(false)
 
-  // 实体接口需要租户上下文(X-Tenant-Id)。独立路由不经 layout,先确保有租户。
+  // 实体接口需要租户上下文(X-Tenant-Id)。独立路由不经 layout,先确保有租户,
+  // 并显式传给每次请求(不依赖 getTenant 兜底)。
   const ensureTenant = useCallback(async () => {
-    if (getTenant()) return
+    if (getTenant()) {
+      setTenantId(getTenant())
+      return getTenant()
+    }
     const mine = (await iamApi.myTenants().catch(() => [])) ?? []
-    if (mine[0]) setTenant(mine[0].id)
+    if (mine[0]) {
+      setTenant(mine[0].id)
+      setTenantId(mine[0].id)
+      return mine[0].id
+    }
+    return ""
   }, [])
 
-  const load = useCallback(() => {
+  const load = useCallback((tenantId: string) => {
     void iamApi
-      .entities()
+      .entities(tenantId)
       .then((x) => setEntities(x ?? []))
       .catch((e: unknown) => {
         setEntities([])
@@ -41,10 +51,14 @@ export default function EntitiesPage() {
   }, [])
 
   useEffect(() => {
-    void ensureTenant().then(load)
-    const t = setInterval(load, 5000)
+    let tenantId = tenant
+    void ensureTenant().then((id) => {
+      tenantId = id || tenantId
+      load(tenantId)
+    })
+    const t = setInterval(() => load(tenantId), 5000)
     return () => clearInterval(t)
-  }, [load, ensureTenant])
+  }, [load, ensureTenant, tenant])
 
   const enter = (id: string) => {
     setEntity(id)
@@ -55,10 +69,11 @@ export default function EntitiesPage() {
   const create = async () => {
     if (!name.trim()) return
     try {
-      const en = await iamApi.createEntity({ type: "instance", name: name.trim(), status: "active", metadata: {} })
+      const tenantId = await ensureTenant()
+      const en = await iamApi.createEntity({ type: "instance", name: name.trim(), status: "active", metadata: {} }, tenantId)
       setOpen(false)
       setName("")
-      load()
+      load(tenantId)
       enter(en.id)
     } catch (e) {
       toast.error(`创建失败:${e instanceof Error ? e.message : String(e)}`)
