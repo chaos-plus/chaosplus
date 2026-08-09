@@ -1,1 +1,36 @@
 @import "@workspace/ui/globals.css";
+
+/*
+ * ui-ux-pro-max design system — Modern Dark Cinema (see design-system/chaosplus/MASTER.md).
+ * Platform-scoped: these tokens only ship in the platform bundle, not apps/sys.
+ * Dark-mode primary developer console: slate-900 surfaces, a single green
+ * run/success accent, red reserved for terminal failure.
+ */
+.dark {
+  --background: #0f172a;
+  --foreground: #f8fafc;
+  --card: #111c35;
+  --card-foreground: #f8fafc;
+  --popover: #111c35;
+  --popover-foreground: #f8fafc;
+  --primary: #22c55e;
+  --primary-foreground: #052e16;
+  --secondary: #1e293b;
+  --secondary-foreground: #f8fafc;
+  --muted: #272f42;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f8fafc;
+  --destructive: #ef4444;
+  --border: #334155;
+  --input: #334155;
+  --ring: #22c55e;
+  --sidebar: #0f172a;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #22c55e;
+  --sidebar-primary-foreground: #052e16;
+  --sidebar-accent: #1e293b;
+  --sidebar-accent-foreground: #f8fafc;
+  --sidebar-border: #334155;
+  --sidebar-ring: #22c55e;
+}
