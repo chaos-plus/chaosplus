@@ -288,10 +288,29 @@ func (h *Hub) IssueToken() (machineID, token string) {
 
 func (h *Hub) RefreshToken(machineID string) (string, error) {
 	// 长期 token 仅手动轮换:失效旧的,签发新的长期 token 并落库(§5.3.1)。
+	// 必须先确认机器存在 —— 否则任意 id 都能凭空换到一个可用的长期令牌。
+	if h.machines != nil {
+		known, err := h.machines.ListMachines(context.Background())
+		if err != nil {
+			return "", err
+		}
+		found := false
+		for _, m := range known {
+			if m.ID == machineID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("machine %s not found", machineID)
+		}
+	}
 	h.tokens.Invalidate(machineID)
 	at := h.tokens.IssueLongTerm(machineID)
 	if h.machines != nil {
-		_ = h.machines.UpdateMachineToken(context.Background(), machineID, hashToken(at.Token))
+		if err := h.machines.UpdateMachineToken(context.Background(), machineID, hashToken(at.Token)); err != nil {
+			return "", err
+		}
 	}
 	return at.Token, nil
 }
