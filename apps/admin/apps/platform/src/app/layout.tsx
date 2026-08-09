@@ -29,6 +29,7 @@ import {
 import { Toaster } from "@workspace/ui/components/sonner"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
+import { SimpleSelect } from "@workspace/ui/components/select"
 import { controlApi, type Channel } from "../lib/control-api"
 import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity } from "../lib/iam-api"
 
@@ -255,13 +256,12 @@ export default function PlatformLayout() {
             ))}
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
-            {/* 当前实体(instance):租户下的 entity + 新建 */}
+            {/* 当前实体(instance):租户下的 entity + 新建(ui SimpleSelect,主题/颜色统一) */}
             <label htmlFor="entity-select" className="sr-only">当前实体</label>
-            <select
+            <SimpleSelect
               id="entity-select"
               value={entityValue}
-              onChange={(e) => {
-                const v = e.target.value
+              onValueChange={(v) => {
                 if (v === "__new__") {
                   navigate("/entities")
                   return
@@ -269,16 +269,13 @@ export default function PlatformLayout() {
                 setEntity(v)
                 setEntityValue(v)
               }}
-              className="h-9 max-w-40 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
-            >
-              <option value="">选择实体…</option>
-              {tenantEntities.map((en) => (
-                <option key={en.id} value={en.id}>
-                  {en.name}
-                </option>
-              ))}
-              <option value="__new__">＋ 新建实体</option>
-            </select>
+              options={[
+                ...tenantEntities.map((en) => ({ value: en.id, label: en.name })),
+                { value: "__new__", label: "＋ 新建实体" },
+              ]}
+              placeholder="选择实体…"
+              triggerClassName="h-9 max-w-40"
+            />
             {/* 配置管理 */}
             <DropdownMenu>
               <DropdownMenuTrigger
