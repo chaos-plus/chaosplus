@@ -37,9 +37,10 @@ export default function LoginPage() {
     const data = new FormData(event.currentTarget)
     const requested = (location.state as { from?: string } | null)?.from ?? "/"
     try {
+      // 提交前 trim:复制粘贴容易带前后空格,导致账号/密码不匹配。
       const result = await login(
-        String(data.get("login_name") ?? ""),
-        String(data.get("password") ?? ""),
+        String(data.get("login_name") ?? "").trim(),
+        String(data.get("password") ?? "").trim(),
         `${window.location.origin}${requested}`
       )
       if (result.status === "mfa_required") setChallenge(result)
