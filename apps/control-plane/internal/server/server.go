@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -338,8 +341,18 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
+	// 会话 Bearer token(§17.2/F.7):状态变更命令需 Authorization: Bearer,只读
+	// (GET/WS Subscribe)免 token。desktop 默认近 no-op:未配置 CONTROL_API_TOKEN
+	// 时不启用(可显式开);LAN/cloud 暴露时配置即强制。
 	// 实体隔离:把调用方的 X-Entity(instance)注入 context,store 据此过滤/落库。
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := apiToken(); token != "" && !readOnlyRequest(r) {
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				writeErr(w, 401, "unauthorized: state-changing commands require Authorization: Bearer <token> (F.7)")
+				return
+			}
+		}
 		ctx := r.Context()
 		if e := r.Header.Get("X-Entity"); e != "" {
 			ctx = store.WithEntity(ctx, e)
@@ -349,6 +362,16 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// apiToken returns the configured API token ("" = auth disabled / near no-op).
+func apiToken() string {
+	return os.Getenv("CONTROL_API_TOKEN")
+}
+
+// readOnlyRequest reports whether a request is read-only (F.7: Get*/List*/Subscribe).
+func readOnlyRequest(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead
 }
 
 // handleWS upgrades to WebSocket, replays buffered events, then streams live.

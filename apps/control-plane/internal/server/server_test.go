@@ -235,6 +235,49 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 	}
 }
 
+// §17.2/F.7: when CONTROL_API_TOKEN is set, state-changing commands require a
+// Bearer token; read-only (GET/WS) stays free; unset = near no-op.
+func TestHTTPBearerEnforcement(t *testing.T) {
+	nc := startTestNATS(t)
+	m := NewRunManager(nc, nil, nil, "r")
+	ts := httptest.NewServer(NewHandler(m, machine.NewHub(nc, machine.NewTokenStore(), nil), nil))
+	defer ts.Close()
+
+	// 未配置 → 近 no-op(状态变更放行)。
+	t.Setenv("CONTROL_API_TOKEN", "")
+	body := strings.NewReader(`{"workflowJSON":` + testDefRaw + `,"workspace":"ws"}`)
+	r1, _ := http.Post(ts.URL+"/api/runs", "application/json", body)
+	r1.Body.Close()
+	if r1.StatusCode != 201 {
+		t.Fatalf("no-token config: POST /api/runs = %d, want 201 (near no-op)", r1.StatusCode)
+	}
+
+	// 配置 → 状态变更无 token 401,GET 免 token。
+	t.Setenv("CONTROL_API_TOKEN", "s3cret")
+	r2, _ := http.Post(ts.URL+"/api/runs", "application/json",
+		strings.NewReader(`{"workflowJSON":`+testDefRaw+`,"workspace":"ws"}`))
+	r2.Body.Close()
+	if r2.StatusCode != 401 {
+		t.Fatalf("configured: POST without token = %d, want 401", r2.StatusCode)
+	}
+	r3, _ := http.Get(ts.URL + "/api/runs")
+	r3.Body.Close()
+	if r3.StatusCode != 200 {
+		t.Fatalf("configured: GET /api/runs = %d, want 200 (read-only free)", r3.StatusCode)
+	}
+
+	// 正确 token → 放行。
+	req, _ := http.NewRequest("POST", ts.URL+"/api/runs",
+		strings.NewReader(`{"workflowJSON":`+testDefRaw+`,"workspace":"ws"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer s3cret")
+	r4, _ := http.DefaultClient.Do(req)
+	r4.Body.Close()
+	if r4.StatusCode != 201 {
+		t.Fatalf("configured: POST with token = %d, want 201", r4.StatusCode)
+	}
+}
+
 func TestHTTPErrors(t *testing.T) {
 	nc := startTestNATS(t)
 	m := NewRunManager(nc, nil, nil, "r")

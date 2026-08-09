@@ -172,6 +172,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       ...(entity ? { "X-Entity": entity } : {}),
+      ...(CONTROL_API_TOKEN ? { Authorization: `Bearer ${CONTROL_API_TOKEN}` } : {}),
     },
     ...init,
   })
@@ -185,6 +186,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 // daemon 直连 Go 控制面(它自己拼 /api/machines/ws)。控制面开发默认 127.0.0.1:8081,
 // 换部署地址改这一处常量即可,不引 env。
 const CONTROL_PLANE_URL = "http://127.0.0.1:8081"
+
+// CONTROL_API_TOKEN:控制面配置了 CONTROL_API_TOKEN 时(F.7 状态变更需 Bearer),
+// 前端也配这里;默认空 = 近 no-op(desktop)。
+const CONTROL_API_TOKEN = ""
 
 /** 机器接入命令:daemon 用 server + token 直连控制面 WS。显示/复制都以完整命令为准。 */
 export function machineConnectCommand(token: string): string {
