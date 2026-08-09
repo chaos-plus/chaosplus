@@ -32,7 +32,7 @@ func (s *Store) CreateAgent(ctx context.Context, a *AgentSpec) error {
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentSpec, error) {
-	var out []AgentSpec
+	out := []AgentSpec{}
 	if err := s.db.NewSelect().Model(&out).Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -84,7 +84,7 @@ func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {
 }
 
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
-	var out []Channel
+	out := []Channel{}
 	if err := s.db.NewSelect().Model(&out).Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)
 	}
@@ -108,7 +108,7 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, memberID, kind 
 }
 
 func (s *Store) ListChannelMembers(ctx context.Context, channelID string) ([]ChannelMember, error) {
-	var out []ChannelMember
+	out := []ChannelMember{}
 	if err := s.db.NewSelect().Model(&out).Where("channel_id = ?", channelID).Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
 	}
@@ -145,7 +145,7 @@ func (s *Store) AppendChannelMessage(ctx context.Context, m *ChannelMessage) err
 }
 
 func (s *Store) ListChannelMessages(ctx context.Context, channelID string, limit int) ([]ChannelMessage, error) {
-	var out []ChannelMessage
+	out := []ChannelMessage{}
 	q := s.db.NewSelect().Model(&out).Where("channel_id = ?", channelID)
 	if limit > 0 {
 		q = q.Limit(limit)

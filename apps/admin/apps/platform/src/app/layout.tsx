@@ -8,9 +8,9 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Network,
-  Users,
+  UsersRound,
 } from "lucide-react"
-import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
 import { UserMenu } from "../components/user-menu"
@@ -27,8 +27,8 @@ const TOP_MENUS: NavItem[] = [
   { label: "仪表盘", path: "/", icon: LayoutDashboard },
   { label: "会话区", path: "/sessions", icon: MessagesSquare },
   { label: "工作区", path: "/workspace", icon: FolderKanban },
-  { label: "团队管理", path: "/team/machines", icon: Users },
   { label: "工作流", path: "/workflow/runs", icon: GitBranch },
+  { label: "团队管理", path: "/team/machines", icon: UsersRound },
 ]
 
 /** 每个一级菜单下的左侧二级菜单。 */
@@ -38,7 +38,7 @@ const SECONDARY: Record<string, NavItem[]> = {
   workspace: [{ label: "工作区", path: "/workspace", icon: FolderKanban }],
   team: [
     { label: "机器 Machines", path: "/team/machines", icon: Network },
-    { label: "人类 Human", path: "/team/humans", icon: Users },
+    { label: "人类 Human", path: "/team/humans", icon: UsersRound },
     { label: "Agent", path: "/team/agents", icon: Gauge },
   ],
   workflow: [
@@ -86,7 +86,8 @@ export default function PlatformLayout() {
     return () => window.removeEventListener("tenant-change", sync)
   }, [])
 
-  if (status === "loading")
+  // 本地单用户工具:无登录体系,shell 直接渲染(租户默认 platform)。
+  if (status === "loading" && session)
     return (
       <div className="grid min-h-svh place-items-center bg-background text-sm text-muted-foreground">
         <div className="grid justify-items-center gap-3">
@@ -95,7 +96,6 @@ export default function PlatformLayout() {
         </div>
       </div>
     )
-  if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />
 
   const commitTenant = () => {
     const next = tenantDraft.trim()

@@ -66,7 +66,7 @@ func (s *Store) Append(ctx context.Context, e Event) error {
 
 // ListEvents returns events for a run in seq order (optionally since a seq).
 func (s *Store) ListEvents(ctx context.Context, runID string, sinceSeq int64, limit int) ([]Event, error) {
-	var out []Event
+	out := []Event{}
 	q := s.db.NewSelect().Model(&out).Where("run_id = ?", runID)
 	if sinceSeq > 0 {
 		q = q.Where("seq > ?", sinceSeq)

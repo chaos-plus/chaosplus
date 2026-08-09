@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { Bot, Hash, Plus, Send, User as UserIcon } from "lucide-react"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
-import { Card } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { controlApi, type Agent, type Channel, type ChannelMessage } from "../../lib/control-api"
@@ -12,6 +12,10 @@ function messageText(m: ChannelMessage): string {
   } catch {
     return m.payloadJson
   }
+}
+
+function timeStr(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
 export default function SessionsPage() {
@@ -27,10 +31,10 @@ export default function SessionsPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(() => {
-    void controlApi.channels().then(setChannels).catch(() => setChannels([]))
+    void controlApi.channels().then((x) => setChannels(x ?? [])).catch(() => setChannels([]))
   }, [])
   const loadAgents = useCallback(() => {
-    void controlApi.agents().then(setAgents).catch(() => setAgents([]))
+    void controlApi.agents().then((x) => setAgents(x ?? [])).catch(() => setAgents([]))
   }, [])
 
   useEffect(() => {
@@ -43,8 +47,8 @@ export default function SessionsPage() {
   useEffect(() => {
     if (!channelId) return
     const load = () => {
-      void controlApi.messages(channelId).then(setMessages).catch(() => setMessages([]))
-      void controlApi.members(channelId).then(setMembers).catch(() => setMembers([]))
+      void controlApi.messages(channelId).then((x) => setMessages(x ?? [])).catch(() => setMessages([]))
+      void controlApi.members(channelId).then((x) => setMembers(x ?? [])).catch(() => setMembers([]))
     }
     load()
     const t = setInterval(load, 3000)
@@ -67,7 +71,7 @@ export default function SessionsPage() {
     const kind = addTarget.startsWith("ag-") ? "agent" : "human"
     await controlApi.addMember(channelId, addTarget, kind)
     setAddTarget("")
-    void controlApi.members(channelId).then(setMembers)
+    void controlApi.members(channelId).then((x) => setMembers(x ?? []))
   }
 
   const send = async () => {
@@ -77,91 +81,163 @@ export default function SessionsPage() {
       await controlApi.postMessage(channelId, draft.trim())
       setDraft("")
       await new Promise((r) => setTimeout(r, 600))
-      void controlApi.messages(channelId).then(setMessages)
+      void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
     } finally {
       setBusy(false)
     }
   }
 
+  // ---- 频道列表视图 ----
   if (!channelId) {
     return (
-      <div className="space-y-4">
+      <div className="mx-auto max-w-3xl space-y-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">会话区</h1>
-          <Button onClick={createChannel}>＋ 新建频道</Button>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">会话区</h1>
+            <p className="text-sm text-muted-foreground">创建 room/channel,邀请 agent 或 human,用聊天完成任务。</p>
+          </div>
+          <Button onClick={createChannel}>
+            <Plus className="size-4" aria-hidden="true" />
+            新建频道
+          </Button>
         </div>
         <div className="space-y-2">
           {channels.map((c) => (
-            <Card key={c.id} className="cursor-pointer p-3 text-sm hover:bg-accent" onClick={() => navigate(`/sessions/${c.id}`)}>
-              <span className="font-medium"># {c.name}</span>
-              <span className="ml-2 text-muted-foreground">{c.id}</span>
-            </Card>
+            <button
+              key={c.id}
+              onClick={() => navigate(`/sessions/${c.id}`)}
+              className="group flex w-full items-center gap-3 rounded-xl border border-transparent bg-card px-4 py-3 text-left transition-all duration-200 hover:border-primary/40 hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <Hash className="size-5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{c.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">{c.id}</span>
+              </span>
+            </button>
           ))}
-          {channels.length === 0 && <p className="text-sm text-muted-foreground">还没有频道,点「新建频道」。</p>}
+          {channels.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+              还没有频道,点「新建频道」创建一个。
+            </p>
+          )}
         </div>
       </div>
     )
   }
 
+  // ---- 频道聊天视图 ----
+  const channel = channels.find((c) => c.id === channelId)
+  const agentNames = new Map(agents.map((a) => [a.id, a.name]))
+
   return (
-    <div className="flex h-full flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">#{channels.find((c) => c.id === channelId)?.name ?? channelId}</h1>
-        <Button variant="outline" size="sm" onClick={createChannel}>＋ 新建频道</Button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-muted-foreground">成员:</span>
-        {members.map((m) => (
-          <span key={m.memberId} className="rounded-md bg-muted px-2 py-0.5">
-            {m.kind === "agent" ? "🤖" : "👤"} {m.memberId}
-          </span>
-        ))}
-        <select
-          value={addTarget}
-          onChange={(e) => setAddTarget(e.target.value)}
-          className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
-        >
-          <option value="">添加成员…</option>
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              🤖 {a.name} (agent)
-            </option>
+    <div className="mx-auto flex h-full max-w-4xl flex-col gap-4">
+      {/* 频道头 */}
+      <header className="flex flex-wrap items-center gap-2 border-b pb-3">
+        <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+          <Hash className="size-5 text-primary" aria-hidden="true" />
+          {channel?.name ?? channelId}
+        </h1>
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {members.map((m) => (
+            <span
+              key={m.memberId}
+              className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs text-foreground"
+            >
+              {m.kind === "agent" ? <Bot className="size-3.5 text-primary" aria-hidden="true" /> : <UserIcon className="size-3.5" aria-hidden="true" />}
+              {m.kind === "agent" ? (agentNames.get(m.memberId) ?? m.memberId) : "human"}
+            </span>
           ))}
-          <option value="human">👤 human (当前用户)</option>
-        </select>
-        <Button size="sm" variant="outline" onClick={addMember}>添加</Button>
-      </div>
+          <select
+            value={addTarget}
+            onChange={(e) => setAddTarget(e.target.value)}
+            className="ml-1 h-8 rounded-full border border-input bg-transparent px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="添加成员"
+          >
+            <option value="">+ 添加成员</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} (agent)
+              </option>
+            ))}
+            <option value="human">human (当前用户)</option>
+          </select>
+          <Button size="sm" variant="ghost" onClick={addMember} disabled={!addTarget}>
+            添加
+          </Button>
+        </div>
+      </header>
 
-      <Card className="flex min-h-0 flex-1 flex-col">
-        <ScrollArea className="flex-1 p-4">
-          <div className="space-y-3">
-            {messages.map((m) => {
-              const isAgent = m.authorKind === "agent"
-              return (
-                <div key={m.id} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
-                  <div className={`max-w-[80%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${isAgent ? "bg-muted" : "bg-primary text-primary-foreground"}`}>
-                    <div className="mb-0.5 text-xs opacity-70">{isAgent ? "🤖 " + m.authorMemberId : "你"}</div>
+      {/* 消息区 */}
+      <ScrollArea className="flex-1 rounded-xl border bg-card/40">
+        <div className="space-y-4 p-4">
+          {messages.map((m) => {
+            const isAgent = m.authorKind === "agent"
+            const name = isAgent ? (agentNames.get(m.authorMemberId) ?? "agent") : "你"
+            return (
+              <div key={m.id} className={`flex items-start gap-2.5 ${isAgent ? "" : "flex-row-reverse"}`}>
+                <span
+                  className={`grid size-8 shrink-0 place-items-center rounded-full ${
+                    isAgent ? "bg-gradient-to-br from-primary to-accent text-primary-foreground shadow" : "bg-secondary text-secondary-foreground"
+                  }`}
+                >
+                  {isAgent ? <Bot className="size-4" aria-hidden="true" /> : <UserIcon className="size-4" aria-hidden="true" />}
+                </span>
+                <div className={`max-w-[72%] ${isAgent ? "" : "text-right"}`}>
+                  <div className={`mb-1 flex items-center gap-2 text-xs text-muted-foreground ${isAgent ? "" : "flex-row-reverse"}`}>
+                    <span className="font-medium">{name}</span>
+                    <span>{timeStr(m.ts)}</span>
+                  </div>
+                  <div
+                    className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                      isAgent
+                        ? "rounded-tl-sm border border-border bg-card text-foreground"
+                        : "rounded-tr-sm bg-gradient-to-br from-primary to-secondary text-primary-foreground"
+                    }`}
+                  >
                     {messageText(m)}
                   </div>
                 </div>
-              )
-            })}
-            <div ref={bottomRef} />
-          </div>
-        </ScrollArea>
-        <div className="flex gap-2 border-t p-3">
-          <Input
-            placeholder="给 agent 下达任务,如:写一个 hello world"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-          />
-          <Button onClick={send} disabled={busy || !draft.trim()}>
-            {busy ? "执行中…" : "发送"}
-          </Button>
+              </div>
+            )
+          })}
+          {busy && (
+            <div className="flex items-center gap-2.5">
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground">
+                <Bot className="size-4" aria-hidden="true" />
+              </span>
+              <span className="flex items-center gap-1 rounded-2xl rounded-tl-sm border bg-card px-4 py-2.5 text-sm text-muted-foreground">
+                <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                <span className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:150ms]" />
+                <span className="size-1.5 animate-pulse rounded-full bg-primary [animation-delay:300ms]" />
+                agent 执行中…
+              </span>
+            </div>
+          )}
+          <div ref={bottomRef} />
         </div>
-      </Card>
+      </ScrollArea>
+
+      {/* 输入区 */}
+      <form
+        className="flex items-center gap-2 rounded-2xl border bg-card p-2 focus-within:ring-2 focus-within:ring-ring"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void send()
+        }}
+      >
+        <Input
+          placeholder="给 agent 下达任务,如:写一个 hello world"
+          className="border-0 bg-transparent shadow-none focus-visible:ring-0"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Button type="submit" size="icon" className="size-9 shrink-0 rounded-full" disabled={busy || !draft.trim()}>
+          <Send className="size-4" aria-hidden="true" />
+          <span className="sr-only">发送</span>
+        </Button>
+      </form>
     </div>
   )
 }

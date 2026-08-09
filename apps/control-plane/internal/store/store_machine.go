@@ -35,7 +35,7 @@ func (s *Store) UpsertMachine(ctx context.Context, m Machine) error {
 
 // ListMachines returns all confirmed machines (id ascending).
 func (s *Store) ListMachines(ctx context.Context) ([]Machine, error) {
-	var out []Machine
+	out := []Machine{}
 	if err := s.db.NewSelect().Model(&out).Order("id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list machines: %w", err)
 	}
