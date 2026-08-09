@@ -10,10 +10,14 @@ import (
 // dispatches via the NATS RunnerGateway in a later phase.
 type Executor interface {
 	// RunAgent executes an agent node. input is the JSON Logic variable scope
-	// (run context ∪ completed node outputs). Returns the node's output JSON.
+	// (run context ∪ completed node outputs), plus a `rejection_feedback` key
+	// (last structured rejection for this node, PRD §13 / F.8 layer 4) and a
+	// `last_error` key (previous attempt's failure), if any. Returns the node's
+	// output JSON.
 	RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
-	// Approve decides a human_approval gate. false = rejected.
-	Approve(ctx context.Context, node *Node) (bool, error)
+	// Approve decides a human_approval gate. The returned Decision carries the
+	// resolution: OK (approved) or rejected with structured Feedback (PRD §13).
+	Approve(ctx context.Context, node *Node) (Decision, error)
 }
 
 // MockExecutor is a deterministic executor for tests and the M1 example. Agent
@@ -31,9 +35,9 @@ func (m *MockExecutor) RunAgent(ctx context.Context, node *Node, input json.RawM
 	return out, err
 }
 
-func (m *MockExecutor) Approve(ctx context.Context, node *Node) (bool, error) {
+func (m *MockExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
 	_ = node
-	return true, nil
+	return Decision{OK: true}, nil
 }
 
 var _ Executor = (*MockExecutor)(nil)

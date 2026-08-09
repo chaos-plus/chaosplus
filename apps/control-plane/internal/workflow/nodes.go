@@ -45,13 +45,17 @@ func (e *Engine) execTrigger(st *nodeState) error {
 }
 
 func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
-	input, _ := json.Marshal(e.scope)
-	out, err := e.exec.RunAgent(ctx, st.node, input)
+	out, err := e.exec.RunAgent(ctx, st.node, e.agentInput(st))
 	if err != nil {
 		st.err = err.Error()
 		return err
 	}
 	st.output = out
+	st.err = ""
+	// The node consumed its rejection feedback successfully; drop it so a later
+	// unrelated execution cannot pick up a stale directive (PRD §18.1 layer 4:
+	// feedback is injected only for the retry that follows the rejection).
+	delete(e.feedbackFor, st.node.ID)
 	e.updateScope(st)
 	e.mark(st.node.ID, StatusCompleted, out, "")
 	return nil
@@ -59,12 +63,17 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 
 func (e *Engine) execApproval(ctx context.Context, st *nodeState) error {
 	e.mark(st.node.ID, StatusWaitingApproval, nil, "")
-	ok, err := e.exec.Approve(ctx, st.node)
+	d, err := e.exec.Approve(ctx, st.node)
 	if err != nil {
 		return err
 	}
-	st.approved = ok
-	out, _ := json.Marshal(map[string]any{"approved": ok})
+	st.approved = d.OK
+	// A rejection carries structured feedback (PRD §13); hand it to the next
+	// execution of the affected node(s) so the retry sees actionable context.
+	if !d.OK && d.Feedback != nil {
+		e.recordRejectionFeedback(st, d.Feedback)
+	}
+	out, _ := json.Marshal(map[string]any{"approved": d.OK})
 	st.output = out
 	e.updateScope(st)
 	e.mark(st.node.ID, StatusCompleted, out, "")
@@ -190,12 +199,18 @@ func (e *Engine) execLoop(ctx context.Context, id string) error {
 
 	for iter := 1; iter <= loop.MaxIterations; iter++ {
 		// Reset body states, then run the body subgraph to a fixed point.
+		// rejection_feedback is NOT cleared here: a rejection at the end of one
+		// iteration must reach the fixer when it re-runs at the start of the
+		// next (producer-as-fixer loops). execAgent deletes the entry once the
+		// node consumes it successfully, so stale entries cannot leak.
 		for _, bid := range body {
 			bs := e.states[bid]
 			bs.status = StatusPending
 			bs.output = nil
 			bs.branch = ""
 			bs.approved = false
+			bs.attempts = 0
+			bs.err = ""
 		}
 		if err := e.runBody(ctx, body); err != nil {
 			return err

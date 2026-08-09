@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Status is a node's terminal/live state within a run.
@@ -16,6 +17,7 @@ const (
 	StatusFailed          Status = "failed"
 	StatusSkipped         Status = "skipped"
 	StatusWaitingApproval Status = "waiting_approval" // human_approval gate is blocked on a human
+	StatusRetrying        Status = "retrying"         // an attempt failed but a retry is scheduled (F.2 NODE_RETRY_SCHEDULED); not terminal
 )
 
 // Event is one node lifecycle event in run order (PRD event log §15.1).
@@ -50,9 +52,13 @@ type Engine struct {
 	bodyOf    map[string][]string // loop nodeID -> its body node IDs
 	templates map[string]bool     // fork template node IDs (not scheduled directly)
 	scope     map[string]any      // JSON Logic variable scope (context ∪ outputs)
-	seq       int
-	events    []Event
-	OnEvent   func(Event) // live lifecycle hook (nil-safe); fires on every mark()
+	// feedbackFor maps a node ID to the last structured rejection feedback it
+	// must consume on its next execution (PRD §13 / F.8 layer 4). Written when a
+	// human_approval gate rejects; read by execAgent for the affected node.
+	feedbackFor map[string]*Feedback
+	seq         int
+	events      []Event
+	OnEvent     func(Event) // live lifecycle hook (nil-safe); fires on every mark()
 }
 
 // NewEngine validates the def and indexes the graph. Loop bodies are computed
@@ -63,13 +69,14 @@ func NewEngine(def *WorkflowDef, exec Executor) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{
-		def:       def,
-		exec:      exec,
-		states:    make(map[string]*nodeState, len(def.Nodes)),
-		out:       make(map[string][]Edge),
-		in:        make(map[string][]Edge),
-		bodyOf:    make(map[string][]string),
-		templates: make(map[string]bool),
+		def:         def,
+		exec:        exec,
+		states:      make(map[string]*nodeState, len(def.Nodes)),
+		out:         make(map[string][]Edge),
+		in:          make(map[string][]Edge),
+		bodyOf:      make(map[string][]string),
+		templates:   make(map[string]bool),
+		feedbackFor: make(map[string]*Feedback),
 	}
 	for i := range def.Nodes {
 		n := &def.Nodes[i]
@@ -240,8 +247,12 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 		err = fmt.Errorf("workflow %s: node %q unknown type %q", e.def.ID, id, st.node.Type)
 	}
 	if err != nil {
-		st.status = StatusFailed
 		st.err = err.Error()
+		if e.scheduleRetry(ctx, st, err) {
+			return nil // transient failure; node reset to pending for re-run
+		}
+		// Terminal failure: no retries left (or the run was cancelled during
+		// backoff). A single NODE_FAILED, not one per attempt.
 		e.mark(id, StatusFailed, nil, err.Error())
 	}
 	return nil
@@ -259,6 +270,81 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 	if e.OnEvent != nil {
 		e.OnEvent(ev)
 	}
+}
+
+// recordRejectionFeedback notes that a human_approval rejection must reach the
+// fixer's next execution (PRD §13 / F.8 layer 4). Only the `rejected` out-edge
+// target re-runs as a consequence of the rejection, so it is the only node
+// that must consume the feedback (join-fed approvals would otherwise leak the
+// entry onto a non-agent node that never runs).
+func (e *Engine) recordRejectionFeedback(st *nodeState, fb *Feedback) {
+	for _, ed := range e.out[st.node.ID] {
+		if ed.Condition == EdgeRejected {
+			e.feedbackFor[ed.To] = fb
+		}
+	}
+}
+
+// agentInput builds the JSON Logic input for an agent node: the run scope plus
+// a `rejection_feedback` key (last structured rejection, PRD §13) and a
+// `last_error` key (previous attempt's failure) so a retry or fixer sees
+// actionable context. Keys are namespaced to avoid colliding with a user
+// context that happens to carry its own feedback/lastError fields. The global
+// scope is untouched.
+func (e *Engine) agentInput(st *nodeState) json.RawMessage {
+	scope := make(map[string]any, len(e.scope)+2)
+	for k, v := range e.scope {
+		scope[k] = v
+	}
+	// Reserved keys are engine-owned: strip any user context value that happens
+	// to carry the same name, then set them only from authoritative state — a
+	// user-supplied `rejection_feedback` in the run context must never be
+	// promoted into the agent's prompt as a directive (H1 / prompt injection).
+	delete(scope, "rejection_feedback")
+	delete(scope, "last_error")
+	if fb := e.feedbackFor[st.node.ID]; fb != nil {
+		scope["rejection_feedback"] = fb
+	}
+	if st.err != "" {
+		scope["last_error"] = st.err
+	}
+	b, _ := json.Marshal(scope)
+	return b
+}
+
+// scheduleRetry implements PRD F.5 bounded retry for agent nodes. On a failure
+// with attempts remaining it emits a transient retrying status (F.2
+// NODE_RETRY_SCHEDULED), waits the configured backoff, and resets the node to
+// pending so the engine re-runs it — up to retry.maxAttempts total attempts.
+// Exhaustion or ctx cancellation leaves the node failed (the caller emits the
+// terminal failure). notifyThreshold (escalation tiers §13) is not consumed in
+// v1; maxAttempts and backoffSeconds are the operative parts. ponytail: the
+// backoff blocks the synchronous scheduler — acceptable while runs are serial,
+// parallel branches would need to defer the wait.
+func (e *Engine) scheduleRetry(ctx context.Context, st *nodeState, err error) bool {
+	if st.node.Type != NodeAgent || st.node.Agent == nil || st.node.Agent.Retry == nil {
+		return false
+	}
+	spec := st.node.Agent.Retry
+	if spec.MaxAttempts <= 1 {
+		return false
+	}
+	st.attempts++
+	if st.attempts >= spec.MaxAttempts {
+		return false // exhausted; caller emits the terminal failure
+	}
+	e.mark(st.node.ID, StatusRetrying, nil, err.Error())
+	if i := st.attempts - 1; i < len(spec.BackoffSeconds) && spec.BackoffSeconds[i] > 0 {
+		timer := time.NewTimer(time.Duration(spec.BackoffSeconds[i]) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return false // run cancelled during backoff → leave node failed
+		}
+	}
+	st.status = StatusPending
+	return true
 }
 
 func terminal(s Status) bool {

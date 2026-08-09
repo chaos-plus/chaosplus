@@ -103,6 +103,27 @@ func agentNode(validator string) *Node {
 	return n
 }
 
+// PRD §13 / F.8 layer 4: the structured rejection feedback must surface in the
+// agent prompt as a first-class directive, not just buried in the context JSON.
+func TestBuildPromptSurfacesRejectionFeedback(t *testing.T) {
+	ex := NewRunnerExecutor(newLink(t, `{"ok":true}`, true, 0), "r1", t.TempDir(), "run-1")
+
+	input, _ := json.Marshal(map[string]any{
+		"req":                "写一个登录页",
+		"rejection_feedback": Feedback{Category: FeedbackStyle, Location: "login.tsx:42", Detail: "间距不对,按钮太小"},
+	})
+	p := ex.buildPrompt(agentNode(""), input)
+	if !strings.Contains(p, "REJECTED") || !strings.Contains(p, "间距不对") {
+		t.Fatalf("prompt must surface rejection feedback as a directive:\n%s", p)
+	}
+
+	plain, _ := json.Marshal(map[string]any{"req": "写一个登录页"})
+	p2 := ex.buildPrompt(agentNode(""), plain)
+	if strings.Contains(p2, "REJECTED") {
+		t.Fatalf("prompt without feedback must not claim a rejection:\n%s", p2)
+	}
+}
+
 func TestRunnerExecutorReadsAgentOutput(t *testing.T) {
 	link := newLink(t, `{"ok":true,"summary":"done"}`, true, 0)
 	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
@@ -163,12 +184,28 @@ func TestValidatorCmdParsing(t *testing.T) {
 	}
 }
 
-func TestRunnerExecutorApproveIsPermissiveInM1(t *testing.T) {
+// M3 (round-3 review): error text injected into prompts / events must not leak
+// the workspace path or secret-looking fragments.
+func TestSanitizeErrTextRedactsPathAndSecrets(t *testing.T) {
+	in := "failed in C:/Users/me/proj/src/main.go API_KEY=sk-secret123 ENDPOINT:https://x"
+	out := sanitizeErrText(in, "C:/Users/me/proj")
+	if strings.Contains(out, "C:/Users/me/proj") {
+		t.Fatalf("workspace path not redacted: %s", out)
+	}
+	if !strings.Contains(out, "API_KEY=<redacted>") {
+		t.Fatalf("secret not masked: %s", out)
+	}
+	if !strings.Contains(out, "ENDPOINT:<redacted>") {
+		t.Fatalf("colon secret not masked: %s", out)
+	}
+}
+
+func TestRunnerExecutorApproveIsPermissiveWithoutBroker(t *testing.T) {
 	link := newLink(t, `{"ok":true}`, true, 0)
 	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1")
-	ok, err := ex.Approve(context.Background(), agentNode(""))
-	if err != nil || !ok {
-		t.Fatalf("Approve = (%v,%v), want (true,nil)", ok, err)
+	d, err := ex.Approve(context.Background(), agentNode(""))
+	if err != nil || !d.OK {
+		t.Fatalf("Approve = (%+v,%v), want (OK=true,nil)", d, err)
 	}
 }
 

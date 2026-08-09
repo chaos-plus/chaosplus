@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -95,6 +96,77 @@ func TestRunManagerRejectPauses(t *testing.T) {
 		t.Fatalf("reject: %v", err)
 	}
 	waitFor(t, func() bool { return run.Status() == RunPaused }, 3*time.Second)
+}
+
+// retryDefRaw: agent node with bounded retry; used to verify finalStatus treats
+// a transient failure (retried to success) as completed and exhaustion as failed.
+const retryDefRaw = `{
+  "id":"rt","version":"1",
+  "nodes":[
+    {"id":"t0","type":"trigger","trigger":{"source":"manual"}},
+    {"id":"a0","type":"agent","agent":{"id":"a0","role":"r","executor":"mock","systemPrompt":"x","retry":{"maxAttempts":2,"backoffSeconds":[0]}}}
+  ],
+  "edges":[{"from":"t0","to":"a0"}]
+}`
+
+// M1 (round-1 review): a node that fails once and retries to success must end
+// the run as completed, not failed.
+func TestRunManagerRetryRecoversToCompleted(t *testing.T) {
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	calls := 0
+	m := NewRunManager(nc, nil, nil, "runner-1")
+	m.baseFactory = func(_ string) workflow.Executor {
+		return &workflow.MockExecutor{RunAgentFn: func(_ context.Context, _ *workflow.Node, _ json.RawMessage) (json.RawMessage, error) {
+			calls++
+			if calls == 1 {
+				return nil, fmt.Errorf("flaky: compile error")
+			}
+			return json.RawMessage(`{"ok":true}`), nil
+		}}
+	}
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	run, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: json.RawMessage(retryDefRaw), Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
+	if calls != 2 {
+		t.Fatalf("agent ran %d times, want 2 (retried once)", calls)
+	}
+}
+
+// M1 (round-1 review): exhausting retries must end the run as failed.
+func TestRunManagerRetryExhaustsToFailed(t *testing.T) {
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	calls := 0
+	m := NewRunManager(nc, nil, nil, "runner-1")
+	m.baseFactory = func(_ string) workflow.Executor {
+		return &workflow.MockExecutor{RunAgentFn: func(_ context.Context, _ *workflow.Node, _ json.RawMessage) (json.RawMessage, error) {
+			calls++
+			return nil, fmt.Errorf("always fails")
+		}}
+	}
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	run, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: json.RawMessage(retryDefRaw), Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunFailed }, 3*time.Second)
+	if calls != 2 {
+		t.Fatalf("agent ran %d times, want maxAttempts=2", calls)
+	}
 }
 
 func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {

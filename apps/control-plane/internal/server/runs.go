@@ -320,8 +320,16 @@ func (m *RunManager) finalStatus(run *Run, err error) RunStatus {
 			}
 		}
 	}
+	// A run fails only when some node's FINAL status is failed: a transient
+	// failure that later retried and succeeded must not fail the run (§13).
+	last := make(map[string]workflow.Status)
 	for _, ev := range run.Events() {
-		if ev.Status == workflow.StatusFailed {
+		if ev.NodeID != "" {
+			last[ev.NodeID] = ev.Status
+		}
+	}
+	for _, s := range last {
+		if s == workflow.StatusFailed {
 			return RunFailed
 		}
 	}
@@ -387,6 +395,10 @@ func storeTypeFor(ev RunEvent) string {
 		return "REVIEW_REJECTED"
 	case ev.Status == workflow.StatusWaitingApproval:
 		return "REVIEW_REQUESTED"
+	case ev.Status == workflow.StatusRetrying:
+		// F.2: a failed attempt with a retry scheduled is NODE_RETRY_SCHEDULED,
+		// not a terminal NODE_FAILED — consumers must not treat it as failure.
+		return "NODE_RETRY_SCHEDULED"
 	default:
 		return "NODE_" + string(ev.Status)
 	}

@@ -50,8 +50,8 @@ class SkillRuntimeTest(unittest.TestCase):
             "apps/server/internal/modules/iam/sql/mysql",
             "apps/server/internal/modules/iam/sql/postgres",
             "apps/server/internal/modules/oauth",
-            "apps/admin/apps/web",
-            "docs",
+            "apps/admin/apps/platform",
+            "apps/docs",
         ):
             (self.root / path).mkdir(parents=True, exist_ok=True)
         (self.root / "apps" / "server" / "go.mod").write_text("module example.test/project\n\ngo 1.26.0\n", encoding="utf-8")
@@ -60,10 +60,10 @@ class SkillRuntimeTest(unittest.TestCase):
             json.dumps({"name": "admin", "packageManager": "bun@1", "workspaces": ["apps/*"]}),
             encoding="utf-8",
         )
-        (self.root / "apps" / "admin" / "apps" / "web" / "package.json").write_text(
+        (self.root / "apps" / "admin" / "apps" / "platform" / "package.json").write_text(
             json.dumps({"scripts": {"test": "bun test src"}}), encoding="utf-8"
         )
-        (self.root / "docs" / "package.json").write_text(
+        (self.root / "apps" / "docs" / "package.json").write_text(
             json.dumps(
                 {
                     "name": "docs",

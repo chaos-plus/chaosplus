@@ -4,6 +4,14 @@ import (
 	"fmt"
 )
 
+// maxBackoffSeconds caps a single retry backoff so a typo cannot stall the
+// synchronous scheduler for an unreasonable time (it remains cancellable).
+const maxBackoffSeconds = 3600
+
+// maxRetryAttempts caps total attempts so a fast-failing agent cannot drive an
+// unbounded number of spawns (cost explosion, M2).
+const maxRetryAttempts = 10
+
 // Validate checks structural invariants of a WorkflowDef before any run:
 // unique node ids, edges reference existing nodes, edge conditions are
 // predefined (PRD §7.3 forbids eval), and the graph is acyclic.
@@ -113,6 +121,16 @@ func validateNodeFields(wfID, id string, n *Node) error {
 	case NodeAgent:
 		if n.Agent == nil {
 			return fmt.Errorf("workflow %s: node %q (agent) missing agent spec", wfID, id)
+		}
+		if r := n.Agent.Retry; r != nil {
+			if r.MaxAttempts < 1 || r.MaxAttempts > maxRetryAttempts {
+				return fmt.Errorf("workflow %s: node %q retry.maxAttempts must be in [1,%d] (got %d)", wfID, id, maxRetryAttempts, r.MaxAttempts)
+			}
+			for i, b := range r.BackoffSeconds {
+				if b < 0 || b > maxBackoffSeconds {
+					return fmt.Errorf("workflow %s: node %q retry.backoffSeconds[%d] must be in [0,%d] (got %d)", wfID, id, i, maxBackoffSeconds, b)
+				}
+			}
 		}
 	case NodeHumanApproval:
 		if n.HumanApproval == nil {

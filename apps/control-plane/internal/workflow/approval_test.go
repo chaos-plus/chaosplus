@@ -9,8 +9,8 @@ import (
 
 func TestApprovalBrokerWaitResolve(t *testing.T) {
 	b := NewApprovalBroker()
-	done := make(chan bool, 1)
-	go func() { ok, _ := b.Wait(context.Background(), "n1"); done <- ok }()
+	done := make(chan Decision, 1)
+	go func() { d, _ := b.Wait(context.Background(), "n1"); done <- d }()
 	select {
 	case <-done:
 		t.Fatal("Wait returned before Resolve")
@@ -19,8 +19,8 @@ func TestApprovalBrokerWaitResolve(t *testing.T) {
 	if err := b.Resolve("n1", true, "", nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if ok := <-done; !ok {
-		t.Error("Wait returned false, want true")
+	if d := <-done; !d.OK {
+		t.Error("Wait returned OK=false, want true")
 	}
 	if d, ok := b.Decision("n1"); !ok || !d.OK {
 		t.Errorf("decision = %+v, want ok=true", d)
@@ -78,14 +78,17 @@ func TestApprovalExecutorDelegates(t *testing.T) {
 		t.Fatalf("RunAgent delegate: %s %v", out, err)
 	}
 
-	// Approve 阻塞到 Resolve。
+	// Approve 阻塞到 Resolve,并带回完整 Decision(含反馈)。
 	go func() { _ = b.Resolve("ap", false, "redo", &Feedback{Category: FeedbackFunctional, Detail: "redo"}) }()
-	ok, err := ae.Approve(context.Background(), &Node{ID: "ap"})
+	d, err := ae.Approve(context.Background(), &Node{ID: "ap"})
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if ok {
-		t.Error("Approve should return false")
+	if d.OK {
+		t.Error("Approve should return OK=false")
+	}
+	if d.Feedback == nil || d.Feedback.Detail != "redo" {
+		t.Fatalf("Approve must carry the rejection feedback: %+v", d)
 	}
 }
 

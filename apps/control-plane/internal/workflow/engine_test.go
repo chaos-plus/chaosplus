@@ -216,7 +216,7 @@ func TestHumanApprovalReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	e.exec = &stubExecutor{approve: false}
+	e.exec = &stubExecutor{decision: Decision{OK: false}}
 	evs, err := e.Run(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -231,8 +231,8 @@ func TestHumanApprovalReject(t *testing.T) {
 
 // stubExecutor lets tests drive approval outcomes.
 type stubExecutor struct {
-	approve bool
-	runFn   func(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
+	decision Decision
+	runFn    func(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
 }
 
 func (s *stubExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
@@ -243,8 +243,8 @@ func (s *stubExecutor) RunAgent(ctx context.Context, node *Node, input json.RawM
 	return out, nil
 }
 
-func (s *stubExecutor) Approve(ctx context.Context, node *Node) (bool, error) {
-	return s.approve, nil
+func (s *stubExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
+	return s.decision, nil
 }
 
 var _ Executor = (*stubExecutor)(nil)

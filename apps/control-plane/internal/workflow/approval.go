@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+// maxFeedbackFieldLen caps free-text feedback fields so a malicious or sloppy
+// approver cannot bloat the injected prompt or the persisted event log (L4).
+const maxFeedbackFieldLen = 4000
+
 // FeedbackCategory enumerates the structured-feedback categories a rejection
 // must carry (PRD §13 / D.5).
 type FeedbackCategory string
@@ -39,6 +43,12 @@ func (f *Feedback) Validate() error {
 	if f.Detail == "" {
 		return fmt.Errorf("feedback.detail is required")
 	}
+	if len(f.Detail) > maxFeedbackFieldLen {
+		return fmt.Errorf("feedback.detail too long (max %d bytes)", maxFeedbackFieldLen)
+	}
+	if len(f.Location) > maxFeedbackFieldLen || len(f.Expected) > maxFeedbackFieldLen {
+		return fmt.Errorf("feedback.location/expected too long (max %d bytes)", maxFeedbackFieldLen)
+	}
 	return nil
 }
 
@@ -66,26 +76,28 @@ func NewApprovalBroker() *ApprovalBroker {
 }
 
 // Wait blocks until the node's gate is resolved. Only the first caller per
-// nodeID waits; a second Wait for the same nodeID errors.
-func (b *ApprovalBroker) Wait(ctx context.Context, nodeID string) (bool, error) {
+// nodeID waits; a second Wait for the same nodeID errors. Returns the full
+// Decision (OK + Reason + Feedback) so the engine can inject rejection
+// feedback into the next execution (PRD §13 / F.8 layer 4).
+func (b *ApprovalBroker) Wait(ctx context.Context, nodeID string) (Decision, error) {
 	ch := make(chan Decision, 1)
 	b.mu.Lock()
 	if d, done := b.decided[nodeID]; done {
 		b.mu.Unlock()
-		return d.OK, nil
+		return d, nil
 	}
 	if _, exists := b.pending[nodeID]; exists {
 		b.mu.Unlock()
-		return false, fmt.Errorf("approval %q: already waiting", nodeID)
+		return Decision{}, fmt.Errorf("approval %q: already waiting", nodeID)
 	}
 	b.pending[nodeID] = ch
 	b.mu.Unlock()
 
 	select {
 	case d := <-ch:
-		return d.OK, nil
+		return d, nil
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return Decision{}, ctx.Err()
 	}
 }
 
@@ -114,11 +126,14 @@ func (b *ApprovalBroker) Resolve(nodeID string, ok bool, reason string, fb *Feed
 	onDec := b.OnDecision
 	b.mu.Unlock()
 
-	if ch != nil {
-		ch <- d // buffered(1): never blocks; Wait may have been cancelled
-	}
+	// Fire OnDecision (appends the REVIEW_* event to the run log) BEFORE
+	// releasing the gate, so the engine cannot run the DAG to completion and
+	// evaluate finalStatus before the review event is visible (M4).
 	if onDec != nil {
 		onDec(nodeID, d)
+	}
+	if ch != nil {
+		ch <- d // buffered(1): never blocks; Wait may have been cancelled
 	}
 	return nil
 }
@@ -147,7 +162,7 @@ func (a *ApprovalExecutor) RunAgent(ctx context.Context, node *Node, input json.
 	return a.base.RunAgent(ctx, node, input)
 }
 
-func (a *ApprovalExecutor) Approve(ctx context.Context, node *Node) (bool, error) {
+func (a *ApprovalExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
 	return a.broker.Wait(ctx, node.ID)
 }
 

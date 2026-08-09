@@ -239,7 +239,7 @@ if ($selected.backend) {
 }
 
 if ($selected.frontend) {
-    $adminRoot = Join-Path $repoRoot 'web\admin'
+    $adminRoot = Join-Path $repoRoot 'apps\admin'
     foreach ($file in @('Dockerfile', 'nginx.conf')) {
         if (-not (Test-Path (Join-Path $adminRoot $file))) { $failures.Add("Frontend deployment file is missing: apps/admin/$file") }
     }
@@ -250,7 +250,7 @@ if ($selected.frontend) {
 }
 
 if ($selected.docs) {
-    $docsRoot = Join-Path $repoRoot 'web\docs'
+    $docsRoot = Join-Path $repoRoot 'apps\docs'
     Invoke-NativeStep 'Documentation install' $docsRoot 'bun' @('install', '--frozen-lockfile')
     Invoke-NativeStep 'Documentation production build' $docsRoot 'bun' @('run', 'build')
 }

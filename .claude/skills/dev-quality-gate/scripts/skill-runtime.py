@@ -128,7 +128,7 @@ def render_repository_facts(repo_root: Path) -> str:
     }
 
     admin = _read_json(repo_root / "apps" / "admin" / "package.json")
-    admin_app = _read_json(repo_root / "apps" / "admin" / "apps" / "web" / "package.json")
+    admin_app = _read_json(repo_root / "apps" / "admin" / "apps" / "platform" / "package.json")
     docs = _read_json(repo_root / "apps" / "docs" / "package.json")
     workspaces = ", ".join(str(value) for value in admin["workspaces"])
 
@@ -153,7 +153,7 @@ This file is generated from repository manifests and source trees. Do not edit i
 - Workspace: `{admin['name']}`
 - Package manager: `{admin['packageManager']}`
 - Workspaces: {workspaces}
-- Application: `apps/admin/apps/web` (React, Vite, TypeScript)
+- Application: `apps/admin/apps/platform` (React, Vite, TypeScript)
 - Shared UI: `apps/admin/packages/ui`
 - App test command: `{admin_app['scripts']['test']}`
 
