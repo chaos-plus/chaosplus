@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bot, Hash, MoreHorizontal, Plus, RotateCw, Send, Trash2, User as UserIcon } from "lucide-react"
+import { Bot, Hash, MoreHorizontal, Paperclip, Plus, RotateCw, Send, Trash2, User as UserIcon } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
@@ -21,6 +21,16 @@ function messageText(m: ChannelMessage): string {
     return (JSON.parse(m.payloadJson) as { text?: string }).text ?? ""
   } catch {
     return m.payloadJson
+  }
+}
+
+interface MsgAttachment { id: string; filename: string; mime: string }
+
+function messageAttachments(m: ChannelMessage): MsgAttachment[] {
+  try {
+    return (JSON.parse(m.payloadJson) as { attachments?: MsgAttachment[] }).attachments ?? []
+  } catch {
+    return []
   }
 }
 
@@ -54,6 +64,9 @@ export default function SessionsPage() {
   const [execution, setExecution] = useState<ProgressEntry[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const waitingReply = useRef(false)      // 正在等待 agent 回执
+  const chatFileRef = useRef<HTMLInputElement>(null)
+  const [pendingFiles, setPendingFiles] = useState<MsgAttachment[]>([])
+  const [uploading, setUploading] = useState(false)
   const pendingAgentSeq = useRef(0)       // 发送时已知的最大 agent 消息 seq
 
   const loadChannels = useCallback(() => {
@@ -142,9 +155,12 @@ export default function SessionsPage() {
   }
 
   const send = async () => {
-    if (!channelId || !draft.trim() || busy) return
+    if (!channelId || busy) return
+    if (!draft.trim() && pendingFiles.length === 0) return
     const text = draft.trim()
+    const files = pendingFiles
     setDraft("") // 发送瞬间即清空
+    setPendingFiles([])
     const hasAgent = members.some((m) => m.kind === "agent")
     if (hasAgent) {
       pendingAgentSeq.current = Math.max(0, ...messages.filter((m) => m.authorKind === "agent").map((m) => m.seq))
@@ -152,7 +168,7 @@ export default function SessionsPage() {
       setBusy(true) // agent 异步执行,回执到达后由轮询清掉「执行中」
     }
     try {
-      await controlApi.postMessage(channelId, text)
+      await controlApi.postMessage(channelId, text, files.length ? files : undefined)
       void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
     } finally {
       if (!hasAgent) setBusy(false)
@@ -317,6 +333,33 @@ export default function SessionsPage() {
                     }`}
                   >
                     <ReactMarkdown>{messageText(m)}</ReactMarkdown>
+                    {messageAttachments(m).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {messageAttachments(m).map((a) => {
+                          const url = `/control/api/attachments/${a.id}`
+                          return (
+                            <a
+                              key={a.id}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block cursor-pointer overflow-hidden rounded-lg border bg-background/60 transition-colors hover:border-primary/40"
+                            >
+                              {a.mime.startsWith("image/") ? (
+                                <img src={url} alt={a.filename} loading="lazy" className="max-h-40 w-auto object-cover" />
+                              ) : a.mime.startsWith("video/") ? (
+                                <video src={url} controls className="max-h-40 w-auto" />
+                              ) : (
+                                <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+                                  <Paperclip className="size-3.5" />
+                                  {a.filename}
+                                </span>
+                              )}
+                            </a>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                   {!isAgent && (
                     <button
@@ -363,6 +406,24 @@ export default function SessionsPage() {
       </ScrollArea>
 
       {/* 输入区:底部固定,不随消息滚动 */}
+      {pendingFiles.length > 0 && (
+        <div className="flex shrink-0 flex-wrap gap-2 px-1 pb-1">
+          {pendingFiles.map((f) => (
+            <span key={f.id} className="inline-flex items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs">
+              <Paperclip className="size-3" />
+              {f.filename}
+              <button
+                type="button"
+                aria-label={`移除 ${f.filename}`}
+                className="cursor-pointer text-muted-foreground hover:text-destructive"
+                onClick={() => setPendingFiles((prev) => prev.filter((x) => x.id !== f.id))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form
         className="flex shrink-0 items-center gap-2 rounded-2xl border bg-card p-2 focus-within:ring-2 focus-within:ring-ring"
         onSubmit={(e) => {
@@ -370,13 +431,53 @@ export default function SessionsPage() {
           void send()
         }}
       >
+        <input
+          ref={chatFileRef}
+          type="file"
+          multiple
+          className="hidden"
+          aria-label="选择要发送的文件"
+          onChange={async (e) => {
+            const list = e.target.files
+            if (!list?.length || !channelId) return
+            setUploading(true)
+            try {
+              const added: MsgAttachment[] = []
+              for (const f of Array.from(list)) {
+                const a = await controlApi.uploadChannelAttachment(channelId, f)
+                added.push({ id: a.id, filename: a.filename, mime: a.mime })
+              }
+              setPendingFiles((prev) => [...prev, ...added])
+            } finally {
+              setUploading(false)
+              if (chatFileRef.current) chatFileRef.current.value = ""
+            }
+          }}
+        />
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-9 shrink-0 cursor-pointer rounded-full"
+          disabled={uploading}
+          onClick={() => chatFileRef.current?.click()}
+          title="发送文件/图片/视频"
+        >
+          <Paperclip className="size-4" aria-hidden="true" />
+          <span className="sr-only">添加附件</span>
+        </Button>
         <Input
           placeholder="给 agent 下达任务;多个 agent 时 @agent名 指定执行者"
           className="border-0 bg-transparent shadow-none focus-visible:ring-0"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <Button type="submit" size="icon" className="size-9 shrink-0 rounded-full" disabled={busy || !draft.trim()}>
+        <Button
+          type="submit"
+          size="icon"
+          className="size-9 shrink-0 cursor-pointer rounded-full"
+          disabled={busy || (!draft.trim() && pendingFiles.length === 0)}
+        >
           <Send className="size-4" aria-hidden="true" />
           <span className="sr-only">发送</span>
         </Button>

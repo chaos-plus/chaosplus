@@ -259,6 +259,15 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("POST /api/channels/{id}/work-items", cs.createWorkItemFromChannel)
+	mux.HandleFunc("POST /api/channels/{id}/attachments", cs.uploadAttachmentFor("channel"))
+	mux.HandleFunc("GET /api/channels/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		items, err := cs.st.ListAttachments(r.Context(), "channel", r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
+	})
 }
 
 // createWorkItem 创建工作项;关联频道时向群聊推送订阅通知。
@@ -383,18 +392,28 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	var body struct {
 		Text string `json:"text"`
+		// Attachments 引用已上传到本频道的文件(图片/视频/文档)。
+		Attachments []struct {
+			ID       string `json:"id"`
+			Filename string `json:"filename"`
+			Mime     string `json:"mime"`
+		} `json:"attachments"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Text == "" && len(body.Attachments) == 0) {
 		writeErr(w, 400, "text is required")
 		return
 	}
 	ctx := r.Context()
 
+	payload := map[string]any{"text": body.Text}
+	if len(body.Attachments) > 0 {
+		payload["attachments"] = body.Attachments
+	}
 	userMsg := &store.ChannelMessage{
 		ID: "msg-" + randHex(8), ChannelID: channelID,
 		AuthorMemberID: "human", AuthorKind: "human",
 		IdempotencyKey: fmt.Sprintf("%s:human:%s", channelID, randHex(8)),
-		PayloadJSON:    mustJSON(map[string]any{"text": body.Text}),
+		PayloadJSON:    mustJSON(payload),
 	}
 	if err := cs.st.AppendChannelMessage(ctx, userMsg); err != nil {
 		writeErr(w, 500, err.Error())
@@ -680,7 +699,17 @@ func taskWorkflowDef(it *store.WorkItem) (map[string]any, json.RawMessage) {
 }
 
 // uploadAttachment 接收 multipart 文件,存控制面 ARTIFACT_ROOT,元数据落库。
+// uploadAttachment 接收 multipart 文件,存控制面 ARTIFACT_ROOT,元数据落库。
+// ownerType 决定归属:work_item(工作项描述)或 channel(聊天引用)。
+func (cs *ChatService) uploadAttachmentFor(ownerType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { cs.storeUpload(w, r, ownerType) }
+}
+
 func (cs *ChatService) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	cs.storeUpload(w, r, "work_item")
+}
+
+func (cs *ChatService) storeUpload(w http.ResponseWriter, r *http.Request, ownerType string) {
 	if err := r.ParseMultipartForm(20 << 20); err != nil { // 20MB
 		writeErr(w, 400, "bad multipart: "+err.Error())
 		return
@@ -714,7 +743,7 @@ func (cs *ChatService) uploadAttachment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	a := &store.Attachment{
-		ID: id, OwnerType: "work_item", OwnerID: r.PathValue("id"),
+		ID: id, OwnerType: ownerType, OwnerID: r.PathValue("id"),
 		Filename: header.Filename, Mime: header.Header.Get("Content-Type"),
 		SizeBytes: n, StorePath: path,
 	}
