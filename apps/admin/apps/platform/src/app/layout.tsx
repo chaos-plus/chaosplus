@@ -100,6 +100,13 @@ export default function PlatformLayout() {
     return () => window.removeEventListener("tenant-change", sync)
   }, [])
 
+  // 动态浏览器 tab 标题:二级菜单 · 一级菜单 · chaos.plus。
+  useEffect(() => {
+    const topLabel = ({ dashboard: "仪表盘", sessions: "会话区", workspace: "工作区", workflow: "工作流", team: "团队管理" } as Record<string, string>)[top]
+    const sub = secondary.find((s) => location.pathname.startsWith(s.path))
+    document.title = [sub?.label, topLabel, "chaos.plus"].filter(Boolean).join(" · ")
+  }, [top, secondary, location.pathname])
+
   // 会话区左侧菜单:实时列出频道。
   useEffect(() => {
     if (top !== "sessions") return
