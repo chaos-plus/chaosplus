@@ -734,12 +734,31 @@ const clientErrorMessages = {
     invalid_audit_export_content_type:
       "The audit export returned an unexpected file type.",
     incomplete_audit_export: "The audit export is incomplete.",
+    unauthorized: "Sign in required. Your session may have expired.",
+    forbidden: "You don't have permission to perform this action.",
+    inactive_tenant_membership:
+      "Your account is not an active member of this workspace.",
+    csrf_rejected:
+      "This request was rejected for security reasons. Reload and try again.",
+    authentication_unavailable:
+      "The authentication service is temporarily unavailable.",
+    authorization_unavailable:
+      "The authorization service is temporarily unavailable.",
+    federation_unavailable:
+      "The identity federation service is temporarily unavailable.",
   },
   "zh-CN": {
     invalid_response: "服务返回了无效响应。",
     clipboard_access_denied: "浏览器拒绝访问剪贴板，请手动复制。",
     invalid_audit_export_content_type: "审计导出返回了非预期文件类型。",
     incomplete_audit_export: "审计导出不完整。",
+    unauthorized: "需要登录。您的会话可能已过期。",
+    forbidden: "您没有执行该操作的权限。",
+    inactive_tenant_membership: "您的账号不是该工作区的有效成员。",
+    csrf_rejected: "该请求因安全校验被拒绝，请刷新页面后重试。",
+    authentication_unavailable: "认证服务暂时不可用。",
+    authorization_unavailable: "授权服务暂时不可用。",
+    federation_unavailable: "身份联合服务暂时不可用。",
   },
   "ms-MY": {
     invalid_response: "Perkhidmatan mengembalikan respons yang tidak sah.",
@@ -748,6 +767,18 @@ const clientErrorMessages = {
     invalid_audit_export_content_type:
       "Eksport audit mengembalikan jenis fail yang tidak dijangka.",
     incomplete_audit_export: "Eksport audit tidak lengkap.",
+    unauthorized: "Log masuk diperlukan. Sesi anda mungkin telah tamat.",
+    forbidden: "Anda tidak mempunyai kebenaran untuk melakukan tindakan ini.",
+    inactive_tenant_membership:
+      "Akaun anda bukan ahli aktif ruang kerja ini.",
+    csrf_rejected:
+      "Permintaan ini ditolak atas sebab keselamatan. Muat semula dan cuba lagi.",
+    authentication_unavailable:
+      "Perkhidmatan pengesahan tidak tersedia buat sementara waktu.",
+    authorization_unavailable:
+      "Perkhidmatan kebenaran tidak tersedia buat sementara waktu.",
+    federation_unavailable:
+      "Perkhidmatan federasi identiti tidak tersedia buat sementara waktu.",
   },
 }
 
@@ -791,14 +822,29 @@ export function getEntity(): string {
   )
 }
 
-export function setEntity(value: string): void {
-  localStorage.setItem(entityKey, value.trim())
+export function setEntity(value: string, redirectTo?: string): void {
+  const next = value.trim()
+  const changed = getEntity() !== next
+  localStorage.setItem(entityKey, next)
   window.dispatchEvent(new Event("entity-change"))
+  // ponytail: 各页面数据都按 X-Entity 隔离,切换后整页重载最省事;
+  // 需要局部刷新时再改成各页面订阅 entity-change。
+  if (redirectTo) location.assign(redirectTo)
+  else if (changed) location.reload()
 }
 
 export function setTenant(value: string): void {
   localStorage.setItem(tenantKey, value.trim())
   window.dispatchEvent(new Event("tenant-change"))
+}
+
+/** 从 myTenants 结果里选当前租户:localStorage 里的可能是上个账号残留,不在列表就换第一个真实租户。 */
+export function pickCurrentTenant(
+  mine: readonly { id: string }[],
+  stored: string
+): string {
+  if (!mine[0]) return ""
+  return mine.some((t) => t.id === stored) ? stored : mine[0].id
 }
 
 async function requestWithBase<T>(
@@ -881,7 +927,14 @@ function apiError(status: number, body: ErrorResponse | null): ApiError {
     body?.detail?.trim() ||
     message ||
     `HTTP ${status}`
-  return new ApiError(status, code, message || undefined)
+  // 服务端 message 是错误 code(如 inactive_tenant_membership),不是展示文案;
+  // 已知 code 走 i18n 映射,未知的再回退到服务端原文。
+  const translated = clientErrorMessage(code)
+  return new ApiError(
+    status,
+    code,
+    translated !== code ? translated : message || undefined
+  )
 }
 
 export function clientErrorMessage(code: string): string {
@@ -1731,3 +1784,18 @@ export function createIamApi(
 
 export type IamApi = ReturnType<typeof createIamApi>
 export const iamApi = createIamApi()
+
+/**
+ * 解析当前用户真实租户。localStorage 里的 tenant/entity 可能是上个账号的残留,
+ * 不在 myTenants 里就纠正(并作废旧实体选择),否则所有租户接口都会
+ * 403 inactive_tenant_membership。
+ */
+export async function resolveCurrentTenant(): Promise<string> {
+  const mine = (await iamApi.myTenants().catch(() => [])) ?? []
+  const next = pickCurrentTenant(mine, getTenant())
+  if (next && next !== getTenant()) {
+    setTenant(next)
+    setEntity("")
+  }
+  return next
+}

@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Network,
-  Repeat2,
   Settings,
   UsersRound,
 } from "lucide-react"
@@ -26,12 +25,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Toaster } from "@workspace/ui/components/sonner"
+import { Button } from "@workspace/ui/components/button"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
+import { Input } from "@workspace/ui/components/input"
+import { Toaster, toast } from "@workspace/ui/components/sonner"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
 import { SimpleSelect } from "@workspace/ui/components/select"
 import { controlApi, type Channel } from "../lib/control-api"
-import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity } from "../lib/iam-api"
+import { getEntity, getTenant, iamApi, resolveCurrentTenant, setEntity, setTenant, type Entity } from "../lib/iam-api"
 
 interface NavItem {
   /** i18n key,位于 platform.nav.*。 */
@@ -95,6 +97,8 @@ export default function PlatformLayout() {
 
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [entityValue, setEntityValue] = useState(getEntity())
+  const [newEntityOpen, setNewEntityOpen] = useState(false)
+  const [newEntityName, setNewEntityName] = useState("")
   const [tenantEntities, setTenantEntities] = useState<Entity[]>([])
   const { setLocale } = useClientLocale()
   const [lang, setLang] = useState<Locale>(() => currentLocale())
@@ -109,12 +113,11 @@ export default function PlatformLayout() {
     }
     // 登录用户自己的租户(注册即自动创建);平台级 /iam/tenants 需管理员。
     const refresh = () => {
-      void iamApi.myTenants().then((x) => {
-        const mine = (x ?? [])[0]
-        if (mine && !session?.organization_id && !getEntity()) {
-          setTenantValue(mine.id)
-          setTenant(mine.id)
-        }
+      // 残留 tenant/entity 会让所有租户接口 403 inactive_tenant_membership,
+      // resolveCurrentTenant 会纠正 localStorage 并作废旧实体选择。
+      if (session?.organization_id) return
+      void resolveCurrentTenant().then((id) => {
+        if (id) setTenantValue(id)
       }).catch(() => {})
     }
     refresh()
@@ -123,18 +126,29 @@ export default function PlatformLayout() {
   }, [status, session?.organization_id])
 
   useEffect(() => {
-    if (!tenantValue) {
-      setTenantEntities([])
-      return
+    // 租户可能还没解析出来:那就先按自己的租户查一次,否则下拉拿不到 option,
+    // 选中的实体只能显示原始 id。
+    const loadEntities = async () => {
+      let tenantId = tenantValue || getTenant()
+      if (!tenantId) {
+        const mine = (await iamApi.myTenants().catch(() => [])) ?? []
+        if (!mine[0]) return
+        tenantId = mine[0].id
+        setTenant(tenantId)
+        setTenantValue(tenantId)
+      }
+      const list = await iamApi.entities(tenantId).catch(() => null)
+      if (!list) return // 加载失败:保留现状,不误删当前实体选择。
+      const tenantList = list.filter((en) => en.tenant_id === tenantId)
+      setTenantEntities(tenantList)
+      // 当前实体不在该租户列表里(残留/已删)→ 作废并重载,hasEntity 门会送去 /entities 重选。
+      const currentEntity = getEntity()
+      if (currentEntity && !tenantList.some((en) => en.id === currentEntity)) {
+        setEntity("")
+      }
     }
-    const loadEntities = () => {
-      void iamApi
-        .entities(tenantValue)
-        .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
-        .catch(() => setTenantEntities([]))
-    }
-    loadEntities()
-    const t = setInterval(loadEntities, 5000)
+    void loadEntities()
+    const t = setInterval(() => void loadEntities(), 5000)
     return () => clearInterval(t)
   }, [tenantValue])
 
@@ -161,20 +175,24 @@ export default function PlatformLayout() {
   // 顶部头像展示个人中心里设置的昵称。
   const [displayName, setDisplayName] = useState("未登录")
   useEffect(() => {
-    if (!tenantValue) {
-      setTenantEntities([])
-      return
+    const sync = () => {
+      try {
+        const raw = localStorage.getItem("platform-profile")
+        const p = raw ? (JSON.parse(raw) as { nickname?: string; email?: string }) : null
+        setDisplayName(p?.nickname || p?.email || "未登录")
+      } catch {
+        setDisplayName("未登录")
+      }
     }
-    const loadEntities = () => {
-      void iamApi
-        .entities(tenantValue)
-        .then((x) => setTenantEntities((x ?? []).filter((en) => en.tenant_id === tenantValue)))
-        .catch(() => setTenantEntities([]))
+    sync()
+    // storage 事件只跨标签页触发,同页保存要靠自定义事件。
+    window.addEventListener("storage", sync)
+    window.addEventListener("profile-change", sync)
+    return () => {
+      window.removeEventListener("storage", sync)
+      window.removeEventListener("profile-change", sync)
     }
-    loadEntities()
-    const t = setInterval(loadEntities, 5000)
-    return () => clearInterval(t)
-  }, [tenantValue])
+  }, [])
 
   useEffect(() => {
     const sync = () => {
@@ -206,6 +224,27 @@ export default function PlatformLayout() {
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
   }, [top])
+
+  // 就地新建实例:创建后立刻切到它,列表由轮询刷新。
+  const createEntityInline = async () => {
+    const name = newEntityName.trim()
+    if (!name) return
+    try {
+      const tenantId = tenantValue || getTenant()
+      const en = await iamApi.createEntity(
+        { type: "instance", name, status: "active", metadata: {} },
+        tenantId || undefined,
+      )
+      setTenantEntities((prev) => [...prev, en])
+      setEntity(en.id)
+      setEntityValue(en.id)
+      setNewEntityOpen(false)
+      setNewEntityName("")
+      toast.success(`已创建并切换到 ${en.name}`)
+    } catch (e) {
+      toast.error(`创建实例失败:${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   // 未登录一律去 /login;登录成功后 finishLogin 会回首页。
   if (status === "anonymous") return <Navigate to="/login" replace />
@@ -263,7 +302,7 @@ export default function PlatformLayout() {
               value={entityValue}
               onValueChange={(v) => {
                 if (v === "__new__") {
-                  navigate("/entities")
+                  setNewEntityOpen(true)
                   return
                 }
                 setEntity(v)
@@ -292,25 +331,7 @@ export default function PlatformLayout() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* 主体切换 */}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label="主体切换"
-                className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Repeat2 className="size-4" aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>主体</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>
-                  当前: {session?.preferred_username ?? session?.subject ?? displayName}
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                  主体由 IAM 身份体系提供
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <ThemeModeButton />
 
             {/* 语言切换 */}
             <DropdownMenu>
@@ -359,11 +380,37 @@ export default function PlatformLayout() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-
-            <ThemeModeButton />
           </div>
         </div>
       </header>
+
+      {/* 新建实例:就地创建并切过去,不用离开当前页面。 */}
+      <Dialog open={newEntityOpen} onOpenChange={setNewEntityOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>新建实例</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-1.5 py-2">
+            <label htmlFor="new-entity-name" className="text-sm font-medium">名称</label>
+            <Input
+              id="new-entity-name"
+              autoFocus
+              value={newEntityName}
+              onChange={(e) => setNewEntityName(e.target.value)}
+              placeholder="如:my-app"
+              onKeyDown={(e) => e.key === "Enter" && void createEntityInline()}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setNewEntityOpen(false)}>
+              取消
+            </Button>
+            <Button className="cursor-pointer" onClick={() => void createEntityInline()} disabled={!newEntityName.trim()}>
+              创建并切换
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {secondary.length > 0 && (
           <nav

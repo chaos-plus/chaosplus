@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
-import { useNavigate } from "react-router"
 import { Boxes, Plus } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Card } from "@workspace/ui/components/card"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { toast } from "@workspace/ui/components/sonner"
-import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity } from "../../lib/iam-api"
+import { getEntity, getTenant, iamApi, resolveCurrentTenant, setEntity, type Entity } from "../../lib/iam-api"
 
 /** 实体(instance)创建/加入:登录后必须选定一个实例才能查看其下的资源。 */
 export default function EntitiesPage() {
-  const navigate = useNavigate()
   const [entities, setEntities] = useState<Entity[]>([])
   const [current, setCurrent] = useState(getEntity())
   const [tenant, setTenantId] = useState(getTenant())
@@ -27,17 +25,9 @@ export default function EntitiesPage() {
   // 实体接口需要租户上下文(X-Tenant-Id)。独立路由不经 layout,先确保有租户,
   // 并显式传给每次请求(不依赖 getTenant 兜底)。
   const ensureTenant = useCallback(async () => {
-    if (getTenant()) {
-      setTenantId(getTenant())
-      return getTenant()
-    }
-    const mine = (await iamApi.myTenants().catch(() => [])) ?? []
-    if (mine[0]) {
-      setTenant(mine[0].id)
-      setTenantId(mine[0].id)
-      return mine[0].id
-    }
-    return ""
+    const id = await resolveCurrentTenant()
+    if (id) setTenantId(id)
+    return id
   }, [])
 
   const load = useCallback((tenantId: string) => {
@@ -51,19 +41,23 @@ export default function EntitiesPage() {
   }, [])
 
   useEffect(() => {
+    // 轮询必须用解析后的租户:直接闭包捕获会拿到解析前的空值,
+    // 第二次 tick 就用空租户把列表清掉了。
     let tenantId = tenant
+    const tick = () => {
+      if (tenantId) load(tenantId)
+    }
     void ensureTenant().then((id) => {
       tenantId = id || tenantId
-      load(tenantId)
+      tick()
     })
-    const t = setInterval(() => load(tenantId), 5000)
+    const t = setInterval(tick, 5000)
     return () => clearInterval(t)
   }, [load, ensureTenant, tenant])
 
   const enter = (id: string) => {
-    setEntity(id)
     setCurrent(id)
-    navigate("/") // 进入平台,按该实体展示资源
+    setEntity(id, "/") // 整页跳转进平台,按该实体重新拉数据
   }
 
   const create = async () => {

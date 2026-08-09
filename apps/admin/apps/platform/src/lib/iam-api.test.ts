@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test"
 import {
+  ApiError,
   createIamApi,
+  pickCurrentTenant,
   type AuditEvent,
   type DepartmentInput,
   type OAuthClientInput,
@@ -48,6 +50,44 @@ describe("Chaosplus IAM API client", () => {
       current_password: "old secure password",
       new_password: "new secure password",
     })
+  })
+
+  it("heals a stale stored tenant to the first real tenant", () => {
+    const mine = [{ id: "t-a" }, { id: "t-b" }]
+    expect(pickCurrentTenant(mine, "t-a")).toBe("t-a")
+    expect(pickCurrentTenant(mine, "t-stale")).toBe("t-a")
+    expect(pickCurrentTenant([], "t-stale")).toBe("")
+  })
+
+  it("localizes known server error codes instead of showing the raw key", async () => {
+    const requests: RecordedRequest[] = []
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push({
+          method: request.method,
+          path: new URL(request.url).pathname,
+          headers: request.headers,
+          body: await request.text(),
+        })
+        return Response.json(
+          { code: 403, message: "inactive_tenant_membership" },
+          { status: 403 }
+        )
+      },
+    })
+    const client = createIamApi(
+      `http://127.0.0.1:${server.port}`,
+      () => "tenant-a"
+    )
+    const err = await client.roles().then(
+      () => null,
+      (e) => e
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.code).toBe("inactive_tenant_membership")
+    expect(err.message).not.toBe("inactive_tenant_membership")
+    expect(err.message?.length).toBeGreaterThan(0)
   })
 
   it("uses tenant-scoped access governance contracts", async () => {
@@ -146,10 +186,10 @@ describe("Chaosplus IAM API client", () => {
       },
     })
     const client = createIamApi(`http://127.0.0.1:${server.port}`)
-    await expect(client.roles()).rejects.toMatchObject({
-      status: 403,
-      message: "forbidden",
-    })
+    const err = await client.roles().then(() => null, (e) => e)
+    expect(err).toMatchObject({ status: 403, code: "forbidden" })
+    // 服务端 message 是 code,已知 code 会被本地化而不是原样展示。
+    expect(err.message).not.toBe("forbidden")
     expect(await client.logout()).toBeUndefined()
   })
 
