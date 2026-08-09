@@ -34,7 +34,8 @@
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "react-router": "^8.1.0",
-    "@xyflow/react": "^12.7.2"
+    "@xyflow/react": "^12.7.2",
+    "use-intl": "^4.13.1"
   },
   "devDependencies": {
     "@eslint/js": "^10",

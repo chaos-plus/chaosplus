@@ -1,0 +1,43 @@
+{
+  "platform": {
+    "nav": {
+      "dashboard": "仪表盘",
+      "sessions": "会话区",
+      "workspace": "工作区",
+      "workflow": "工作流",
+      "team": "团队管理",
+      "profile": "个人中心",
+      "channels": "频道",
+      "requirements": "需求",
+      "tasks": "任务",
+      "tests": "测试",
+      "bugs": "缺陷",
+      "okrs": "OKR",
+      "machines": "机器 Machines",
+      "humans": "人类 Human",
+      "agents": "Agent",
+      "runs": "运行 Runs",
+      "approvals": "审批 Approvals"
+    },
+    "dashboard": {
+      "title": "仪表盘",
+      "activeRuns": "活跃 run",
+      "runnerHealth": "Runner 健康",
+      "pendingApprovals": "待审批",
+      "costToday": "今日成本",
+      "online": "在线",
+      "lastHeartbeat": "最近心跳",
+      "none": "暂无",
+      "emptyHint": "还没有任何执行记录,按三步开始:"
+    },
+    "common": {
+      "create": "创建",
+      "save": "保存",
+      "cancel": "取消",
+      "delete": "删除",
+      "detail": "详情",
+      "execute": "执行",
+      "loading": "加载中…"
+    }
+  }
+}

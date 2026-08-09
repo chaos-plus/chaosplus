@@ -1,0 +1,43 @@
+{
+  "platform": {
+    "nav": {
+      "dashboard": "Dashboard",
+      "sessions": "Sessions",
+      "workspace": "Workspace",
+      "workflow": "Workflows",
+      "team": "Team",
+      "profile": "Profile",
+      "channels": "Channels",
+      "requirements": "Requirements",
+      "tasks": "Tasks",
+      "tests": "Tests",
+      "bugs": "Bugs",
+      "okrs": "OKRs",
+      "machines": "Machines",
+      "humans": "Humans",
+      "agents": "Agents",
+      "runs": "Runs",
+      "approvals": "Approvals"
+    },
+    "dashboard": {
+      "title": "Dashboard",
+      "activeRuns": "Active runs",
+      "runnerHealth": "Runner health",
+      "pendingApprovals": "Pending approvals",
+      "costToday": "Cost today",
+      "online": "online",
+      "lastHeartbeat": "Last heartbeat",
+      "none": "None",
+      "emptyHint": "No runs yet. Get started in three steps:"
+    },
+    "common": {
+      "create": "Create",
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "detail": "Details",
+      "execute": "Run",
+      "loading": "Loading…"
+    }
+  }
+}

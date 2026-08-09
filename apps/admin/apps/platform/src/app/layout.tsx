@@ -14,6 +14,10 @@ import {
   UsersRound,
 } from "lucide-react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router"
+import { useTranslations } from "use-intl"
+import type { Locale } from "@workspace/ui/i18n/config"
+import { useClientLocale } from "@workspace/ui/i18n/intl-provider"
+import { currentLocale, persistLocale } from "../i18n"
 import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar"
 import {
   DropdownMenu,
@@ -30,39 +34,46 @@ import { controlApi, type Channel } from "../lib/control-api"
 import { getTenant, iamApi, setTenant, type Tenant } from "../lib/iam-api"
 
 interface NavItem {
-  label: string
+  /** i18n key,位于 platform.nav.*。 */
+  key: string
   path: string
   icon: typeof Hash
 }
 
+const LOCALES: Array<{ code: Locale; label: string }> = [
+  { code: "zh-CN", label: "简体中文" },
+  { code: "en-US", label: "English" },
+  { code: "ms-MY", label: "Bahasa Melayu" },
+]
+
 /** 顶部一级菜单(PRD 平台域)。 */
 const TOP_MENUS: NavItem[] = [
-  { label: "仪表盘", path: "/", icon: LayoutDashboard },
-  { label: "会话区", path: "/sessions", icon: MessagesSquare },
-  { label: "工作区", path: "/workspace/requirements", icon: FolderKanban },
-  { label: "工作流", path: "/workflow/runs", icon: GitBranch },
-  { label: "团队管理", path: "/team/machines", icon: UsersRound },
+  { key: "dashboard", path: "/", icon: LayoutDashboard },
+  { key: "sessions", path: "/sessions", icon: MessagesSquare },
+  { key: "workspace", path: "/workspace/requirements", icon: FolderKanban },
+  { key: "workflow", path: "/workflow/runs", icon: GitBranch },
+  { key: "team", path: "/team/machines", icon: UsersRound },
 ]
 
 /** 每个一级菜单下的左侧二级菜单。 */
 const SECONDARY: Record<string, NavItem[]> = {
   dashboard: [],
-  sessions: [{ label: "频道", path: "/sessions", icon: Hash }],
+  sessions: [{ key: "channels", path: "/sessions", icon: Hash }],
   workspace: [
-    { label: "需求", path: "/workspace/requirements", icon: FolderKanban },
-    { label: "任务", path: "/workspace/tasks", icon: FolderKanban },
-    { label: "测试", path: "/workspace/tests", icon: FolderKanban },
-    { label: "缺陷", path: "/workspace/bugs", icon: FolderKanban },
-    { label: "OKR", path: "/workspace/okrs", icon: Gauge },
+    { key: "requirements", path: "/workspace/requirements", icon: FolderKanban },
+    { key: "tasks", path: "/workspace/tasks", icon: FolderKanban },
+    { key: "tests", path: "/workspace/tests", icon: FolderKanban },
+    { key: "bugs", path: "/workspace/bugs", icon: FolderKanban },
+    { key: "okrs", path: "/workspace/okrs", icon: Gauge },
   ],
   team: [
-    { label: "机器 Machines", path: "/team/machines", icon: Network },
-    { label: "人类 Human", path: "/team/humans", icon: UsersRound },
-    { label: "Agent", path: "/team/agents", icon: Gauge },
+    { key: "machines", path: "/team/machines", icon: Network },
+    { key: "humans", path: "/team/humans", icon: UsersRound },
+    { key: "agents", path: "/team/agents", icon: Gauge },
   ],
   workflow: [
-    { label: "运行 Runs", path: "/workflow/runs", icon: GitBranch },
-    { label: "审批 Approvals", path: "/workflow/approvals", icon: Gauge },
+    { key: "runs", path: "/workflow/runs", icon: GitBranch },
+    { key: "approvals", path: "/workflow/approvals", icon: Gauge },
   ],
 }
 
@@ -75,6 +86,7 @@ function activeTop(pathname: string): string {
 }
 
 export default function PlatformLayout() {
+  const t = useTranslations("platform")
   const { session, status } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
@@ -84,7 +96,8 @@ export default function PlatformLayout() {
   const [tenantDraft, setTenantDraft] = useState(getTenant())
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
-  const [lang, setLang] = useState<string>(() => localStorage.getItem("platform-lang") ?? "zh")
+  const { setLocale } = useClientLocale()
+  const [lang, setLang] = useState<Locale>(() => currentLocale())
   const [channels, setChannels] = useState<Channel[]>([])
 
   useEffect(() => {
@@ -110,12 +123,12 @@ export default function PlatformLayout() {
   // 动态浏览器 tab 标题:二级菜单 · 一级菜单 · chaos.plus。
   useEffect(() => {
     if (location.pathname.startsWith("/profile")) {
-      document.title = "个人中心 · chaos.plus"
+      document.title = `${t("nav.profile")} · chaos.plus`
       return
     }
-    const topLabel = ({ dashboard: "仪表盘", sessions: "会话区", workspace: "工作区", workflow: "工作流", team: "团队管理" } as Record<string, string>)[top]
+    const topLabel = t(`nav.${top}`)
     const sub = secondary.find((s) => location.pathname.startsWith(s.path))
-    document.title = [sub?.label, topLabel, "chaos.plus"].filter(Boolean).join(" · ")
+    document.title = [sub ? t(`nav.${sub.key}`) : undefined, topLabel, "chaos.plus"].filter(Boolean).join(" · ")
   }, [top, secondary, location.pathname])
 
   // 顶部头像展示个人中心里设置的昵称。
@@ -195,7 +208,7 @@ export default function PlatformLayout() {
                 }
               >
                 <m.icon className="size-4" aria-hidden="true" />
-                {m.label}
+                {t(`nav.${m.key}`)}
               </NavLink>
             ))}
           </nav>
@@ -271,12 +284,18 @@ export default function PlatformLayout() {
                 <Languages className="size-4" aria-hidden="true" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-32">
-                <DropdownMenuItem onClick={() => { setLang("zh"); localStorage.setItem("platform-lang", "zh") }}>
-                  简体中文 {lang === "zh" && "✓"}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => { setLang("en"); localStorage.setItem("platform-lang", "en") }}>
-                  English {lang === "en" && "✓"}
-                </DropdownMenuItem>
+                {LOCALES.map((l) => (
+                  <DropdownMenuItem
+                    key={l.code}
+                    onClick={() => {
+                      setLang(l.code)
+                      persistLocale(l.code)
+                      setLocale(l.code)
+                    }}
+                  >
+                    {l.label} {lang === l.code && "✓"}
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -312,7 +331,7 @@ export default function PlatformLayout() {
         {secondary.length > 0 && (
           <nav
             className="flex w-full shrink-0 gap-1 overflow-x-auto border-b bg-background p-2 md:w-56 md:flex-col md:overflow-visible md:border-r md:border-b-0"
-            aria-label={`${TOP_MENUS.find((m) => m.path === top)?.label ?? ""} 二级菜单`}
+            aria-label={`${t(`nav.${top}`)} 二级菜单`}
           >
             {secondary.map((item) => (
               <NavLink
@@ -327,7 +346,7 @@ export default function PlatformLayout() {
                 }
               >
                 <item.icon className="size-4" aria-hidden="true" />
-                {item.label}
+                {t(`nav.${item.key}`)}
               </NavLink>
             ))}
             {top === "sessions" && (
@@ -376,7 +395,7 @@ export default function PlatformLayout() {
               }
             >
               <m.icon className="size-5" aria-hidden="true" />
-              <span className="truncate">{m.label}</span>
+              <span className="truncate">{t(`nav.${m.key}`)}</span>
             </NavLink>
           ))}
         </div>

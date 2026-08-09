@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
+import { useTranslations } from "use-intl"
 import { Activity, CircleDollarSign, Network, ShieldQuestion } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { controlApi, type DashboardStats } from "../../lib/control-api"
@@ -21,6 +22,7 @@ function heartbeatText(ts: number): string {
 }
 
 export default function DashboardPage() {
+  const t = useTranslations("platform.dashboard")
   const navigate = useNavigate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [failed, setFailed] = useState(false)
@@ -49,9 +51,9 @@ export default function DashboardPage() {
   if (isEmpty) {
     return (
       <div className="space-y-4">
-        <h1 className="text-xl font-semibold">仪表盘</h1>
+        <h1 className="text-xl font-semibold">{t("title")}</h1>
         <div className="rounded-xl border border-dashed p-8">
-          <p className="text-sm text-muted-foreground">还没有任何执行记录,按三步开始:</p>
+          <p className="text-sm text-muted-foreground">{t("emptyHint")}</p>
           <ol className="mt-4 grid gap-3 sm:grid-cols-3">
             {[
               { n: 1, title: "创建频道", desc: "会话区里开一个项目频道", to: "/sessions" },
@@ -77,7 +79,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">仪表盘</h1>
+      <h1 className="text-xl font-semibold">{t("title")}</h1>
       {failed && <p className="text-sm text-destructive">控制面暂时无法访问,显示的是上次数据。</p>}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -98,7 +100,7 @@ export default function DashboardPage() {
                   </span>
                 ) : null,
               )}
-              {totalRuns === 0 && <span>暂无</span>}
+              {totalRuns === 0 && <span>{t("none")}</span>}
             </div>
           </CardContent>
         </Card>
@@ -113,9 +115,9 @@ export default function DashboardPage() {
           <CardContent>
             <p className="text-2xl font-semibold tabular-nums">
               {stats?.machinesOnline ?? 0}
-              <span className="text-base font-normal text-muted-foreground"> / {stats?.machinesTotal ?? 0} 在线</span>
+              <span className="text-base font-normal text-muted-foreground"> / {stats?.machinesTotal ?? 0} {t("online")}</span>
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">最近心跳:{heartbeatText(stats?.lastHeartbeatAt ?? 0)}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{t("lastHeartbeat")}:{heartbeatText(stats?.lastHeartbeatAt ?? 0)}</p>
           </CardContent>
         </Card>
 
@@ -138,7 +140,7 @@ export default function DashboardPage() {
                   {p.title || p.runId} · {p.nodeId}
                 </button>
               ))}
-              {(stats?.pendingApprovals.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">暂无</span>}
+              {(stats?.pendingApprovals.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{t("none")}</span>}
             </div>
           </CardContent>
         </Card>
