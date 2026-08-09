@@ -41,12 +41,37 @@ export interface ChannelMember {
 
 export interface WorkItem {
   id: string
-  type: string // requirement | task | bug
+  type: string // requirement | task | test | bug
   title: string
   description: string
   status: string // open | in_progress | review | done
+  parentId: string
+  estimateHours: number
+  spentHours: number
+  progress: number
+  workflowRunId: string
   assigneeAgent: string
   channelId: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Attachment {
+  id: string
+  ownerType: string
+  ownerId: string
+  filename: string
+  mime: string
+  sizeBytes: number
+  createdAt: number
+}
+
+export interface Okr {
+  id: string
+  title: string
+  objective: string
+  period: string
+  keyResults: string
   createdAt: number
   updatedAt: number
 }
@@ -129,11 +154,24 @@ export const controlApi = {
     const s = q.toString()
     return req<WorkItem[]>(`/work-items${s ? `?${s}` : ""}`)
   },
-  createWorkItem: (w: Omit<WorkItem, "id" | "createdAt" | "updatedAt">) =>
+  createWorkItem: (w: Partial<Omit<WorkItem, "id" | "createdAt" | "updatedAt">>) =>
     req<WorkItem>("/work-items", { method: "POST", body: JSON.stringify(w) }),
   updateWorkItem: (id: string, w: Partial<WorkItem>) =>
     req<WorkItem>(`/work-items/${id}`, { method: "PUT", body: JSON.stringify(w) }),
   deleteWorkItem: (id: string) => req<{ ok: boolean }>(`/work-items/${id}`, { method: "DELETE" }),
   createWorkItemFromChannel: (channelId: string, w: { type: string; title: string; description?: string }) =>
     req<WorkItem>(`/channels/${channelId}/work-items`, { method: "POST", body: JSON.stringify(w) }),
+  executeWorkItem: (id: string) => req<{ runId: string }>(`/work-items/${id}/execute`, { method: "POST" }),
+  attachments: (id: string) => req<Attachment[]>(`/work-items/${id}/attachments`),
+  uploadAttachment: async (id: string, file: File): Promise<Attachment> => {
+    const fd = new FormData()
+    fd.append("file", file)
+    const res = await fetch(`${base}/work-items/${id}/attachments`, { method: "POST", body: fd })
+    if (!res.ok) throw new Error("upload failed")
+    return res.json()
+  },
+  okrs: () => req<Okr[]>("/okrs"),
+  createOkr: (o: Omit<Okr, "id" | "createdAt" | "updatedAt">) => req<Okr>("/okrs", { method: "POST", body: JSON.stringify(o) }),
+  updateOkr: (id: string, o: Partial<Okr>) => req<Okr>(`/okrs/${id}`, { method: "PUT", body: JSON.stringify(o) }),
+  deleteOkr: (id: string) => req<{ ok: boolean }>(`/okrs/${id}`, { method: "DELETE" }),
 }

@@ -47,7 +47,13 @@ const TOP_MENUS: NavItem[] = [
 const SECONDARY: Record<string, NavItem[]> = {
   dashboard: [],
   sessions: [{ label: "频道", path: "/sessions", icon: Hash }],
-  workspace: [{ label: "工作区", path: "/workspace", icon: FolderKanban }],
+  workspace: [
+    { label: "需求", path: "/workspace/requirements", icon: FolderKanban },
+    { label: "任务", path: "/workspace/tasks", icon: FolderKanban },
+    { label: "测试", path: "/workspace/tests", icon: FolderKanban },
+    { label: "缺陷", path: "/workspace/bugs", icon: FolderKanban },
+    { label: "OKR", path: "/workspace/okrs", icon: Gauge },
+  ],
   team: [
     { label: "机器 Machines", path: "/team/machines", icon: Network },
     { label: "人类 Human", path: "/team/humans", icon: UsersRound },

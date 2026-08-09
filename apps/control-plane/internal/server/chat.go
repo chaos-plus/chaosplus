@@ -213,6 +213,14 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		writeJSON(w, 200, items)
 	})
 	mux.HandleFunc("POST /api/work-items", cs.createWorkItem)
+	mux.HandleFunc("GET /api/work-items/{id}", func(w http.ResponseWriter, r *http.Request) {
+		it, err := cs.st.GetWorkItem(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 404, "work item not found")
+			return
+		}
+		writeJSON(w, 200, it)
+	})
 	mux.HandleFunc("PUT /api/work-items/{id}", cs.updateWorkItem)
 	mux.HandleFunc("DELETE /api/work-items/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := cs.st.DeleteWorkItem(r.Context(), r.PathValue("id")); err != nil {
@@ -597,7 +605,8 @@ func (cs *ChatService) executeWorkItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	run, err := cs.rm.Launch(r.Context(), LaunchRequest{WorkflowJSON: defJSON, Context: ctxJSON, Workspace: workspace, RunnerID: cs.runnerID})
+	// 用 Background:HTTP 处理器返回后 run 仍需继续(r.Context() 会取消它)。
+	run, err := cs.rm.Launch(context.Background(), LaunchRequest{WorkflowJSON: defJSON, Context: ctxJSON, Workspace: workspace, RunnerID: cs.runnerID})
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return

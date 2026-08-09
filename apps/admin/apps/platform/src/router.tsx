@@ -26,8 +26,9 @@ export const router = createBrowserRouter([
               // 会话区
               { path: "/sessions", lazy: async () => ({ Component: (await import("./app/sessions/page")).default }) },
               { path: "/sessions/:channelId", lazy: async () => ({ Component: (await import("./app/sessions/page")).default }) },
-              // 工作区
-              { path: "/workspace", lazy: async () => ({ Component: (await import("./app/workspace/page")).default }) },
+              // 工作区(需求/任务/测试/缺陷/OKR)
+              { path: "/workspace/:type", lazy: async () => ({ Component: (await import("./app/workspace/page")).default }) },
+              { path: "/workspace/okrs", lazy: async () => ({ Component: (await import("./app/workspace/okrs")).default }) },
               // 团队管理
               { path: "/team/machines", lazy: async () => ({ Component: (await import("./app/team/machines/page")).default }) },
               { path: "/team/humans", lazy: async () => ({ Component: (await import("./app/team/humans/page")).default }) },
