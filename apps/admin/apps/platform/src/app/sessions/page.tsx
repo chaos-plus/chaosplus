@@ -245,7 +245,12 @@ export default function SessionsPage() {
     const load = () => {
       void controlApi.messages(channelId).then((x) => {
         const list = x ?? []
-        setMessages(list)
+        // 按 id 合并,避免覆盖 WS 实时推送的消息(M1:fetch 与 WS 竞态)。
+        setMessages((prev) => {
+          const byId = new Map(prev.map((m) => [m.id, m]))
+          list.forEach((m) => byId.set(m.id, m))
+          return [...byId.values()]
+        })
         // agent 回执到达 → 结束「执行中」。
         if (waitingReply.current && list.some((m) => m.authorKind === "agent" && m.seq > pendingAgentSeq.current)) {
           setBusy(false)

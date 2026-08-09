@@ -157,7 +157,10 @@ async function upload(path: string, file: File): Promise<Attachment> {
   const res = await fetch(base + path, {
     method: "POST",
     body: fd,
-    headers: entity ? { "X-Entity": entity } : {},
+    headers: {
+      ...(entity ? { "X-Entity": entity } : {}),
+      ...(CONTROL_API_TOKEN ? { Authorization: `Bearer ${CONTROL_API_TOKEN}` } : {}),
+    },
   })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string }

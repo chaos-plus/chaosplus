@@ -276,6 +276,17 @@ func TestHTTPBearerEnforcement(t *testing.T) {
 	if r4.StatusCode != 201 {
 		t.Fatalf("configured: POST with token = %d, want 201", r4.StatusCode)
 	}
+
+	// 错误 token → 401。
+	reqBad, _ := http.NewRequest("POST", ts.URL+"/api/runs",
+		strings.NewReader(`{"workflowJSON":`+testDefRaw+`,"workspace":"ws"}`))
+	reqBad.Header.Set("Content-Type", "application/json")
+	reqBad.Header.Set("Authorization", "Bearer wrong")
+	r5, _ := http.DefaultClient.Do(reqBad)
+	r5.Body.Close()
+	if r5.StatusCode != 401 {
+		t.Fatalf("configured: POST with wrong token = %d, want 401", r5.StatusCode)
+	}
 }
 
 func TestHTTPErrors(t *testing.T) {

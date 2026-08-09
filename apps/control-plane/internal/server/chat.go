@@ -85,6 +85,9 @@ func (h *channelHub) subscribe(channelID string) (chan store.ChannelMessage, fun
 	return ch, func() {
 		h.mu.Lock()
 		delete(h.subs[channelID], ch)
+		if len(h.subs[channelID]) == 0 {
+			delete(h.subs, channelID) // 避免空内层 map 累积
+		}
 		h.mu.Unlock()
 	}
 }
@@ -114,10 +117,23 @@ func (cs *ChatService) channelEventsWS(w http.ResponseWriter, r *http.Request) {
 	ch, unsub := cs.hub.subscribe(channelID)
 	defer unsub()
 
+	// Reader goroutine: drain client frames so a silent disconnect (no write for
+	// a while) unblocks the writer via the read error, instead of leaking the
+	// handler goroutine + hub subscription forever (M2).
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
 	if recent, err := cs.st.ListChannelMessages(r.Context(), channelID, 50); err == nil {
 		for i := range recent {
 			data, _ := json.Marshal(recent[i])
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			if err := writeWS(conn, data); err != nil {
 				return
 			}
 		}
@@ -127,13 +143,22 @@ func (cs *ChatService) channelEventsWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case msg := <-ch:
 			data, _ := json.Marshal(msg)
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			if err := writeWS(conn, data); err != nil {
 				return
 			}
+		case <-readDone:
+			return // client disconnected / read error
 		case <-r.Context().Done():
 			return
 		}
 	}
+}
+
+// writeWS writes a frame with a deadline so a dead-but-open socket cannot stall
+// the handler (M2).
+func writeWS(conn *websocket.Conn, data []byte) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (cs *ChatService) busyOf(agentID string) int {
