@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
 var upgrader = websocket.Upgrader{
@@ -132,8 +133,9 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		id := r.PathValue("id")
 		node := r.PathValue("node")
 		var body struct {
-			Approve bool   `json:"approve"`
-			Reason  string `json:"reason"`
+			Approve  bool               `json:"approve"`
+			Reason   string             `json:"reason"`
+			Feedback *workflow.Feedback `json:"feedback"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, 400, "bad request: "+err.Error())
@@ -143,7 +145,18 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 404, "run not found")
 			return
 		}
-		if err := m.Approve(id, node, body.Approve, body.Reason); err != nil {
+		// PRD §13:拒绝必须带结构化反馈,缺字段是客户端错误(400)而非冲突。
+		if !body.Approve {
+			if body.Feedback == nil {
+				writeErr(w, 400, "rejection requires structured feedback: category(功能缺陷|样式|需求偏差|其他) + detail")
+				return
+			}
+			if err := body.Feedback.Validate(); err != nil {
+				writeErr(w, 400, err.Error())
+				return
+			}
+		}
+		if err := m.Approve(id, node, body.Approve, body.Reason, body.Feedback); err != nil {
 			writeErr(w, 409, err.Error())
 			return
 		}

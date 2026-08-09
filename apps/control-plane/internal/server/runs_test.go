@@ -64,7 +64,7 @@ func TestRunManagerLaunchAndApprove(t *testing.T) {
 	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
 
 	// 通过 → 继续到 a0 → 完成。
-	if err := m.Approve(run.ID, "ap", true, ""); err != nil {
+	if err := m.Approve(run.ID, "ap", true, "", nil); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
@@ -91,7 +91,7 @@ func TestRunManagerRejectPauses(t *testing.T) {
 	}
 	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
 
-	if err := m.Approve(run.ID, "ap", false, "wrong spec"); err != nil {
+	if err := m.Approve(run.ID, "ap", false, "wrong spec", &workflow.Feedback{Category: workflow.FeedbackDeviation, Detail: "与需求不符"}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 	waitFor(t, func() bool { return run.Status() == RunPaused }, 3*time.Second)
@@ -129,7 +129,7 @@ func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
 		t.Fatalf("launch: %v", err)
 	}
 	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
-	if err := m.Approve(run.ID, "ap", false, "nope"); err != nil {
+	if err := m.Approve(run.ID, "ap", false, "nope", &workflow.Feedback{Category: workflow.FeedbackFunctional, Detail: "功能不对"}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)

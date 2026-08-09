@@ -35,6 +35,8 @@ const (
 type ReviewInfo struct {
 	Approved bool   `json:"approved"`
 	Reason   string `json:"reason,omitempty"`
+	// Feedback carries the structured rejection payload (PRD §13).
+	Feedback *workflow.Feedback `json:"feedback,omitempty"`
 }
 
 // RunEvent is the wire/UI event: node lifecycle + run-level + review metadata.
@@ -242,7 +244,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	broker.OnDecision = func(nodeID string, d workflow.Decision) {
 		m.emit(run, RunEvent{
 			NodeID: nodeID, Status: workflow.StatusCompleted,
-			Review: &ReviewInfo{Approved: d.OK, Reason: d.Reason},
+			Review: &ReviewInfo{Approved: d.OK, Reason: d.Reason, Feedback: d.Feedback},
 		})
 	}
 
@@ -323,12 +325,12 @@ func nodeByID(def *workflow.WorkflowDef, id string) *workflow.Node {
 }
 
 // Approve resolves a human-approval gate. 404/409 handled by the HTTP layer.
-func (m *RunManager) Approve(runID, nodeID string, ok bool, reason string) error {
+func (m *RunManager) Approve(runID, nodeID string, ok bool, reason string, fb *workflow.Feedback) error {
 	run, found := m.Get(runID)
 	if !found {
 		return fmt.Errorf("run %s not found", runID)
 	}
-	return run.Broker.Resolve(nodeID, ok, reason)
+	return run.Broker.Resolve(nodeID, ok, reason, fb)
 }
 
 // emit publishes an event to NATS (cluster fan-out), persists it to the

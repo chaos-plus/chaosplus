@@ -7,10 +7,47 @@ import (
 	"sync"
 )
 
+// FeedbackCategory enumerates the structured-feedback categories a rejection
+// must carry (PRD §13 / D.5).
+type FeedbackCategory string
+
+const (
+	FeedbackFunctional FeedbackCategory = "功能缺陷"
+	FeedbackStyle      FeedbackCategory = "样式"
+	FeedbackDeviation  FeedbackCategory = "需求偏差"
+	FeedbackOther      FeedbackCategory = "其他"
+)
+
+// Feedback is the structured rejection payload (PRD §13). Category and Detail
+// are mandatory so the next attempt gets actionable context, not just "no".
+type Feedback struct {
+	Category FeedbackCategory `json:"category"`
+	Location string           `json:"location,omitempty"`
+	Expected string           `json:"expected,omitempty"`
+	Detail   string           `json:"detail"`
+}
+
+// Validate enforces the required fields and the category enum.
+func (f *Feedback) Validate() error {
+	switch f.Category {
+	case FeedbackFunctional, FeedbackStyle, FeedbackDeviation, FeedbackOther:
+	case "":
+		return fmt.Errorf("feedback.category is required (功能缺陷|样式|需求偏差|其他)")
+	default:
+		return fmt.Errorf("feedback.category %q is not one of 功能缺陷|样式|需求偏差|其他", f.Category)
+	}
+	if f.Detail == "" {
+		return fmt.Errorf("feedback.detail is required")
+	}
+	return nil
+}
+
 // Decision is one human_approval resolution.
 type Decision struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+	// Feedback is required on rejection (PRD §13); nil on approval.
+	Feedback *Feedback `json:"feedback,omitempty"`
 }
 
 // ApprovalBroker holds pending human-approval gates for one run. Wait blocks
@@ -55,8 +92,18 @@ func (b *ApprovalBroker) Wait(ctx context.Context, nodeID string) (bool, error) 
 // Resolve delivers a decision to a waiting Wait. Idempotent: a second call for
 // the same nodeID errors. When the decision lands it is recorded and OnDecision
 // fires.
-func (b *ApprovalBroker) Resolve(nodeID string, ok bool, reason string) error {
-	d := Decision{OK: ok, Reason: reason}
+// Resolve records a human decision. A rejection MUST carry structured feedback
+// (PRD §13) — a bare "no" gives the next attempt nothing to act on.
+func (b *ApprovalBroker) Resolve(nodeID string, ok bool, reason string, fb *Feedback) error {
+	if !ok {
+		if fb == nil {
+			return fmt.Errorf("approval %q: rejection requires structured feedback (category, detail)", nodeID)
+		}
+		if err := fb.Validate(); err != nil {
+			return fmt.Errorf("approval %q: %w", nodeID, err)
+		}
+	}
+	d := Decision{OK: ok, Reason: reason, Feedback: fb}
 	b.mu.Lock()
 	if _, done := b.decided[nodeID]; done {
 		b.mu.Unlock()

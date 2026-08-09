@@ -159,3 +159,60 @@ func TestWebSocketOnUnknownRunFails(t *testing.T) {
 		t.Fatalf("unexpected 200 for unknown run")
 	}
 }
+
+// PRD §13:HTTP 拒绝缺结构化反馈 → 400;完整反馈 → 通过并回传到事件。
+func TestApprovalRejectionRequiresStructuredFeedbackOverHTTP(t *testing.T) {
+	srv, m := newHandlerTestServer(t)
+
+	var launched struct {
+		RunID string `json:"runId"`
+	}
+	doJSON(t, "POST", srv.URL+"/api/runs",
+		map[string]any{"workflowJSON": json.RawMessage(testDefRaw), "workspace": t.TempDir()}, &launched)
+
+	var run *Run
+	waitFor(t, func() bool {
+		for _, r := range m.List() {
+			if r.ID == launched.RunID && r.Status() == RunWaitingApproval {
+				run = r
+				return true
+			}
+		}
+		return false
+	}, 15*time.Second)
+
+	base := srv.URL + "/api/runs/" + launched.RunID + "/approvals/ap"
+	if code := doJSON(t, "POST", base, map[string]any{"approve": false, "reason": "不行"}, nil); code != 400 {
+		t.Fatalf("rejection without feedback should 400, got %d", code)
+	}
+	if code := doJSON(t, "POST", base,
+		map[string]any{"approve": false, "feedback": map[string]any{"category": "功能缺陷"}}, nil); code != 400 {
+		t.Fatalf("feedback without detail should 400, got %d", code)
+	}
+	if code := doJSON(t, "POST", base,
+		map[string]any{"approve": false, "feedback": map[string]any{"category": "瞎写", "detail": "x"}}, nil); code != 400 {
+		t.Fatalf("unknown category should 400, got %d", code)
+	}
+
+	full := map[string]any{
+		"approve": false,
+		"reason":  "打回",
+		"feedback": map[string]any{
+			"category": "需求偏差", "location": "login.tsx:42",
+			"expected": "跳转首页", "detail": "点击后停在原页",
+		},
+	}
+	if code := doJSON(t, "POST", base, full, nil); code != 200 {
+		t.Fatalf("valid rejection should succeed, got %d", code)
+	}
+
+	// 反馈必须出现在 run 事件里(供下次尝试与前端展示)。
+	waitFor(t, func() bool {
+		for _, ev := range run.Events() {
+			if ev.Review != nil && ev.Review.Feedback != nil && ev.Review.Feedback.Location == "login.tsx:42" {
+				return true
+			}
+		}
+		return false
+	}, 10*time.Second)
+}
