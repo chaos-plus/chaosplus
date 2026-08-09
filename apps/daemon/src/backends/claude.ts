@@ -15,6 +15,32 @@ function exePath(p?: string): string | undefined {
 }
 
 /**
+ * Map one SDK message to the daemon's AgentEvents. Pure — the streaming loop
+ * delegates here so the mapping is testable without spawning a CLI.
+ */
+export function claudeEvents(message: {
+  type: string;
+  message?: { content?: Array<Record<string, unknown>> };
+  subtype?: string;
+  total_cost_usd?: number;
+}): AgentEvent[] {
+  const out: AgentEvent[] = [];
+  if (message.type === "assistant" && message.message?.content) {
+    for (const block of message.message.content) {
+      if (block.type === "text") {
+        out.push({ type: "message", text: block.text as string });
+      } else if (block.type === "tool_use") {
+        out.push({ type: "tool", name: block.name as string, input: block.input });
+      }
+    }
+  } else if (message.type === "result") {
+    const ok = message.subtype === "success";
+    out.push({ type: "done", ok, exitCode: ok ? 0 : 1, costUsd: message.total_cost_usd });
+  }
+  return out;
+}
+
+/**
  * claude backend: runs one session via @anthropic-ai/claude-agent-sdk `query()`.
  * Streams text + tool_use blocks and a final `done` mapped from the SDK result.
  * Auth/key/provider come per-task (apiKey + provider env), not CLI startup env.
@@ -59,25 +85,6 @@ export async function* runClaude(task: AgentTask): AsyncGenerator<AgentEvent> {
   );
 
   for await (const message of gen) {
-    if (message.type === "assistant" && message.message?.content) {
-      for (const block of message.message.content) {
-        switch (block.type) {
-          case "text":
-            yield { type: "message", text: block.text };
-            break;
-          case "tool_use":
-            yield { type: "tool", name: block.name, input: block.input };
-            break;
-        }
-      }
-    } else if (message.type === "result") {
-      const ok = message.subtype === "success";
-      yield {
-        type: "done",
-        ok,
-        exitCode: ok ? 0 : 1,
-        costUsd: message.total_cost_usd,
-      };
-    }
+    for (const ev of claudeEvents(message as Parameters<typeof claudeEvents>[0])) yield ev;
   }
 }
