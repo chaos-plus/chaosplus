@@ -5,15 +5,26 @@ import {
   Gauge,
   GitBranch,
   Hash,
+  Languages,
   LayoutDashboard,
   MessagesSquare,
   Network,
+  Repeat2,
+  Settings,
   UsersRound,
 } from "lucide-react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router"
+import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
-import { UserMenu } from "../components/user-menu"
 import { getTenant, iamApi, setTenant, type Tenant } from "../lib/iam-api"
 
 interface NavItem {
@@ -65,6 +76,7 @@ export default function PlatformLayout() {
   const [tenantDraft, setTenantDraft] = useState(getTenant())
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
+  const [lang, setLang] = useState<string>(() => localStorage.getItem("platform-lang") ?? "zh")
 
   useEffect(() => {
     if (status !== "authenticated") return
@@ -161,8 +173,85 @@ export default function PlatformLayout() {
                 </datalist>
               )}
             </div>
+            {/* 配置管理 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="配置管理"
+                className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Settings className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel>配置管理</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/workspace")}>平台设置</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/team/machines")}>接入配置</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* 主体切换 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="主体切换"
+                className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Repeat2 className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>主体</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem disabled>
+                  当前: {session?.preferred_username ?? session?.subject ?? "未登录"}
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                  主体由 IAM 身份体系提供
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* 语言切换 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="语言切换"
+                className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Languages className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-32">
+                <DropdownMenuItem onClick={() => { setLang("zh"); localStorage.setItem("platform-lang", "zh") }}>
+                  简体中文 {lang === "zh" && "✓"}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setLang("en"); localStorage.setItem("platform-lang", "en") }}>
+                  English {lang === "en" && "✓"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* 登录用户头像 + 用户名 + 下拉 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger className="flex items-center gap-2 rounded-full p-1 pr-2 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Avatar className="size-8">
+                  <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-xs text-primary-foreground">
+                    {(session?.preferred_username ?? session?.subject ?? "U").slice(0, 1).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="hidden max-w-28 truncate text-sm font-medium sm:inline">
+                  {session?.preferred_username ?? session?.subject ?? "未登录"}
+                </span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel>{session?.email ?? "本地单用户"}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/")}>个人中心</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/team/machines")}>我的机器</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem disabled className="text-muted-foreground">
+                  {session ? "退出登录" : "本地无登录"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <ThemeModeButton />
-            <UserMenu />
           </div>
         </div>
       </header>
