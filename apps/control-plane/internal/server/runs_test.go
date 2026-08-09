@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
@@ -166,6 +168,52 @@ func TestRunManagerRetryExhaustsToFailed(t *testing.T) {
 	waitFor(t, func() bool { return run.Status() == RunFailed }, 3*time.Second)
 	if calls != 2 {
 		t.Fatalf("agent ran %d times, want maxAttempts=2", calls)
+	}
+}
+
+// PRD F.2: a human rejection persists a validation_results verdict AND a
+// feedback_log entry; an approval persists a passed verdict.
+func TestRunManagerWritesReviewProjections(t *testing.T) {
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	m := NewRunManager(nc, nil, st, "runner-1")
+	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	run, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: json.RawMessage(testDefRaw), Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
+
+	if err := m.Approve(run.ID, "ap", false, "打回", &workflow.Feedback{Category: workflow.FeedbackDeviation, Location: "a.ts:1", Detail: "与需求不符"}); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	waitFor(t, func() bool { return run.Status() == RunPaused }, 3*time.Second)
+
+	vs, err := st.ListValidationResults(ctx, run.ID, 10)
+	if err != nil {
+		t.Fatalf("list validation: %v", err)
+	}
+	if len(vs) != 1 || vs[0].Passed != 0 || vs[0].ExecutionID != "ap" {
+		t.Fatalf("validation results = %+v, want one rejected verdict for ap", vs)
+	}
+	fb, err := st.ListFeedbackLog(ctx, run.ID, 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(fb) != 1 || fb[0].Category != "需求偏差" || fb[0].Detail != "与需求不符" || fb[0].Location != "a.ts:1" {
+		t.Fatalf("feedback log = %+v, want structured rejection", fb)
 	}
 }
 

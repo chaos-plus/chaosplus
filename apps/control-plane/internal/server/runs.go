@@ -277,6 +277,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			NodeID: nodeID, Status: workflow.StatusCompleted,
 			Review: &ReviewInfo{Approved: d.OK, Reason: d.Reason, Feedback: d.Feedback},
 		})
+		m.recordReviewProjection(run, nodeID, d)
 	}
 
 	var base workflow.Executor
@@ -397,6 +398,41 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 		}
 	}
 	run.publish(ev) // local delivery; the NATS round-trip also lands async
+}
+
+// recordReviewProjection persists the human-approval verdict as audit
+// projections (PRD F.2): validation_results for every review, feedback_log for
+// rejections (the structured feedback). Errors are logged, never fatal.
+func (m *RunManager) recordReviewProjection(run *Run, nodeID string, d workflow.Decision) {
+	if m.st == nil {
+		return
+	}
+	ctx := context.Background()
+	evidence, _ := json.Marshal(map[string]any{"reason": d.Reason})
+	if err := m.st.RecordValidationResult(ctx, store.ValidationResult{
+		ID: "vr-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
+		ValidatorID: "human", ValidatorType: "human",
+		Passed: func() int {
+			if d.OK {
+				return 1
+			}
+			return 0
+		}(),
+		EvidenceJSON: string(evidence), ReviewedBy: "human",
+	}); err != nil {
+		slog.Warn("record validation result", "run", run.ID, "node", nodeID, "err", err)
+	}
+	if d.OK || d.Feedback == nil {
+		return
+	}
+	if err := m.st.RecordFeedbackLog(ctx, store.FeedbackLogEntry{
+		ID: "fb-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
+		Reviewer: "human", Category: string(d.Feedback.Category),
+		Location: d.Feedback.Location, Expected: d.Feedback.Expected,
+		Detail: d.Feedback.Detail,
+	}); err != nil {
+		slog.Warn("record feedback log", "run", run.ID, "node", nodeID, "err", err)
+	}
 }
 
 func storeTypeFor(ev RunEvent) string {
