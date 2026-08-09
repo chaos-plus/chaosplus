@@ -37,7 +37,9 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 	if resp.StatusCode != 201 {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
-	var launched struct{ RunID string `json:"runId"` }
+	var launched struct {
+		RunID string `json:"runId"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&launched); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

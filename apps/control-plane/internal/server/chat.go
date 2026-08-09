@@ -695,10 +695,84 @@ func (cs *ChatService) executeWorkItem(w http.ResponseWriter, r *http.Request) {
 
 // trackRunProgress 轮询 run 直到终态,把 progress/status/spent_hours 投影回 work_items
 // (RunManager 是内存态,必须持久化投影,事件表仍是重放真相)。
+// relayRunEvents 把 run 的新事件回灌到关联频道(PRD D.5:工作流事件 + 审批卡片)。
+// 返回已转发到的事件序号,调用方持有游标避免重复推送。
+func (cs *ChatService) relayRunEvents(ctx context.Context, it *store.WorkItem, run *Run, cursor int) int {
+	if it.ChannelID == "" {
+		return cursor
+	}
+	for _, ev := range run.Events() {
+		if ev.Seq <= cursor {
+			continue
+		}
+		cursor = ev.Seq
+		payload := map[string]any{"runId": run.ID, "nodeId": ev.NodeID, "workItemId": it.ID}
+		switch {
+		case ev.Status == workflow.StatusWaitingApproval && ev.NodeID != "":
+			// 审批卡片:标题(节点)、摘要、artifact 链接、通过/拒绝按钮由前端渲染。
+			payload["kind"] = "approval"
+			payload["text"] = fmt.Sprintf("节点「%s」等待人工审批", ev.NodeID)
+			payload["summary"] = it.Title
+			payload["artifacts"] = runArtifacts(run, ev.NodeID)
+		case ev.NodeID == "" && ev.Status == workflow.StatusRunning:
+			payload["kind"] = "run"
+			payload["text"] = fmt.Sprintf("▶ 工作流已启动(%s)", run.ID)
+		case ev.Status == workflow.StatusFailed:
+			payload["kind"] = "run"
+			payload["text"] = fmt.Sprintf("✖ 节点「%s」失败:%s", ev.NodeID, ev.Error)
+		case ev.NodeID != "" && ev.Status == workflow.StatusCompleted:
+			payload["kind"] = "run"
+			payload["text"] = fmt.Sprintf("✔ 节点「%s」完成", ev.NodeID)
+		default:
+			continue // 其余中间态不刷屏
+		}
+		if err := cs.st.AppendChannelMessage(ctx, &store.ChannelMessage{
+			ID: "msg-" + randHex(8), ChannelID: it.ChannelID,
+			AuthorMemberID: "workflow", AuthorKind: "workflow",
+			IdempotencyKey: fmt.Sprintf("%s:%s:%d", it.ChannelID, run.ID, ev.Seq),
+			PayloadJSON:    mustJSON(payload),
+		}); err != nil {
+			slog.Warn("relay run event to channel", "run", run.ID, "seq", ev.Seq, "err", err)
+		}
+	}
+	return cursor
+}
+
+// runArtifacts 列出送审内容:审批节点自己不产出 artifact,要看它的上游节点
+// 产了什么(PRD D.5 审批卡片的 artifact 链接列表)。
+func runArtifacts(run *Run, nodeID string) []string {
+	out := []string{}
+	if run.Def == nil {
+		return out
+	}
+	upstream := map[string]bool{nodeID: true}
+	for _, e := range run.Def.Edges {
+		if e.To == nodeID {
+			upstream[e.From] = true
+		}
+	}
+	seen := map[string]bool{}
+	for i := range run.Def.Nodes {
+		n := &run.Def.Nodes[i]
+		if !upstream[n.ID] || n.Agent == nil || n.Agent.OutputSpec == nil {
+			continue
+		}
+		for _, p := range n.Agent.OutputSpec.Produces {
+			if p.Path == "" || seen[p.Path] {
+				continue
+			}
+			seen[p.Path] = true
+			out = append(out, p.Path)
+		}
+	}
+	return out
+}
+
 func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 	start := time.Now()
 	ctx := context.Background()
 	lastProgress := 0
+	relayed := 0
 	// 绝对上限:run 卡住(节点无超时、审批无人处理)时不能让这个 goroutine
 	// 连同每 2s 一次的写库永远活着。
 	deadline := start.Add(trackRunMaxDuration)
@@ -734,6 +808,7 @@ func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 		if total > 0 {
 			progress = done * 100 / total
 		}
+		relayed = cs.relayRunEvents(ctx, it, run, relayed)
 		lastProgress = progress
 		if err := cs.st.UpdateWorkItemRun(ctx, it.ID, progress, "in_progress", time.Since(start).Hours()); err != nil {
 			slog.Error("project run progress", "workItem", it.ID, "err", err)
@@ -744,6 +819,7 @@ func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 		// 失败/暂停不是 100%:保留最后一次真实进度,否则父项汇总也会被抬高。
 		final, finalProgress = "review", lastProgress
 	}
+	cs.relayRunEvents(ctx, it, run, relayed)
 	spent := time.Since(start).Hours()
 	if err := cs.st.UpdateWorkItemRun(ctx, it.ID, finalProgress, final, spent); err != nil {
 		slog.Error("project run result", "workItem", it.ID, "err", err)
@@ -769,9 +845,20 @@ func taskWorkflowDef(it *store.WorkItem) (map[string]any, json.RawMessage) {
 			{"id": "do", "type": "agent", "agent": map[string]any{
 				"id": "do", "role": "executor", "executor": "claude",
 				"systemPrompt": "你是任务执行 agent。根据 context 里的任务要求完成工作,并把结果写入 workspace 根目录的 output.json(含 ok、summary、reply)。",
+				"outputSpec": map[string]any{
+					"produces": []map[string]any{{"id": "output", "path": "output.json", "type": "document"}},
+				},
+			}},
+			// 终审节点:PRD V1-M2 闸门要求每次执行完成一次人工审批;拒绝按 §13
+			// 必填结构化反馈,run 暂停,工作项回到「评审中」。
+			{"id": "review", "type": "human_approval", "humanApproval": map[string]any{
+				"approvers": "any_human", "timeoutMs": 86400000, "onTimeout": "pause", "onReject": "pause",
 			}},
 		},
-		"edges": []map[string]any{{"from": "trigger", "to": "do"}},
+		"edges": []map[string]any{
+			{"from": "trigger", "to": "do"},
+			{"from": "do", "to": "review"},
+		},
 	}
 	ctx, _ := json.Marshal(map[string]any{"title": it.Title, "description": it.Description, "type": it.Type})
 	return def, ctx

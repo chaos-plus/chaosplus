@@ -282,10 +282,10 @@ export default function PlatformLayout() {
           </div>
         </div>
       </header>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {secondary.length > 0 && (
           <nav
-            className="w-56 shrink-0 border-r bg-background p-2"
+            className="flex w-full shrink-0 gap-1 overflow-x-auto border-b bg-background p-2 md:w-56 md:flex-col md:overflow-visible md:border-r md:border-b-0"
             aria-label={`${TOP_MENUS.find((m) => m.path === top)?.label ?? ""} 二级菜单`}
           >
             {secondary.map((item) => (
@@ -293,7 +293,7 @@ export default function PlatformLayout() {
                 key={item.path}
                 to={item.path}
                 className={({ isActive }) =>
-                  `mb-0.5 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  `flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors md:mb-0.5 ${
                     isActive
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
@@ -327,11 +327,34 @@ export default function PlatformLayout() {
           </nav>
         )}
         <main className="min-w-0 flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-[1440px] p-4 sm:p-6">
+          <div className="mx-auto w-full max-w-[1440px] p-4 pb-20 sm:p-6 md:pb-6">
             <Outlet />
           </div>
         </main>
       </div>
+
+      {/* 手机端底部导航(PRD V1-M2:桌面顶部 / 手机底部)。 */}
+      <nav
+        aria-label="底部导航"
+        className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden"
+      >
+        <div className="flex items-stretch">
+          {TOP_MENUS.map((m) => (
+            <NavLink
+              key={m.path}
+              to={m.path}
+              className={({ isActive }) =>
+                `flex min-h-[56px] flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors ${
+                  isActive ? "text-primary" : "text-muted-foreground hover:text-accent-foreground"
+                }`
+              }
+            >
+              <m.icon className="size-5" aria-hidden="true" />
+              <span className="truncate">{m.label}</span>
+            </NavLink>
+          ))}
+        </div>
+      </nav>
       <Toaster />
     </div>
   )

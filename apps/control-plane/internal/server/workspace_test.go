@@ -19,7 +19,7 @@ import (
 
 // newWorkspaceTestServer wires a real store + RunManager (mock executor) behind
 // the real HTTP mux, so these tests exercise the production routes.
-func newWorkspaceTestServer(t *testing.T) (*httptest.Server, *store.Store) {
+func newWorkspaceTestServerWithManager(t *testing.T) (*httptest.Server, *store.Store, *RunManager) {
 	t.Helper()
 	// 用临时文件而非 :memory: —— 连接池回收空闲连接会把内存库连同表一起丢掉。
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
@@ -43,6 +43,12 @@ func newWorkspaceTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	cs.register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	return srv, st, rm
+}
+
+func newWorkspaceTestServer(t *testing.T) (*httptest.Server, *store.Store) {
+	t.Helper()
+	srv, st, _ := newWorkspaceTestServerWithManager(t)
 	return srv, st
 }
 
@@ -139,7 +145,7 @@ func TestWorkItemValidationErrors(t *testing.T) {
 }
 
 func TestExecuteWorkItemDrivesWorkflowAndProjectsProgress(t *testing.T) {
-	srv, st := newWorkspaceTestServer(t)
+	srv, st, rm := newWorkspaceTestServerWithManager(t)
 
 	var it store.WorkItem
 	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "ship it"}, &it)
@@ -160,16 +166,29 @@ func TestExecuteWorkItemDrivesWorkflowAndProjectsProgress(t *testing.T) {
 		t.Fatalf("run not bound: %+v %v", got, err)
 	}
 
-	// run 完成后投影回 done/100 并校准估时。
+	// PRD V1-M2:执行完成后停在人工审批,工作项此时还不能是 done。
+	waitFor(t, func() bool {
+		for _, r := range rm.List() {
+			if r.ID == ex.RunID && r.Status() == RunWaitingApproval {
+				return true
+			}
+		}
+		return false
+	}, 20*time.Second)
+	if g, _ := st.GetWorkItem(context.Background(), it.ID); g.Status == "done" {
+		t.Fatal("work item must not be done before the approval gate is resolved")
+	}
+
+	// 通过审批 → run 完成 → 投影回 done/100 并校准估时。
+	// 审批路由挂在 NewHandler 上,这里直接走 RunManager(同一条 broker 路径)。
+	if err := rm.Approve(ex.RunID, "review", true, "", nil); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	// 校准发生在状态落盘之后,等校准值本身,别只等 done(否则测试抢跑)。
 	waitFor(t, func() bool {
 		g, e := st.GetWorkItem(context.Background(), it.ID)
-		return e == nil && g.Status == "done" && g.Progress == 100
+		return e == nil && g.Status == "done" && g.Progress == 100 && g.EstimateHours > 0
 	}, 20*time.Second)
-
-	g, _ := st.GetWorkItem(context.Background(), it.ID)
-	if g.EstimateHours <= 0 {
-		t.Fatalf("estimate not calibrated from actual: %+v", g)
-	}
 }
 
 func TestTaskWorkflowDefIsValid(t *testing.T) {
@@ -588,5 +607,98 @@ func TestChannelAttachmentUploadAndList(t *testing.T) {
 		"attachments": []map[string]string{{"id": att.ID, "filename": att.Filename, "mime": att.Mime}},
 	}, nil); code != 200 {
 		t.Fatalf("attachment-only message should be accepted, got %d", code)
+	}
+}
+
+// PRD D.5:run 事件与审批卡片必须回灌到关联频道,人可以直接在聊天里审批。
+func TestRunEventsAndApprovalCardRelayedToChannel(t *testing.T) {
+	srv, st, rm := newWorkspaceTestServerWithManager(t)
+	ctx := context.Background()
+
+	var ch store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "relay"}, &ch)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items",
+		map[string]any{"type": "task", "title": "带审批的任务", "channelId": ch.ID}, &it)
+
+	var ex struct {
+		RunID string `json:"runId"`
+	}
+	if code := doJSON(t, "POST", srv.URL+"/api/work-items/"+it.ID+"/execute", nil, &ex); code != 200 {
+		t.Fatalf("execute: %d", code)
+	}
+
+	// 频道里应出现审批卡片(kind=approval,带 runId/nodeId 供前端回调)。
+	var card map[string]any
+	waitFor(t, func() bool {
+		msgs, err := st.ListChannelMessages(ctx, ch.ID, 100)
+		if err != nil {
+			return false
+		}
+		for _, m := range msgs {
+			if m.AuthorKind != "workflow" {
+				continue
+			}
+			var p map[string]any
+			if json.Unmarshal([]byte(m.PayloadJSON), &p) != nil {
+				continue
+			}
+			if p["kind"] == "approval" {
+				card = p
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second)
+
+	if card["runId"] != ex.RunID || card["nodeId"] != "review" {
+		t.Fatalf("approval card missing run/node reference: %+v", card)
+	}
+	arts, _ := card["artifacts"].([]any)
+	if len(arts) == 0 || arts[0] != "output.json" {
+		t.Fatalf("approval card must list produced artifacts, got %+v", card["artifacts"])
+	}
+
+	// 也应有节点完成这类工作流事件。
+	msgs, _ := st.ListChannelMessages(ctx, ch.ID, 100)
+	sawRunEvent := false
+	for _, m := range msgs {
+		var p map[string]any
+		_ = json.Unmarshal([]byte(m.PayloadJSON), &p)
+		if p["kind"] == "run" {
+			sawRunEvent = true
+		}
+	}
+	if !sawRunEvent {
+		t.Fatal("no workflow run event relayed to the channel")
+	}
+
+	// 在聊天里通过审批 → run 走完 → 工作项 done。
+	if err := rm.Approve(ex.RunID, "review", true, "", nil); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	waitFor(t, func() bool {
+		g, e := st.GetWorkItem(ctx, it.ID)
+		return e == nil && g.Status == "done"
+	}, 20*time.Second)
+}
+
+// 没有关联频道的工作项不应该产生任何频道消息。
+func TestRunEventsNotRelayedWithoutChannel(t *testing.T) {
+	srv, st, _ := newWorkspaceTestServerWithManager(t)
+	ctx := context.Background()
+
+	var ch store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "quiet"}, &ch)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "无频道"}, &it)
+	doJSON(t, "POST", srv.URL+"/api/work-items/"+it.ID+"/execute", nil, nil)
+
+	time.Sleep(4 * time.Second)
+	msgs, _ := st.ListChannelMessages(ctx, ch.ID, 50)
+	for _, m := range msgs {
+		if m.AuthorKind == "workflow" {
+			t.Fatalf("unrelated channel received a run event: %+v", m)
+		}
 	}
 }

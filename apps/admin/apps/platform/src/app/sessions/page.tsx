@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bot, Hash, MoreHorizontal, Paperclip, Plus, RotateCw, Send, Trash2, User as UserIcon } from "lucide-react"
+import { Bot, GitBranch, Hash, MoreHorizontal, Paperclip, Plus, RotateCw, Send, ShieldQuestion, Trash2, User as UserIcon } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
@@ -14,8 +14,17 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import { Textarea } from "@workspace/ui/components/textarea"
 import { toast } from "@workspace/ui/components/sonner"
-import { controlApi, type Agent, type Channel, type ChannelMessage, type ProgressEntry } from "../../lib/control-api"
+import {
+  controlApi,
+  FEEDBACK_CATEGORIES,
+  type Agent,
+  type Channel,
+  type ChannelMessage,
+  type FeedbackCategory,
+  type ProgressEntry,
+} from "../../lib/control-api"
 
 function messageText(m: ChannelMessage): string {
   try {
@@ -26,6 +35,24 @@ function messageText(m: ChannelMessage): string {
 }
 
 interface MsgAttachment { id: string; filename: string; mime: string }
+
+/** 工作流消息载荷(PRD D.5:工作流事件 / 审批卡片)。 */
+interface WorkflowPayload {
+  kind?: "run" | "approval"
+  runId?: string
+  nodeId?: string
+  summary?: string
+  artifacts?: string[]
+}
+
+function workflowPayload(m: ChannelMessage): WorkflowPayload | null {
+  if (m.authorKind !== "workflow") return null
+  try {
+    return JSON.parse(m.payloadJson) as WorkflowPayload
+  } catch {
+    return null
+  }
+}
 
 function messageAttachments(m: ChannelMessage): MsgAttachment[] {
   try {
@@ -45,6 +72,132 @@ function messageTask(m: ChannelMessage): string {
 
 function timeStr(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+/** 聊天内审批卡片:通过 / 拒绝(拒绝必填结构化反馈,PRD §13)。 */
+function ApprovalCard({ payload, onDone }: { payload: WorkflowPayload; onDone: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [fb, setFb] = useState<{ category: FeedbackCategory; location: string; expected: string; detail: string }>({
+    category: "功能缺陷",
+    location: "",
+    expected: "",
+    detail: "",
+  })
+  const [error, setError] = useState("")
+  const [done, setDone] = useState("")
+
+  if (!payload.runId || !payload.nodeId) return null
+
+  const approve = async () => {
+    try {
+      await controlApi.approve(payload.runId!, payload.nodeId!, true)
+      setDone("已通过")
+      onDone()
+    } catch (e) {
+      toast.error(`通过失败:${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const reject = async () => {
+    if (!fb.detail.trim()) {
+      setError("请填写问题描述")
+      return
+    }
+    try {
+      await controlApi.approve(payload.runId!, payload.nodeId!, false, fb.detail, {
+        category: fb.category,
+        location: fb.location || undefined,
+        expected: fb.expected || undefined,
+        detail: fb.detail.trim(),
+      })
+      setOpen(false)
+      setDone("已拒绝")
+      onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "提交失败")
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+      <div className="flex items-start gap-2">
+        <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">等待人工审批:{payload.nodeId}</p>
+          {payload.summary && <p className="mt-0.5 text-xs text-muted-foreground">{payload.summary}</p>}
+          {payload.artifacts && payload.artifacts.length > 0 && (
+            <ul className="mt-1 space-y-0.5">
+              {payload.artifacts.map((a) => (
+                <li key={a} className="text-xs text-muted-foreground">
+                  产出:{a}
+                </li>
+              ))}
+            </ul>
+          )}
+          {done ? (
+            <p className="mt-2 text-xs font-medium text-muted-foreground">{done}</p>
+          ) : (
+            <div className="mt-2 flex gap-2">
+              <Button size="sm" className="cursor-pointer" onClick={approve}>
+                通过
+              </Button>
+              <Button size="sm" variant="outline" className="cursor-pointer" onClick={() => { setOpen(true); setError("") }}>
+                拒绝
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>拒绝审批 —— 填写反馈</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-1.5">
+              <label htmlFor="cfb-cat" className="text-sm font-medium">
+                问题类别 <span className="text-destructive">*</span>
+              </label>
+              <select
+                id="cfb-cat"
+                value={fb.category}
+                onChange={(e) => setFb({ ...fb, category: e.target.value as FeedbackCategory })}
+                className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
+              >
+                {FEEDBACK_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="cfb-loc" className="text-sm font-medium">位置</label>
+              <Input id="cfb-loc" value={fb.location} onChange={(e) => setFb({ ...fb, location: e.target.value })} />
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="cfb-exp" className="text-sm font-medium">期望结果</label>
+              <Input id="cfb-exp" value={fb.expected} onChange={(e) => setFb({ ...fb, expected: e.target.value })} />
+            </div>
+            <div className="grid gap-1.5">
+              <label htmlFor="cfb-detail" className="text-sm font-medium">
+                问题描述 <span className="text-destructive">*</span>
+              </label>
+              <Textarea id="cfb-detail" rows={3} value={fb.detail} onChange={(e) => setFb({ ...fb, detail: e.target.value })} />
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setOpen(false)}>取消</Button>
+            <Button variant="destructive" className="cursor-pointer" onClick={reject} disabled={!fb.detail.trim()}>
+              提交拒绝
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
 }
 
 export default function SessionsPage() {
@@ -309,6 +462,28 @@ export default function SessionsPage() {
       <ScrollArea className="min-h-0 flex-1 rounded-xl border bg-card/40">
         <div className="space-y-4 p-4">
           {messages.map((m) => {
+            const wf = workflowPayload(m)
+            // 工作流消息不是"你"发的:单独走系统样式,不加头像/owner 徽章/转工作项。
+            if (wf) {
+              return (
+                <div key={m.id} className="flex justify-center">
+                  <div className="w-full max-w-[92%] rounded-lg border border-dashed bg-muted/40 px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <GitBranch className="size-3.5" aria-hidden="true" />
+                      <span>工作流</span>
+                      <span className="ml-auto">{timeStr(m.ts)}</span>
+                    </div>
+                    <p className="mt-1 text-sm">{messageText(m)}</p>
+                    {wf.kind === "approval" && (
+                      <ApprovalCard
+                        payload={wf}
+                        onDone={() => void controlApi.messages(channelId!).then((x) => setMessages(x ?? []))}
+                      />
+                    )}
+                  </div>
+                </div>
+              )
+            }
             const isAgent = m.authorKind === "agent"
             const name = isAgent ? (agentNames.get(m.authorMemberId) ?? "agent") : "你"
             return (

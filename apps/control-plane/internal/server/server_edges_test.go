@@ -250,7 +250,10 @@ func TestTrackRunProgressProjectsWhileRunning(t *testing.T) {
 
 	var it store.WorkItem
 	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "长任务"}, &it)
-	doJSON(t, "POST", srv.URL+"/api/work-items/"+it.ID+"/execute", nil, nil)
+	var ex struct {
+		RunID string `json:"runId"`
+	}
+	doJSON(t, "POST", srv.URL+"/api/work-items/"+it.ID+"/execute", nil, &ex)
 
 	// 运行途中已有耗时投影。
 	waitFor(t, func() bool {
@@ -258,9 +261,16 @@ func TestTrackRunProgressProjectsWhileRunning(t *testing.T) {
 		return e == nil && g.Status == "in_progress" && g.SpentHours > 0
 	}, 20*time.Second)
 
-	// 最终收敛到完成。
+	// 执行完停在终审门:通过后才收敛到完成。
+	waitFor(t, func() bool {
+		r, ok := m.Get(ex.RunID)
+		return ok && r.Status() == RunWaitingApproval
+	}, 30*time.Second)
+	if err := m.Approve(ex.RunID, "review", true, "", nil); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
 	waitFor(t, func() bool {
 		g, e := st.GetWorkItem(context.Background(), it.ID)
-		return e == nil && g.Progress == 100 && (g.Status == "done" || g.Status == "review")
+		return e == nil && g.Progress == 100 && g.Status == "done"
 	}, 30*time.Second)
 }
