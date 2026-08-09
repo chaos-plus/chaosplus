@@ -329,3 +329,72 @@ func TestMachinesListCarriesAgentCountAndRuntimes(t *testing.T) {
 		t.Fatalf("runtimes must be an array, got %T", list[0]["runtimes"])
 	}
 }
+
+// PRD D.3:machine 详情要给出关键信息 / 运行时 / 托管 agent 三 Tab 的数据。
+func TestMachineDetailEndpoint(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "md.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	rm := NewRunManager(nc, nil, st, "runner-1")
+	rm.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
+	if err := rm.Start(ctx); err != nil {
+		t.Fatalf("run manager: %v", err)
+	}
+	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
+	cs := NewChatService(st, nil, nil, rm, "runner-1", t.TempDir())
+	srv := httptest.NewServer(NewHandler(rm, hub, cs))
+	defer srv.Close()
+
+	if err := st.UpsertMachine(ctx, store.Machine{ID: "m-d", Address: "1.2.3.4", Status: "confirmed", OS: "linux/amd64"}); err != nil {
+		t.Fatalf("seed machine: %v", err)
+	}
+	for _, a := range []*store.AgentSpec{
+		{ID: "ag-on", Name: "mine", Runtime: "claude", MachineID: "m-d"},
+		{ID: "ag-other", Name: "theirs", Runtime: "claude", MachineID: "m-other"},
+	} {
+		if err := st.CreateAgent(ctx, a); err != nil {
+			t.Fatalf("seed agent: %v", err)
+		}
+	}
+
+	var d map[string]any
+	if code := doJSON(t, "GET", srv.URL+"/api/machines/m-d", nil, &d); code != 200 {
+		t.Fatalf("detail: %d", code)
+	}
+	if d["os"] != "linux/amd64" || d["address"] != "1.2.3.4" {
+		t.Fatalf("key info wrong: %+v", d)
+	}
+	if d["registeredAt"].(float64) == 0 {
+		t.Fatal("registeredAt should be stamped on first upsert")
+	}
+	agents, _ := d["agents"].([]any)
+	if len(agents) != 1 {
+		t.Fatalf("agent list must only contain this machine's agents: %+v", d["agents"])
+	}
+	if _, ok := d["runtimes"].([]any); !ok {
+		t.Fatalf("runtimes must be an array, got %T", d["runtimes"])
+	}
+
+	if code := doJSON(t, "GET", srv.URL+"/api/machines/m-nope", nil, nil); code != 404 {
+		t.Fatalf("unknown machine should 404, got %d", code)
+	}
+
+	// 重连不刷新注册时间。
+	first := d["registeredAt"].(float64)
+	if err := st.UpsertMachine(ctx, store.Machine{ID: "m-d", Address: "5.6.7.8", Status: "confirmed", OS: "linux/amd64"}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	doJSON(t, "GET", srv.URL+"/api/machines/m-d", nil, &d)
+	if d["registeredAt"].(float64) != first {
+		t.Fatalf("registeredAt must not change on reconnect: %v → %v", first, d["registeredAt"])
+	}
+	if d["address"] != "5.6.7.8" {
+		t.Fatalf("address should update on reconnect: %+v", d)
+	}
+}

@@ -31,6 +31,7 @@ export const router = createBrowserRouter([
               { path: "/workspace/okrs", lazy: async () => ({ Component: (await import("./app/workspace/okrs")).default }) },
               // 团队管理
               { path: "/team/machines", lazy: async () => ({ Component: (await import("./app/team/machines/page")).default }) },
+              { path: "/team/machines/:machineId", lazy: async () => ({ Component: (await import("./app/team/machines/detail")).default }) },
               { path: "/team/humans", lazy: async () => ({ Component: (await import("./app/team/humans/page")).default }) },
               { path: "/team/agents", lazy: async () => ({ Component: (await import("./app/team/agents/page")).default }) },
               // 工作流

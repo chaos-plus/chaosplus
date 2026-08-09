@@ -71,6 +71,48 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		writeJSON(w, 200, out)
 	})
+	// PRD D.3 machine 详情:关键信息 / 运行时 / 托管 agent 列表。
+	mux.HandleFunc("GET /api/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		ms, _ := hub.ListMachines(r.Context())
+		var found *store.Machine
+		for i := range ms {
+			if ms[i].ID == id {
+				found = &ms[i]
+				break
+			}
+		}
+		if found == nil {
+			writeErr(w, 404, "machine not found")
+			return
+		}
+		name := hub.MachineName(id)
+		if name == "" {
+			name = id
+		}
+		agents := []store.AgentSpec{}
+		if chat != nil && chat.st != nil {
+			if all, err := chat.st.ListAgents(r.Context()); err == nil {
+				for _, a := range all {
+					if a.MachineID == id {
+						agents = append(agents, a)
+					}
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{
+			"id":              found.ID,
+			"name":            name,
+			"address":         found.Address,
+			"status":          found.Status,
+			"online":          hub.IsConnected(id),
+			"os":              found.OS,
+			"registeredAt":    found.RegisteredAt,
+			"lastHeartbeatAt": found.LastHeartbeatAt,
+			"runtimes":        hub.MachineRuntimes(id),
+			"agents":          agents,
+		})
+	})
 	mux.HandleFunc("POST /api/machines/{id}/confirm", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var body struct {

@@ -13,6 +13,20 @@ export interface Machine {
   runtimes: string[]
 }
 
+/** PRD D.3 machine 详情三 Tab 的数据。 */
+export interface MachineDetail {
+  id: string
+  name: string
+  address: string
+  status: string
+  online: boolean
+  os: string
+  registeredAt: number
+  lastHeartbeatAt: number
+  runtimes: string[]
+  agents: Agent[]
+}
+
 export interface Run {
   id: string
   status: string
@@ -159,6 +173,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const controlApi = {
   // machines (PRD §5.3.1)
   machines: () => req<Machine[]>("/machines"),
+  machineDetail: (id: string) => req<MachineDetail>(`/machines/${id}`),
   issueToken: () => req<{ token: string; machineId: string; expiresIn: number }>("/machines/tokens", { method: "POST" }),
   confirmMachine: (id: string, token: string) =>
     req<{ ok: boolean }>(`/machines/${id}/confirm`, { method: "POST", body: JSON.stringify({ token }) }),

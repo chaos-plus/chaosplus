@@ -153,6 +153,7 @@ async function main(): Promise<void> {
     pid: String(process.pid),
     name: NAME,
     runtimes: runtimes.join(","),
+    os: `${process.platform}/${process.arch}`,
   });
   console.log(`[daemon] detected runtimes: ${runtimes.join(", ")}`);
   console.log(`[daemon] ${NAME} connected to ${SERVER}, awaiting commands`);

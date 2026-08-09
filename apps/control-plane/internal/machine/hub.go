@@ -90,6 +90,7 @@ type Hub struct {
 	names   map[string]string
 	// runtimes 是每台机上报的可用执行器(claude/codex/...),数字人表单据此给下拉。
 	runtimes map[string][]string
+	oses     map[string]string // 注册时上报的 OS/架构
 }
 
 func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
@@ -102,6 +103,7 @@ func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
 		pending:  make(map[string]bool),
 		names:    make(map[string]string),
 		runtimes: make(map[string][]string),
+		oses:     make(map[string]string),
 	}
 }
 
@@ -200,6 +202,9 @@ func (h *Hub) serve(c *daemonConn, sub *nats.Subscription) {
 			if rt := m.Meta["runtimes"]; rt != "" {
 				h.runtimes[c.machineID] = strings.Split(rt, ",")
 			}
+			if osv := m.Meta["os"]; osv != "" {
+				h.oses[c.machineID] = osv
+			}
 			h.mu.Unlock()
 			// Let the gateway's register subscription see this runner too.
 			reg, _ := json.Marshal(map[string]any{"runnerId": c.machineID, "meta": m.Meta})
@@ -260,6 +265,13 @@ func (h *Hub) MachineRuntimes(runnerID string) []string {
 	return append([]string{}, h.runtimes[runnerID]...)
 }
 
+// MachineOS 返回该机注册时上报的操作系统/架构。
+func (h *Hub) MachineOS(runnerID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.oses[runnerID]
+}
+
 func (h *Hub) MachineName(runnerID string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -286,6 +298,7 @@ func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) err
 		return h.machines.UpsertMachine(ctx, store.Machine{
 			ID: machineID, InstanceID: "desktop", Address: address,
 			Status: "confirmed", TokenHash: hashToken(token),
+			OS: h.MachineOS(machineID),
 		})
 	}
 	return nil

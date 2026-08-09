@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
+import { useNavigate } from "react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { controlApi, type Machine } from "../../../lib/control-api"
 
 export default function MachinesPage() {
+  const navigate = useNavigate()
   const [machines, setMachines] = useState<Machine[]>([])
   const [wizard, setWizard] = useState<{ token: string; machineId: string; expiresIn: number } | null>(null)
   const [countdown, setCountdown] = useState(0)
@@ -90,7 +92,11 @@ export default function MachinesPage() {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {machines.map((m) => (
-          <Card key={m.id}>
+          <Card
+            key={m.id}
+            className="cursor-pointer transition-colors hover:border-primary/40 hover:bg-accent/30"
+            onClick={() => navigate(`/team/machines/${m.id}`)}
+          >
             <CardHeader>
               <CardTitle className="flex items-center justify-between text-base">
                 <span>{m.name}</span>
@@ -100,7 +106,9 @@ export default function MachinesPage() {
             <CardContent className="space-y-1 text-sm text-muted-foreground">
               <div>id: {m.id}</div>
               <div>地址: {m.address}</div>
+              <div>托管 agent: {m.agentCount}</div>
               <div>最近心跳: {m.lastHeartbeatAt ? new Date(m.lastHeartbeatAt).toLocaleTimeString() : "—"}</div>
+              <div className="pt-1 text-xs text-primary">查看详情 →</div>
             </CardContent>
           </Card>
         ))}
