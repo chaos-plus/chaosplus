@@ -132,7 +132,7 @@ export default function SessionsPage() {
   const agentNames = new Map(agents.map((a) => [a.id, a.name]))
 
   return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col gap-4">
+    <div className="mx-auto flex h-[calc(100svh-8rem)] max-w-4xl flex-col gap-4">
       {/* 频道头 */}
       <header className="flex flex-wrap items-center gap-2 border-b pb-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
@@ -169,8 +169,8 @@ export default function SessionsPage() {
         </div>
       </header>
 
-      {/* 消息区 */}
-      <ScrollArea className="flex-1 rounded-xl border bg-card/40">
+      {/* 消息区(内部滚动,占满剩余高度) */}
+      <ScrollArea className="min-h-0 flex-1 rounded-xl border bg-card/40">
         <div className="space-y-4 p-4">
           {messages.map((m) => {
             const isAgent = m.authorKind === "agent"
@@ -179,7 +179,7 @@ export default function SessionsPage() {
               <div key={m.id} className={`flex items-start gap-2.5 ${isAgent ? "" : "flex-row-reverse"}`}>
                 <span
                   className={`grid size-8 shrink-0 place-items-center rounded-full ${
-                    isAgent ? "bg-gradient-to-br from-primary to-accent text-primary-foreground shadow" : "bg-secondary text-secondary-foreground"
+                    isAgent ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
                   }`}
                 >
                   {isAgent ? <Bot className="size-4" aria-hidden="true" /> : <UserIcon className="size-4" aria-hidden="true" />}
@@ -192,8 +192,8 @@ export default function SessionsPage() {
                   <div
                     className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                       isAgent
-                        ? "rounded-tl-sm border border-border bg-card text-foreground"
-                        : "rounded-tr-sm bg-gradient-to-br from-primary to-secondary text-primary-foreground"
+                        ? "rounded-tl-sm border border-border bg-muted text-foreground"
+                        : "rounded-tr-sm bg-primary text-primary-foreground"
                     }`}
                   >
                     {messageText(m)}
@@ -204,7 +204,7 @@ export default function SessionsPage() {
           })}
           {busy && (
             <div className="flex items-center gap-2.5">
-              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground">
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
                 <Bot className="size-4" aria-hidden="true" />
               </span>
               <span className="flex items-center gap-1 rounded-2xl rounded-tl-sm border bg-card px-4 py-2.5 text-sm text-muted-foreground">
@@ -219,9 +219,9 @@ export default function SessionsPage() {
         </div>
       </ScrollArea>
 
-      {/* 输入区 */}
+      {/* 输入区:底部固定,不随消息滚动 */}
       <form
-        className="flex items-center gap-2 rounded-2xl border bg-card p-2 focus-within:ring-2 focus-within:ring-ring"
+        className="flex shrink-0 items-center gap-2 rounded-2xl border bg-card p-2 focus-within:ring-2 focus-within:ring-ring"
         onSubmit={(e) => {
           e.preventDefault()
           void send()

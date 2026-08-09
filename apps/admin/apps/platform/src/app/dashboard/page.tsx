@@ -37,7 +37,7 @@ export default function DashboardPage() {
         </Card>
       </div>
       <p className="text-sm text-muted-foreground">
-        顶部一级菜单:仪表盘 / 会话区 / 工作区 / 团队管理 / 工作流。右侧顶部切换租户/实体。
+        顶部一级菜单:仪表盘 / 会话区 / 工作区 / 工作流 / 团队管理。右侧顶部切换租户/实体。
       </p>
     </div>
   )
