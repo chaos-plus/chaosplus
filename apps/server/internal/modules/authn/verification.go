@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"log/slog"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -171,6 +172,12 @@ func (s *WebService) CompleteEmailVerification(ctx context.Context, token string
 			return err
 		}
 		return fmt.Errorf("complete email verification: %w", err)
+	}
+	// 验证通过 → 触发注册后续(自动建租户)。失败不回滚验证结果,记日志即可。
+	if s.VerifiedHook != nil {
+		if err := s.VerifiedHook(ctx, verification.PrincipalID, verification.Email); err != nil {
+			slog.Error("verified hook", "principal", verification.PrincipalID, "err", err)
+		}
 	}
 	return nil
 }

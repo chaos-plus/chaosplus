@@ -1,9 +1,16 @@
 package app
 
 import (
+	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
+	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
@@ -28,6 +35,61 @@ import (
 // services (timezone, logging, database), then the application modules through
 // their migrate and start phases. It returns an error so a failed migration or
 // module start aborts startup instead of leaving the app half-initialised.
+// bootstrapTenantForVerifiedUser 给注册激活的用户自动创建一个租户,并把该用户
+// 挂为成员(PRD:每个注册用户是一个租户)。幂等:slug 冲突或成员已存在即跳过。
+func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID, email string) error {
+	if db == nil {
+		return errors.New("bootstrap tenant: database is required")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	now := time.Now().UTC().UnixMilli()
+	// slug = 邮箱本地部分 + 短随机,保证唯一且可读。
+	base := email
+	if i := strings.IndexByte(email, '@'); i > 0 {
+		base = email[:i]
+	}
+	randBytes := make([]byte, 3)
+	if _, err := rand.Read(randBytes); err != nil {
+		return fmt.Errorf("bootstrap tenant: rand: %w", err)
+	}
+	slug := fmt.Sprintf("%s-%x", base, randBytes)
+	tenantID := "t_" + fmt.Sprintf("%x", randBytes) + fmt.Sprintf("%x", randBytes)
+	if len(tenantID) > 40 {
+		tenantID = tenantID[:40]
+	}
+
+	return db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		tenant := struct {
+			bun.BaseModel `bun:"table:iam_tenants"`
+			ID           string
+			Slug         string
+			Name         string
+			Status       string
+			Version      int64
+			CreatedAt    int64
+			UpdatedAt    int64
+		}{ID: tenantID, Slug: slug, Name: email, Status: "active", Version: 1, CreatedAt: now, UpdatedAt: now}
+		if _, err := tx.NewInsert().Model(&tenant).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("bootstrap tenant: create: %w", err)
+		}
+		member := struct {
+			bun.BaseModel `bun:"table:iam_tenant_members"`
+			TenantID    string
+			UserSubject string
+			DisplayName string
+			Email       string
+			Status      string
+			CreatedAt   int64
+			UpdatedAt   int64
+		}{TenantID: tenantID, UserSubject: principalID, DisplayName: email, Email: email, Status: "active", CreatedAt: now, UpdatedAt: now}
+		if _, err := tx.NewInsert().Model(&member).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("bootstrap tenant: member: %w", err)
+		}
+		return nil
+	})
+}
+
+
 func (app *App) Bootstrap() error {
 
 	// init timezone: timestamps are UTC end to end (DB, API), and only the
@@ -81,6 +143,10 @@ func (app *App) Bootstrap() error {
 		}
 		app.claimPlugins = claimPlugins
 		options := []authnmod.WebOption{authnmod.WithRegistrationPrincipalCreator(registrationPrincipalCreator)}
+		// 每个注册用户激活后自动拥有一个租户(PRD:注册用户=租户,租户下多 instance)。
+		options = append(options, authnmod.WithVerifiedHook(func(ctx context.Context, principalID, email string) error {
+			return bootstrapTenantForVerifiedUser(ctx, app.dbr.Write(), principalID, email)
+		}))
 		if claimPlugins != nil {
 			options = append(options, authnmod.WithClaimEnricher(claimPlugins))
 		}

@@ -101,6 +101,8 @@ type WebService struct {
 	now                       func() time.Time
 	enricher                  ClaimEnricher
 	registrationCreator       RegistrationPrincipalCreator
+	// VerifiedHook 在邮箱验证成功时调用(注册用户自动建租户,PRD 模型)。
+	VerifiedHook            func(ctx context.Context, principalID, email string) error
 	notificationAuthorization string
 	notificationClient        *http.Client
 	notificationMu            sync.Mutex
@@ -124,6 +126,11 @@ type WebOption func(*WebService)
 
 func WithClaimEnricher(enricher ClaimEnricher) WebOption {
 	return func(service *WebService) { service.enricher = enricher }
+}
+
+// WithVerifiedHook 注册邮箱验证成功后的钩子(如注册用户自动建租户)。
+func WithVerifiedHook(hook func(ctx context.Context, principalID, email string) error) WebOption {
+	return func(service *WebService) { service.VerifiedHook = hook }
 }
 
 func WithRegistrationPrincipalCreator(creator RegistrationPrincipalCreator) WebOption {
