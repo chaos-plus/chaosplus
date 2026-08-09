@@ -54,6 +54,7 @@ export interface Agent {
 export interface Channel {
   id: string
   name: string
+  ownerId: string
   createdAt: number
 }
 
@@ -206,6 +207,9 @@ export const controlApi = {
   // channels (会话区)
   channels: () => req<Channel[]>("/channels"),
   createChannel: (name: string) => req<Channel>("/channels", { method: "POST", body: JSON.stringify({ name }) }),
+  /** 解散频道(仅 owner)。actor 暂由本地身份声明,接入登录后换成会话主体。 */
+  deleteChannel: (id: string) =>
+    req<{ ok: boolean }>(`/channels/${id}`, { method: "DELETE", headers: { "X-Actor": "human" } }),
   addMember: (id: string, memberId: string, kind: string) =>
     req<{ ok: boolean }>(`/channels/${id}/members`, { method: "POST", body: JSON.stringify({ memberId, kind }) }),
   removeMember: (id: string, memberId: string, kind: string) =>

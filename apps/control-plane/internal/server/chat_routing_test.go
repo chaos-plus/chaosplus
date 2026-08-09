@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -292,5 +293,92 @@ func TestRetireRemovesAgentFromChannels(t *testing.T) {
 		if m.Kind == "agent" && m.MemberID == a.ID {
 			t.Fatalf("retired agent still in channel: %+v", members)
 		}
+	}
+}
+
+// 解散频道:仅 owner 可操作,且连同消息与成员一起清掉。
+func TestDissolveChannelOwnerOnly(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+	ctx := context.Background()
+
+	var ch store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "doomed"}, &ch)
+	if ch.OwnerID != "human" {
+		t.Fatalf("creator should own the channel, got %q", ch.OwnerID)
+	}
+	doJSON(t, "POST", srv.URL+"/api/channels/"+ch.ID+"/messages", map[string]any{"text": "hi"}, nil)
+
+	// 非 owner 被拒。
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/"+ch.ID, nil)
+	req.Header.Set("X-Actor", "intruder")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 403 {
+		t.Fatalf("non-owner dissolve should 403, got %d", res.StatusCode)
+	}
+	if _, err := st.GetChannel(ctx, ch.ID); err != nil {
+		t.Fatal("channel must survive a rejected dissolve")
+	}
+
+	// owner 解散成功,数据全清。
+	req2, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/"+ch.ID, nil)
+	req2.Header.Set("X-Actor", "human")
+	res2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	res2.Body.Close()
+	if res2.StatusCode != 200 {
+		t.Fatalf("owner dissolve: %d", res2.StatusCode)
+	}
+	if _, err := st.GetChannel(ctx, ch.ID); err == nil {
+		t.Fatal("channel should be gone")
+	}
+	if msgs, _ := st.ListChannelMessages(ctx, ch.ID, 10); len(msgs) != 0 {
+		t.Fatalf("messages should be purged: %+v", msgs)
+	}
+	if members, _ := st.ListChannelMembers(ctx, ch.ID); len(members) != 0 {
+		t.Fatalf("members should be purged: %+v", members)
+	}
+
+	// 不存在的频道 404。
+	req3, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/ch-nope", nil)
+	res3, _ := http.DefaultClient.Do(req3)
+	res3.Body.Close()
+	if res3.StatusCode != 404 {
+		t.Fatalf("unknown channel should 404, got %d", res3.StatusCode)
+	}
+}
+
+// 解散后可以重建同名频道,新频道是干净的(不继承旧消息)。
+func TestChannelCanBeRecreatedAfterDissolve(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+	ctx := context.Background()
+
+	var first store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "reuse"}, &first)
+	doJSON(t, "POST", srv.URL+"/api/channels/"+first.ID+"/messages", map[string]any{"text": "old"}, nil)
+
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/"+first.ID, nil)
+	req.Header.Set("X-Actor", "human")
+	res, _ := http.DefaultClient.Do(req)
+	res.Body.Close()
+
+	var second store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "reuse"}, &second)
+	if second.ID == first.ID {
+		t.Fatal("recreated channel should get a fresh id")
+	}
+	msgs, _ := st.ListChannelMessages(ctx, second.ID, 10)
+	if len(msgs) != 0 {
+		t.Fatalf("new channel must start empty: %+v", msgs)
+	}
+	// 创建者仍自动入群。
+	members, _ := st.ListChannelMembers(ctx, second.ID)
+	if len(members) == 0 {
+		t.Fatal("creator should be auto-joined")
 	}
 }

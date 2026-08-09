@@ -16,6 +16,7 @@ import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { toast } from "@workspace/ui/components/sonner"
+import { notify } from "../../lib/notify"
 import {
   controlApi,
   FEEDBACK_CATEGORIES,
@@ -219,6 +220,8 @@ export default function SessionsPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const waitingReply = useRef(false)      // 正在等待 agent 回执
   const chatFileRef = useRef<HTMLInputElement>(null)
+  const notifiedSeq = useRef(0)
+  const [dissolveOpen, setDissolveOpen] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<MsgAttachment[]>([])
   const [uploading, setUploading] = useState(false)
   const pendingAgentSeq = useRef(0)       // 发送时已知的最大 agent 消息 seq
@@ -252,6 +255,7 @@ export default function SessionsPage() {
       void controlApi.members(channelId).then((x) => setMembers(x ?? [])).catch(() => setMembers([]))
     }
     load()
+    notifiedSeq.current = 0 // 换频道重新建立基线
     const t = setInterval(load, 3000)
     return () => clearInterval(t)
   }, [channelId])
@@ -259,6 +263,29 @@ export default function SessionsPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  // 页面不在前台时,新的 agent 回复 / 工作流事件走浏览器通知(自己发的不提醒)。
+  useEffect(() => {
+    if (messages.length === 0) return
+    const maxSeq = Math.max(...messages.map((m) => m.seq))
+    if (notifiedSeq.current === 0) {
+      notifiedSeq.current = maxSeq // 首次加载不补发历史
+      return
+    }
+    const fresh = messages.filter((m) => m.seq > notifiedSeq.current && m.authorKind !== "human")
+    notifiedSeq.current = maxSeq
+    if (fresh.length === 0) return
+
+    const last = fresh[fresh.length - 1]!
+    const wf = workflowPayload(last)
+    const channelName = channels.find((c) => c.id === channelId)?.name ?? "频道"
+    notify({
+      title: wf?.kind === "approval" ? `待审批 · ${channelName}` : `新消息 · ${channelName}`,
+      body: messageText(last).slice(0, 120) || "有新的工作流事件",
+      tag: `channel-${channelId}`,
+      url: `/sessions/${channelId}`,
+    })
+  }, [messages, channelId, channels])
 
   // 执行过程弹窗:打开时每秒轮询 agent 实时活动。
   useEffect(() => {
@@ -445,6 +472,11 @@ export default function SessionsPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem disabled>机器人(规划中)</DropdownMenuItem>
               <DropdownMenuItem disabled>勾子 Webhook(规划中)</DropdownMenuItem>
+              {channel?.ownerId === "human" && (
+                <DropdownMenuItem className="text-destructive" onClick={() => setDissolveOpen(true)}>
+                  解散频道
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -668,6 +700,40 @@ export default function SessionsPage() {
           <span className="sr-only">发送</span>
         </Button>
       </form>
+
+      {/* 解散频道:不可撤销,连同消息与成员一起删除 */}
+      <Dialog open={dissolveOpen} onOpenChange={setDissolveOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">解散频道</DialogTitle>
+          </DialogHeader>
+          <p className="py-2 text-sm text-muted-foreground">
+            将删除「{channel?.name}」的全部消息与成员,且不可撤销。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setDissolveOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              className="cursor-pointer"
+              onClick={async () => {
+                if (!channelId) return
+                try {
+                  await controlApi.deleteChannel(channelId)
+                  setDissolveOpen(false)
+                  navigate("/sessions")
+                  void controlApi.channels().then((x) => setChannels(x ?? []))
+                } catch (e) {
+                  toast.error(`解散失败:${e instanceof Error ? e.message : String(e)}`)
+                }
+              }}
+            >
+              确认解散
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 成员管理 */}
       <Dialog open={membersOpen} onOpenChange={setMembersOpen}>

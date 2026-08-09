@@ -116,7 +116,23 @@ type Channel struct {
 	ID            string `bun:"id,pk" json:"id"`
 	InstanceID    string `bun:"instance_id,notnull,default:''" json:"instanceId"`
 	Name          string `bun:"name,notnull" json:"name"`
-	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
+	// OwnerID 是频道创建者;只有 owner 能解散频道。
+	OwnerID   string `bun:"owner_id,notnull,default:'human'" json:"ownerId"`
+	CreatedAt int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
+}
+
+// DeleteChannel 解散频道:连同成员与消息一起删除,不留孤儿数据。
+func (s *Store) DeleteChannel(ctx context.Context, id string) error {
+	if _, err := s.db.NewDelete().Model(&ChannelMessage{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("delete channel messages: %w", err)
+	}
+	if _, err := s.db.NewDelete().Model(&ChannelMember{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("delete channel members: %w", err)
+	}
+	if _, err := s.db.NewDelete().Model(&Channel{}).Where("id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("delete channel: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {

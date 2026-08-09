@@ -4,6 +4,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Card } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { toast } from "@workspace/ui/components/sonner"
+import { notifyEnabled, notifyPermission, notifySupported, requestNotifyPermission, setNotifyEnabled } from "../../lib/notify"
 
 /** PRD D.6 个人中心(最小版)。本地单用户,偏好存本地;邮箱一经设置只读。 */
 const STORAGE_KEY = "platform-profile"
@@ -31,6 +32,8 @@ export default function ProfilePage() {
   const [nicknameDraft, setNicknameDraft] = useState("")
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) ?? "system")
   const [lang, setLang] = useState(() => localStorage.getItem(LANG_KEY) ?? "zh")
+  const [permission, setPermission] = useState<NotificationPermission>(() => notifyPermission())
+  const [enabled, setEnabled] = useState(() => notifyEnabled())
 
   useEffect(() => {
     setEmailDraft(profile.email)
@@ -140,6 +143,39 @@ export default function ProfilePage() {
             <p className="text-xs text-muted-foreground">v1 仅简体中文,其他语言随 i18n 一起放出。</p>
           </div>
         </div>
+      </Card>
+
+      <Card className="p-4">
+        <p className="font-medium">浏览器通知</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          页面切到后台时,新的会话消息与待审批会通过系统通知提醒你。
+        </p>
+        {!notifySupported() ? (
+          <p className="mt-2 text-sm text-muted-foreground">当前浏览器不支持通知。</p>
+        ) : permission === "denied" ? (
+          <p className="mt-2 text-sm text-destructive">通知已被浏览器拒绝,请在站点设置里重新允许。</p>
+        ) : (
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="cursor-pointer"
+              onClick={async () => {
+                if (enabled) {
+                  setNotifyEnabled(false)
+                  setEnabled(false)
+                  return
+                }
+                const ok = await requestNotifyPermission()
+                setPermission(notifyPermission())
+                setEnabled(ok)
+                toast[ok ? "success" : "error"](ok ? "已开启浏览器通知" : "未获得通知权限")
+              }}
+            >
+              {enabled ? "关闭通知" : "开启通知"}
+            </Button>
+            <span className="text-sm text-muted-foreground">{enabled ? "已开启" : "已关闭"}</span>
+          </div>
+        )}
       </Card>
 
       <Card className="p-4">

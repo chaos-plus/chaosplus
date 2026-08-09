@@ -193,6 +193,9 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 			return
 		}
 		c.ID = "ch-" + randHex(6)
+		if c.OwnerID == "" {
+			c.OwnerID = "human" // 本地单用户;接入登录后改为当前用户
+		}
 		if err := cs.st.CreateChannel(r.Context(), &c); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -201,6 +204,30 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		_ = cs.st.AddChannelMember(r.Context(), c.ID, "human", "human")
 		writeJSON(w, 201, c)
 	})
+	// 解散频道:仅 owner 可操作(连同成员与消息一并删除)。
+	mux.HandleFunc("DELETE /api/channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+		ch, err := cs.st.GetChannel(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeErr(w, 404, "channel not found")
+			return
+		}
+		// 本地单用户没有会话身份,actor 由客户端声明;接入登录后换成会话主体。
+		actor := r.Header.Get("X-Actor")
+		if actor == "" {
+			actor = "human"
+		}
+		if ch.OwnerID != actor {
+			writeErr(w, 403, "只有频道创建者可以解散频道")
+			return
+		}
+		if err := cs.st.DeleteChannel(r.Context(), ch.ID); err != nil {
+			slog.Error("delete channel", "channel", ch.ID, "err", err)
+			writeErr(w, 500, "解散频道失败")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+
 	mux.HandleFunc("POST /api/channels/{id}/members", func(w http.ResponseWriter, r *http.Request) {
 		var m struct {
 			MemberID string `json:"memberId"`
