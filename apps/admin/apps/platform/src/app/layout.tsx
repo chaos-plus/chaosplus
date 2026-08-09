@@ -109,10 +109,36 @@ export default function PlatformLayout() {
 
   // 动态浏览器 tab 标题:二级菜单 · 一级菜单 · chaos.plus。
   useEffect(() => {
+    if (location.pathname.startsWith("/profile")) {
+      document.title = "个人中心 · chaos.plus"
+      return
+    }
     const topLabel = ({ dashboard: "仪表盘", sessions: "会话区", workspace: "工作区", workflow: "工作流", team: "团队管理" } as Record<string, string>)[top]
     const sub = secondary.find((s) => location.pathname.startsWith(s.path))
     document.title = [sub?.label, topLabel, "chaos.plus"].filter(Boolean).join(" · ")
   }, [top, secondary, location.pathname])
+
+  // 顶部头像展示个人中心里设置的昵称。
+  const [displayName, setDisplayName] = useState("未登录")
+  useEffect(() => {
+    const sync = () => {
+      try {
+        const raw = localStorage.getItem("platform-profile")
+        const p = raw ? (JSON.parse(raw) as { nickname?: string; email?: string }) : null
+        setDisplayName(p?.nickname || p?.email || "未登录")
+      } catch {
+        setDisplayName("未登录")
+      }
+    }
+    sync()
+    // storage 事件只跨标签页触发,同页保存要靠自定义事件。
+    window.addEventListener("storage", sync)
+    window.addEventListener("profile-change", sync)
+    return () => {
+      window.removeEventListener("storage", sync)
+      window.removeEventListener("profile-change", sync)
+    }
+  }, [location.pathname])
 
   // 会话区左侧菜单:实时列出频道。
   useEffect(() => {
@@ -228,7 +254,7 @@ export default function PlatformLayout() {
                 <DropdownMenuLabel>主体</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem disabled>
-                  当前: {session?.preferred_username ?? session?.subject ?? "未登录"}
+                  当前: {session?.preferred_username ?? session?.subject ?? displayName}
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                   主体由 IAM 身份体系提供
@@ -263,13 +289,13 @@ export default function PlatformLayout() {
                   </AvatarFallback>
                 </Avatar>
                 <span className="hidden max-w-28 truncate text-sm font-medium sm:inline">
-                  {session?.preferred_username ?? session?.subject ?? "未登录"}
+                  {session?.preferred_username ?? session?.subject ?? displayName}
                 </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuLabel>{session?.email ?? "本地单用户"}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate("/")}>个人中心</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/profile")}>个人中心</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => navigate("/team/machines")}>我的机器</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem disabled className="text-muted-foreground">

@@ -29,6 +29,8 @@ export const router = createBrowserRouter([
               // 工作区(需求/任务/测试/缺陷/OKR)
               { path: "/workspace/:type", lazy: async () => ({ Component: (await import("./app/workspace/page")).default }) },
               { path: "/workspace/okrs", lazy: async () => ({ Component: (await import("./app/workspace/okrs")).default }) },
+              // 个人中心(PRD D.6)
+              { path: "/profile", lazy: async () => ({ Component: (await import("./app/profile/page")).default }) },
               // 团队管理
               { path: "/team/machines", lazy: async () => ({ Component: (await import("./app/team/machines/page")).default }) },
               { path: "/team/machines/:machineId", lazy: async () => ({ Component: (await import("./app/team/machines/detail")).default }) },
