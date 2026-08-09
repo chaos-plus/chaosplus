@@ -56,6 +56,24 @@ func (s *Store) RecordFeedbackLog(ctx context.Context, f FeedbackLogEntry) error
 	return nil
 }
 
+// RecordRejection persists a rejected verdict AND its structured feedback in one
+// transaction, so a rejection either writes both audit projections or neither.
+func (s *Store) RecordRejection(ctx context.Context, v ValidationResult, f FeedbackLogEntry) error {
+	v.TS, f.TS = time.Now().UnixMilli(), time.Now().UnixMilli()
+	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewInsert().Model(&v).Exec(ctx); err != nil {
+			return fmt.Errorf("insert validation result: %w", err)
+		}
+		if _, err := tx.NewInsert().Model(&f).Exec(ctx); err != nil {
+			return fmt.Errorf("insert feedback log: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("store record rejection: %w", err)
+	}
+	return nil
+}
+
 // ListValidationResults returns the verdicts for a run, newest first.
 func (s *Store) ListValidationResults(ctx context.Context, artifactID string, limit int) ([]ValidationResult, error) {
 	out := []ValidationResult{}

@@ -373,11 +373,14 @@ func (m *RunManager) Approve(runID, nodeID string, ok bool, reason string, fb *w
 	return run.Broker.Resolve(nodeID, ok, reason, fb)
 }
 
-// emit publishes an event to NATS (cluster fan-out), persists it to the
-// StateStore when configured, and delivers locally to the run's subscribers.
+// emit delivers an event to the run's subscribers, publishes it to NATS
+// (cluster fan-out), and persists it to the StateStore when configured.
+// Local delivery happens FIRST so the NATS echo of this same instance finds the
+// seq already in the run history and dedups (hasSeq) instead of double-posting.
 func (m *RunManager) emit(run *Run, ev RunEvent) {
 	ev.Seq = run.nextSeq()
 	ev.RunID = run.ID
+	run.publish(ev)
 	data, _ := json.Marshal(ev)
 	if err := m.nc.Publish(runSubjectPrefix+run.ID+".evt", data); err != nil {
 		slog.Warn("publish run event", "err", err)
@@ -397,41 +400,43 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
 		}
 	}
-	run.publish(ev) // local delivery; the NATS round-trip also lands async
 }
 
 // recordReviewProjection persists the human-approval verdict as audit
 // projections (PRD F.2): validation_results for every review, feedback_log for
-// rejections (the structured feedback). Errors are logged, never fatal.
+// rejections (the structured feedback). Best-effort: the events table (already
+// written by emit) is the authoritative, rebuildable source of truth (§15.1),
+// so a projection write failure never loses a decision. Errors are logged.
 func (m *RunManager) recordReviewProjection(run *Run, nodeID string, d workflow.Decision) {
 	if m.st == nil {
 		return
 	}
 	ctx := context.Background()
-	evidence, _ := json.Marshal(map[string]any{"reason": d.Reason})
-	if err := m.st.RecordValidationResult(ctx, store.ValidationResult{
-		ID: "vr-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
-		ValidatorID: "human", ValidatorType: "human",
-		Passed: func() int {
-			if d.OK {
-				return 1
-			}
-			return 0
-		}(),
-		EvidenceJSON: string(evidence), ReviewedBy: "human",
-	}); err != nil {
-		slog.Warn("record validation result", "run", run.ID, "node", nodeID, "err", err)
+	passed := 0
+	if d.OK {
+		passed = 1
 	}
-	if d.OK || d.Feedback == nil {
+	evidence, _ := json.Marshal(map[string]any{"reason": d.Reason})
+	v := store.ValidationResult{
+		ID: "vr-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
+		ValidatorID: "human", ValidatorType: "human", Passed: passed,
+		EvidenceJSON: string(evidence), ReviewedBy: "human",
+	}
+	if d.OK {
+		if err := m.st.RecordValidationResult(ctx, v); err != nil {
+			slog.Warn("record validation result", "run", run.ID, "node", nodeID, "err", err)
+		}
 		return
 	}
-	if err := m.st.RecordFeedbackLog(ctx, store.FeedbackLogEntry{
+	// Rejection: the failed verdict and its structured feedback land atomically.
+	f := store.FeedbackLogEntry{
 		ID: "fb-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
 		Reviewer: "human", Category: string(d.Feedback.Category),
 		Location: d.Feedback.Location, Expected: d.Feedback.Expected,
 		Detail: d.Feedback.Detail,
-	}); err != nil {
-		slog.Warn("record feedback log", "run", run.ID, "node", nodeID, "err", err)
+	}
+	if err := m.st.RecordRejection(ctx, v, f); err != nil {
+		slog.Warn("record rejection projection", "run", run.ID, "node", nodeID, "err", err)
 	}
 }
 

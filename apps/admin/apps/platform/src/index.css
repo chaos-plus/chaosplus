@@ -5,8 +5,10 @@
  * Platform-scoped: these tokens only ship in the platform bundle, not apps/sys.
  * Dark-mode primary developer console: slate-900 surfaces, a single green
  * run/success accent, red reserved for terminal failure.
+ * The workspace theme rules use `[data-theme="modern"].dark` (0,2,0); a bare
+ * `.dark` (0,1,0) would lose the cascade, so match the theme's specificity.
  */
-.dark {
+[data-theme="modern"].dark {
   --background: #0f172a;
   --foreground: #f8fafc;
   --card: #111c35;
