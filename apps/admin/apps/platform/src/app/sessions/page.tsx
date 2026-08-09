@@ -204,6 +204,14 @@ export default function SessionsPage() {
         </div>
       </header>
 
+      {/* 无 agent 成员提示 */}
+      {!members.some((m) => m.kind === "agent") && (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
+          <Bot className="size-3.5 shrink-0" aria-hidden="true" />
+          当前频道还没有 Agent 成员 —— 从右上角添加一个 Agent 后,发消息才会由它执行并回复。
+        </div>
+      )}
+
       {/* 消息区(内部滚动,占满剩余高度) */}
       <ScrollArea className="min-h-0 flex-1 rounded-xl border bg-card/40">
         <div className="space-y-4 p-4">
