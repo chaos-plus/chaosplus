@@ -193,7 +193,7 @@ function PasswordField({
           className={onVisible ? "pr-10" : undefined}
           autoComplete="new-password"
           required
-          minLength={12}
+          minLength={8}
           maxLength={1024}
         />
         {onVisible && (

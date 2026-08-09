@@ -54,7 +54,7 @@ type registrationInput struct {
 	Origin string `header:"Origin" hidden:"true"`
 	Body   struct {
 		Email       string `json:"email" format:"email" maxLength:"320"`
-		Password    string `json:"password" minLength:"12" maxLength:"1024"`
+		Password    string `json:"password" minLength:"8" maxLength:"1024"`
 		DisplayName string `json:"display_name,omitempty" maxLength:"128"`
 	}
 }

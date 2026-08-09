@@ -46,7 +46,7 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 	}
 	email, displayName = strings.ToLower(strings.TrimSpace(email)), strings.TrimSpace(displayName)
 	parsed, err := mail.ParseAddress(email)
-	if len(email) > 320 || len(password) < 12 || len(password) > 1024 || len(displayName) > 128 || err != nil || !strings.EqualFold(parsed.Address, email) {
+	if len(email) > 320 || len(password) < 8 || len(password) > 1024 || len(displayName) > 128 || err != nil || !strings.EqualFold(parsed.Address, email) {
 		return authnext.ErrInvalidRegistration
 	}
 	passwordHash, err := passwordx.Hash(password)
