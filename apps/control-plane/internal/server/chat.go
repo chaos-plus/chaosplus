@@ -83,7 +83,8 @@ func (cs *ChatService) appendExec(channelID, kind, content string) {
 func (cs *ChatService) execution(channelID string) []ProgressEntry {
 	cs.execMu.Lock()
 	defer cs.execMu.Unlock()
-	return append([]ProgressEntry(nil), cs.execLog[channelID]...)
+	// 必须返回 [] 而非 nil:nil 会 marshal 成 null,前端 .map 会崩。
+	return append([]ProgressEntry{}, cs.execLog[channelID]...)
 }
 
 func (cs *ChatService) register(mux *http.ServeMux) {
@@ -653,7 +654,10 @@ func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 	if run.Status() == RunFailed || run.Status() == RunPaused {
 		final = "review"
 	}
-	_ = cs.st.UpdateWorkItemRun(ctx, it.ID, 100, final, time.Since(start).Hours())
+	spent := time.Since(start).Hours()
+	_ = cs.st.UpdateWorkItemRun(ctx, it.ID, 100, final, spent)
+	_ = cs.st.CalibrateEstimate(ctx, it.ID, spent) // 未人工估时 → 用实际耗时校准
+	_ = cs.st.RollupParent(ctx, it.ParentID)       // 子任务工时/进度汇总到父项
 	it.Status = final
 	cs.notifyWorkItemChange(ctx, it, "status")
 }
@@ -776,7 +780,8 @@ func mentionName(text string) string {
 		}
 		start := i + 1
 		j := start
-		for j < len(text) && (text[j] == '_' || text[j] >= 'a' && text[j] <= 'z' || text[j] >= 'A' && text[j] <= 'Z' || text[j] >= '0' && text[j] <= '9') {
+		// 名字允许连字符(be-dev / fe-dev 是常用命名),否则 @be-dev 只会匹配到 "be"。
+		for j < len(text) && (text[j] == '_' || text[j] == '-' || text[j] >= 'a' && text[j] <= 'z' || text[j] >= 'A' && text[j] <= 'Z' || text[j] >= '0' && text[j] <= '9') {
 			j++
 		}
 		if j > start {

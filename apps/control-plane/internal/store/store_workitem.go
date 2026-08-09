@@ -78,6 +78,46 @@ func (s *Store) UpdateWorkItem(ctx context.Context, w *WorkItem) error {
 	return nil
 }
 
+// CalibrateEstimate 回填估时:首次执行完成且人工未估时,用实际耗时作为校准值。
+func (s *Store) CalibrateEstimate(ctx context.Context, id string, spentHours float64) error {
+	if _, err := s.db.NewUpdate().Model(&WorkItem{}).
+		Where("id = ? AND estimate_hours <= 0", id).
+		Set("estimate_hours = ?", spentHours).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("calibrate estimate: %w", err)
+	}
+	return nil
+}
+
+// RollupParent 把子任务的工时/进度汇总到父项(进度取子项均值,工时取合计)。
+func (s *Store) RollupParent(ctx context.Context, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	kids, err := s.ListWorkItems(ctx, "", "", parentID)
+	if err != nil {
+		return err
+	}
+	if len(kids) == 0 {
+		return nil
+	}
+	var estimate, spent float64
+	var progress int
+	for _, k := range kids {
+		estimate += k.EstimateHours
+		spent += k.SpentHours
+		progress += k.Progress
+	}
+	progress /= len(kids)
+	if _, err := s.db.NewUpdate().Model(&WorkItem{}).Where("id = ?", parentID).
+		Set("estimate_hours = ?", estimate).Set("spent_hours = ?", spent).
+		Set("progress = ?", progress).Set("updated_at = ?", time.Now().UnixMilli()).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("rollup parent: %w", err)
+	}
+	return nil
+}
+
 // UpdateWorkItemRun 只在 run 推进时更新 progress/status/spent_hours(投影,不覆盖人工字段)。
 func (s *Store) UpdateWorkItemRun(ctx context.Context, id string, progress int, status string, spentHours float64) error {
 	now := time.Now().UnixMilli()
