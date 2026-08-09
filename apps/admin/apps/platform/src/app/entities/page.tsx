@@ -15,6 +15,13 @@ export default function EntitiesPage() {
   const [current, setCurrent] = useState(getEntity())
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
+  // tab:默认创建;URL 带 ?invite= 时切到加入并预填邀请码。
+  const inviteCode = new URLSearchParams(window.location.search).get("invite") ?? ""
+  const [tab, setTab] = useState<"create" | "join">(inviteCode ? "join" : "create")
+  const [invite, setInvite] = useState(inviteCode)
+  const [inviteInfo, setInviteInfo] = useState<Entity | null>(null)
+  const [inviteErr, setInviteErr] = useState("")
+  const [joining, setJoining] = useState(false)
 
   // 实体接口需要租户上下文(X-Tenant-Id)。独立路由不经 layout,先确保有租户。
   const ensureTenant = useCallback(async () => {
@@ -58,6 +65,36 @@ export default function EntitiesPage() {
     }
   }
 
+  const lookupInvite = async () => {
+    if (!invite.trim()) return
+    setInviteErr("")
+    setInviteInfo(null)
+    try {
+      const en = await iamApi.lookupEntityInvite(invite.trim())
+      setInviteInfo(en)
+    } catch (e) {
+      setInviteErr(e instanceof Error ? e.message : "邀请码无效")
+    }
+  }
+
+  useEffect(() => {
+    if (inviteCode) void lookupInvite()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const join = async () => {
+    if (!inviteInfo || joining) return
+    setJoining(true)
+    try {
+      await iamApi.acceptEntityInvite(invite.trim())
+      enter(inviteInfo.id)
+    } catch (e) {
+      setInviteErr(e instanceof Error ? e.message : "加入失败")
+    } finally {
+      setJoining(false)
+    }
+  }
+
   return (
     <div className="mx-auto flex min-h-svh max-w-2xl flex-col justify-center gap-4 px-4 py-8">
       <div className="grid justify-items-center gap-2 text-center">
@@ -67,6 +104,58 @@ export default function EntitiesPage() {
           仪表盘、工作区、工作流、会话区等资源都归属在实例(instance)下。请选择或创建一个实例进入。
         </p>
       </div>
+
+      {/* 创建 / 加入 */}
+      <div className="flex gap-1 rounded-lg border bg-muted/40 p-1">
+        {(["create", "join"] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className={`flex-1 cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {k === "create" ? "创建" : "加入"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "join" && (
+        <div className="grid gap-2 rounded-xl border p-4">
+          <label htmlFor="invite-code" className="text-sm font-medium">邀请码</label>
+          <div className="flex gap-2">
+            <Input
+              id="invite-code"
+              value={invite}
+              onChange={(e) => {
+                setInvite(e.target.value)
+                setInviteInfo(null)
+                setInviteErr("")
+              }}
+              placeholder="粘贴邀请链接或邀请码"
+            />
+            <Button variant="outline" className="cursor-pointer" onClick={lookupInvite} disabled={!invite.trim()}>
+              查询实例
+            </Button>
+          </div>
+          {inviteErr && <p className="text-sm text-destructive">{inviteErr}</p>}
+          {inviteInfo && (
+            <div className="rounded-lg border bg-muted/40 p-3">
+              <div className="flex items-center gap-2">
+                <Boxes className="size-4 text-muted-foreground" aria-hidden="true" />
+                <span className="font-medium">{inviteInfo.name}</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                实例 {inviteInfo.id} · 将加入该实例,可以看到它名下的资源。
+              </p>
+              <Button className="mt-2 cursor-pointer gap-1.5" onClick={join} disabled={joining}>
+                <Plus className="size-4" />
+                {joining ? "加入中…" : "确认加入"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-2">
         {entities.map((en) => (

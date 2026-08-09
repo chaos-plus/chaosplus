@@ -929,6 +929,10 @@ export function createIamApi(
 ) {
   const request = <T>(path: string, init: RequestInit = {}, tenant = true) =>
     requestWithBase<T>(apiBase, tenantID, path, init, tenant)
+  // 显式指定租户(不依赖全局 getTenant),用于实体下拉等 tenantValue 与
+  // localStorage 可能不同步的场景。
+  const requestTenant = <T>(path: string, tenantId: string, init: RequestInit = {}) =>
+    requestWithBase<T>(apiBase, () => tenantId, path, init, true)
   const requestEnvelope = <T>(path: string) =>
     requestEnvelopeWithBase<T>(apiBase, tenantID, path)
   return {
@@ -1238,14 +1242,18 @@ export function createIamApi(
       }),
     memberRoles: (subject: string) =>
       request<string[]>(`/iam/members/${encodeURIComponent(subject)}/roles`),
-    entities: () => request<Entity[]>("/iam/entities"),
+    entities: (tenantId?: string) =>
+      tenantId ? requestTenant<Entity[]>("/iam/entities", tenantId) : request<Entity[]>("/iam/entities"),
+    lookupEntityInvite: (code: string) =>
+      request<Entity>(`/iam/entities/invite/${encodeURIComponent(code)}`, {}, false),
+    acceptEntityInvite: (code: string) =>
+      request<{ ok: boolean }>(`/iam/entities/invite/${encodeURIComponent(code)}/accept`, { method: "POST" }, false),
     entity: (id: string) =>
       request<Entity>(`/iam/entities/${encodeURIComponent(id)}`),
-    createEntity: (body: EntityInput) =>
-      request<Entity>("/iam/entities", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
+    createEntity: (body: EntityInput, tenantId?: string) =>
+      tenantId
+        ? requestTenant<Entity>("/iam/entities", tenantId, { method: "POST", body: JSON.stringify(body) })
+        : request<Entity>("/iam/entities", { method: "POST", body: JSON.stringify(body) }),
     updateEntity: (id: string, body: Partial<EntityInput>) =>
       request<Entity>(`/iam/entities/${encodeURIComponent(id)}`, {
         method: "PATCH",
