@@ -43,6 +43,15 @@ func TestMachineStoreCRUD(t *testing.T) {
 		t.Fatal("heartbeat not written")
 	}
 
+	// 手动轮换长期 token。
+	if err := s.UpdateMachineToken(ctx, "m1", "newhash"); err != nil {
+		t.Fatalf("update token: %v", err)
+	}
+	ms, _ = s.ListMachines(ctx)
+	if ms[0].TokenHash != "newhash" {
+		t.Fatalf("token hash not rotated: %+v", ms[0])
+	}
+
 	if err := s.DeleteMachine(ctx, "m1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
