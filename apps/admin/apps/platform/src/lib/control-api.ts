@@ -95,6 +95,8 @@ export const controlApi = {
   createChannel: (name: string) => req<Channel>("/channels", { method: "POST", body: JSON.stringify({ name }) }),
   addMember: (id: string, memberId: string, kind: string) =>
     req<{ ok: boolean }>(`/channels/${id}/members`, { method: "POST", body: JSON.stringify({ memberId, kind }) }),
+  removeMember: (id: string, memberId: string, kind: string) =>
+    req<{ ok: boolean }>(`/channels/${id}/members/${memberId}/${kind}`, { method: "DELETE" }),
   members: (id: string) => req<ChannelMember[]>(`/channels/${id}/members`),
   messages: (id: string) => req<ChannelMessage[]>(`/channels/${id}/messages`),
   postMessage: (id: string, text: string) =>

@@ -107,6 +107,14 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, memberID, kind 
 	return nil
 }
 
+func (s *Store) RemoveChannelMember(ctx context.Context, channelID, memberID, kind string) error {
+	if _, err := s.db.NewDelete().Model(&ChannelMember{}).
+		Where("channel_id = ? AND member_id = ? AND kind = ?", channelID, memberID, kind).Exec(ctx); err != nil {
+		return fmt.Errorf("remove member: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListChannelMembers(ctx context.Context, channelID string) ([]ChannelMember, error) {
 	out := []ChannelMember{}
 	if err := s.db.NewSelect().Model(&out).Where("channel_id = ?", channelID).Scan(ctx); err != nil {

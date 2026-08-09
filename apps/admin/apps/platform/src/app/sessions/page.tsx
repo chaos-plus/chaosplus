@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bot, Hash, Plus, Send, User as UserIcon } from "lucide-react"
+import { Bot, Hash, MoreHorizontal, Plus, Send, Trash2, User as UserIcon } from "lucide-react"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { controlApi, type Agent, type Channel, type ChannelMessage } from "../../lib/control-api"
@@ -31,6 +39,8 @@ export default function SessionsPage() {
   const [busy, setBusy] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState("")
+  const [membersOpen, setMembersOpen] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const loadChannels = useCallback(() => {
@@ -75,6 +85,12 @@ export default function SessionsPage() {
     const kind = addTarget.startsWith("ag-") ? "agent" : "human"
     await controlApi.addMember(channelId, addTarget, kind)
     setAddTarget("")
+    void controlApi.members(channelId).then((x) => setMembers(x ?? []))
+  }
+
+  const removeMember = async (memberId: string, kind: string) => {
+    if (!channelId) return
+    await controlApi.removeMember(channelId, memberId, kind)
     void controlApi.members(channelId).then((x) => setMembers(x ?? []))
   }
 
@@ -187,23 +203,23 @@ export default function SessionsPage() {
               )}
             </span>
           ))}
-          <select
-            value={addTarget}
-            onChange={(e) => setAddTarget(e.target.value)}
-            className="ml-1 h-8 rounded-full border border-input bg-transparent px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="添加成员"
-          >
-            <option value="">+ 添加成员</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} (agent)
-              </option>
-            ))}
-            <option value="human">human (当前用户)</option>
-          </select>
-          <Button size="sm" variant="ghost" onClick={addMember} disabled={!addTarget}>
-            添加
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="频道菜单"
+              className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <MoreHorizontal className="size-4" aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>#{channel?.name ?? channelId}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setInfoOpen(true)}>频道信息</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setMembersOpen(true)}>成员管理</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled>机器人(规划中)</DropdownMenuItem>
+              <DropdownMenuItem disabled>勾子 Webhook(规划中)</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -291,6 +307,64 @@ export default function SessionsPage() {
           <span className="sr-only">发送</span>
         </Button>
       </form>
+
+      {/* 成员管理 */}
+      <Dialog open={membersOpen} onOpenChange={setMembersOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>成员管理</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex gap-2">
+              <select
+                value={addTarget}
+                onChange={(e) => setAddTarget(e.target.value)}
+                className="h-9 flex-1 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="添加成员"
+              >
+                <option value="">添加成员…</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} (agent)
+                  </option>
+                ))}
+                <option value="human">human (当前用户)</option>
+              </select>
+              <Button onClick={addMember} disabled={!addTarget}>添加</Button>
+            </div>
+            <div className="space-y-1">
+              {members.map((m) => (
+                <div key={m.memberId + m.kind} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="inline-flex items-center gap-1.5">
+                    {m.kind === "agent" ? <Bot className="size-4 text-primary" aria-hidden="true" /> : <UserIcon className="size-4" aria-hidden="true" />}
+                    {m.kind === "agent" ? (agentNames.get(m.memberId) ?? m.memberId) : "human"}
+                    {m.kind === "human" && <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-semibold text-primary-foreground">owner</span>}
+                  </span>
+                  <Button size="icon" variant="ghost" aria-label={`移除 ${m.memberId}`} onClick={() => removeMember(m.memberId, m.kind)}>
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              {members.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">暂无成员。</p>}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 频道信息 */}
+      <Dialog open={infoOpen} onOpenChange={setInfoOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>频道信息</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2 text-sm">
+            <div>名称:{channel?.name ?? channelId}</div>
+            <div>ID:{channelId}</div>
+            <div>创建:{channel ? new Date(channel.createdAt).toLocaleString() : "—"}</div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {channelDialog}
     </div>
   )

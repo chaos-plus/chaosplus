@@ -131,6 +131,13 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, items)
 	})
+	mux.HandleFunc("DELETE /api/channels/{id}/members/{memberId}/{kind}", func(w http.ResponseWriter, r *http.Request) {
+		if err := cs.st.RemoveChannelMember(r.Context(), r.PathValue("id"), r.PathValue("memberId"), r.PathValue("kind")); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
 	mux.HandleFunc("GET /api/channels/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
 		items, err := cs.st.ListChannelMessages(r.Context(), r.PathValue("id"), 200)
 		if err != nil {
