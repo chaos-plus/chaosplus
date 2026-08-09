@@ -168,6 +168,7 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 	defer ws.Close()
 
 	sawRetry, sawReview, sawRejectedFeedback, sentReject := false, false, false, false
+	seqCount := map[int]int{}
 	// 事件流读完后 ReadJSON 会阻塞;设读截止时间保证循环在截止处退出。
 	_ = ws.SetReadDeadline(time.Now().Add(4 * time.Second))
 	for {
@@ -175,6 +176,7 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 		if err := ws.ReadJSON(&ev); err != nil {
 			break
 		}
+		seqCount[ev.Seq]++
 		if ev.NodeID == "a0" && ev.Status == workflow.StatusRetrying {
 			sawRetry = true
 		}
@@ -214,6 +216,12 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 	}
 	if a0Calls != 2 {
 		t.Fatalf("a0 ran %d times, want 2 (retried once)", a0Calls)
+	}
+	// WS 去重:每个 seq 事件只到一次(NATS 回环不再重复投递)。
+	for seq, n := range seqCount {
+		if n > 1 {
+			t.Fatalf("WS delivered seq %d %d times, want once (double-delivery)", seq, n)
+		}
 	}
 	if len(fixInput) == 0 {
 		t.Fatal("fix node never ran")

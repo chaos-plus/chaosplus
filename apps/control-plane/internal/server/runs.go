@@ -101,6 +101,21 @@ func (r *Run) Events() []RunEvent {
 	return append([]RunEvent(nil), r.events...)
 }
 
+// hasSeq reports whether the run already recorded the event with this seq. The
+// NATS subscriber uses it to skip the round-trip re-delivery of an event that
+// was emitted and published locally by this instance (each run event otherwise
+// reaches WS subscribers twice: local delivery + the NATS fan-out echo).
+func (r *Run) hasSeq(seq int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		if ev.Seq == seq {
+			return true
+		}
+	}
+	return false
+}
+
 // Status returns the run's lifecycle state (safe for concurrent reads).
 func (r *Run) Status() RunStatus {
 	r.mu.Lock()
@@ -161,7 +176,10 @@ func (m *RunManager) Start(ctx context.Context) error {
 		m.mu.Lock()
 		r := m.runs[ev.RunID]
 		m.mu.Unlock()
-		if r != nil {
+		// Skip the NATS round-trip echo of an event this instance already
+		// published locally; events from other instances (which were never in
+		// the local history) still arrive via this subscriber.
+		if r != nil && !r.hasSeq(ev.Seq) {
 			r.publish(ev)
 		}
 	})
