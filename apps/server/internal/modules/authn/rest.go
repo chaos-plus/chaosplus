@@ -105,7 +105,9 @@ type emailVerificationStartInput struct {
 type emailVerificationCompleteInput struct {
 	Origin string `header:"Origin" hidden:"true"`
 	Body   struct {
-		Token string `json:"token" minLength:"32" maxLength:"128"`
+		Token string `json:"token,omitempty" maxLength:"128"`
+		// Code 是注册邮箱验证码(6 位数字),token 与 code 二选一。
+		Code string `json:"code,omitempty" minLength:"6" maxLength:"6"`
 	}
 }
 
@@ -489,7 +491,7 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 		if err := web.ValidateLoginOrigin(in.Origin); err != nil {
 			return nil, huma.Error403Forbidden("email_verification_request_rejected")
 		}
-		if err := web.CompleteEmailVerification(ctx, in.Body.Token); err != nil {
+		if err := web.CompleteEmailVerification(ctx, in.Body.Token, in.Body.Code); err != nil {
 			switch {
 			case errors.Is(err, authnext.ErrInvalidEmailVerification):
 				return nil, huma.Error400BadRequest("invalid_email_verification_credential")

@@ -62,6 +62,10 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 	if err != nil {
 		return err
 	}
+	code, err := randomVerificationCode()
+	if err != nil {
+		return fmt.Errorf("generate verification code: %w", err)
+	}
 	now := s.now().UTC()
 	expires := now.Add(s.cfg.EmailVerification.TokenTTL)
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -71,13 +75,13 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 		}
 		verification := emailVerificationRow{
 			TokenHMAC: s.emailVerificationHMAC(token), PrincipalID: principalID, Email: email,
-			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(),
+			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(), Code: code,
 		}
 		if _, err := tx.NewInsert().Model(&verification).Exec(ctx); err != nil {
 			return err
 		}
 		if err := s.enqueueNotification(ctx, tx, notificationPayload{
-			Type: emailVerificationNotification, Recipient: email, VerificationURL: verificationURL,
+			Type: emailVerificationNotification, Recipient: email, VerificationURL: verificationURL, Code: code,
 			OccurredAt: now, ExpiresAt: expires,
 		}); err != nil {
 			return err

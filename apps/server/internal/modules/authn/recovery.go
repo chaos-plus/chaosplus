@@ -63,6 +63,7 @@ type notificationPayload struct {
 	Recipient       string    `json:"recipient"`
 	RecoveryURL     string    `json:"recovery_url,omitempty"`
 	VerificationURL string    `json:"verification_url,omitempty"`
+	Code            string    `json:"code,omitempty"` // 注册邮箱验证码(6 位数字)
 	OccurredAt      time.Time `json:"occurred_at"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 }

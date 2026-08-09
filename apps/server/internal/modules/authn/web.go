@@ -89,20 +89,20 @@ type sessionRow struct {
 }
 
 type WebService struct {
-	cfg                       authnext.Config
-	web                       authnext.WebConfig
-	db                        *bun.DB
-	auditTrail                *auditmod.Service
-	privateKey                ed25519.PrivateKey
-	publicKey                 ed25519.PublicKey
-	kid                       string
-	mfaKey                    []byte
-	passkeys                  *webauthnx.Adapter
-	now                       func() time.Time
-	enricher                  ClaimEnricher
-	registrationCreator       RegistrationPrincipalCreator
+	cfg                 authnext.Config
+	web                 authnext.WebConfig
+	db                  *bun.DB
+	auditTrail          *auditmod.Service
+	privateKey          ed25519.PrivateKey
+	publicKey           ed25519.PublicKey
+	kid                 string
+	mfaKey              []byte
+	passkeys            *webauthnx.Adapter
+	now                 func() time.Time
+	enricher            ClaimEnricher
+	registrationCreator RegistrationPrincipalCreator
 	// VerifiedHook 在邮箱验证成功时调用(注册用户自动建租户,PRD 模型)。
-	VerifiedHook            func(ctx context.Context, principalID, email string) error
+	VerifiedHook              func(ctx context.Context, principalID, email string) error
 	notificationAuthorization string
 	notificationClient        *http.Client
 	notificationMu            sync.Mutex

@@ -1,15 +1,17 @@
 package authn
 
 import (
-	"log/slog"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -31,6 +33,8 @@ type emailVerificationRow struct {
 	CreatedAt     int64
 	ExpiresAt     int64
 	ConsumedAt    int64
+	// Code 是 6 位数字邮箱验证码(注册/登录输入);一次性 + 短时效。
+	Code string `bun:"code,notnull,default:''"`
 }
 
 func (s *WebService) configureEmailVerification() error {
@@ -122,30 +126,48 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 	return nil
 }
 
-func (s *WebService) CompleteEmailVerification(ctx context.Context, token string) error {
+// CompleteEmailVerification 支持链接 token 或 6 位验证码两种方式激活。
+func (s *WebService) CompleteEmailVerification(ctx context.Context, token, code string) error {
 	if !s.EmailVerificationEnabled() {
 		return authnext.ErrEmailVerificationDisabled
 	}
-	if !strings.HasPrefix(token, emailVerificationTokenPrefix) || len(token) > 128 {
-		return authnext.ErrInvalidEmailVerification
-	}
 	now := s.now().UTC().UnixMilli()
-	computedHMAC := s.emailVerificationHMAC(token)
 	var verification emailVerificationRow
-	if err := s.db.NewSelect().Model(&verification).
-		Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now).Scan(ctx); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	var computedHMAC string
+	switch {
+	case token != "":
+		if !strings.HasPrefix(token, emailVerificationTokenPrefix) || len(token) > 128 {
 			return authnext.ErrInvalidEmailVerification
 		}
-		return fmt.Errorf("load email verification credential: %w", err)
-	}
-	if subtle.ConstantTimeCompare([]byte(verification.TokenHMAC), []byte(computedHMAC)) != 1 {
+		computedHMAC = s.emailVerificationHMAC(token)
+		if err := s.db.NewSelect().Model(&verification).
+			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now).Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return authnext.ErrInvalidEmailVerification
+			}
+			return fmt.Errorf("load email verification credential: %w", err)
+		}
+		if subtle.ConstantTimeCompare([]byte(verification.TokenHMAC), []byte(computedHMAC)) != 1 {
+			return authnext.ErrInvalidEmailVerification
+		}
+	case code != "":
+		if len(code) != 6 {
+			return authnext.ErrInvalidEmailVerification
+		}
+		if err := s.db.NewSelect().Model(&verification).
+			Where("code = ? AND consumed_at = 0 AND expires_at > ?", code, now).Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return authnext.ErrInvalidEmailVerification
+			}
+			return fmt.Errorf("load email verification credential: %w", err)
+		}
+	default:
 		return authnext.ErrInvalidEmailVerification
 	}
 	auditService := auditmod.NewService(s.db)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		result, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).Set("consumed_at = ?", now).
-			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now).Exec(ctx)
+			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", verification.TokenHMAC, now).Exec(ctx)
 		if err != nil {
 			return err
 		}
@@ -180,6 +202,15 @@ func (s *WebService) CompleteEmailVerification(ctx context.Context, token string
 		}
 	}
 	return nil
+}
+
+// randomVerificationCode 生成 6 位数字邮箱验证码。
+func randomVerificationCode() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", int(binary.BigEndian.Uint32(b))%1000000), nil
 }
 
 func (s *WebService) emailVerificationHMAC(token string) string {
