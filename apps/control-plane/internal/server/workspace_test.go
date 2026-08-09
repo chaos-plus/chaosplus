@@ -7,7 +7,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,5 +320,273 @@ func TestChannelWorkItemNotifiesSubscribers(t *testing.T) {
 	msgs, _ = st.ListChannelMessages(context.Background(), ch.ID, 50)
 	if len(msgs) <= before {
 		t.Fatal("status change did not notify channel")
+	}
+}
+
+// 部分更新:只带 status 的 PUT 不能清掉估时/进度/父级(前端就是这么调的)。
+func TestUpdateWorkItemIsPartialAndPreservesUntouchedFields(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+
+	var parent store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "requirement", "title": "父"}, &parent)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items",
+		map[string]any{"type": "task", "title": "子", "parentId": parent.ID, "estimateHours": 3, "description": "细节"}, &it)
+	if err := st.UpdateWorkItemRun(context.Background(), it.ID, 40, "in_progress", 1.25); err != nil {
+		t.Fatalf("seed run projection: %v", err)
+	}
+
+	if code := doJSON(t, "PUT", srv.URL+"/api/work-items/"+it.ID, map[string]any{"status": "review"}, nil); code != 200 {
+		t.Fatalf("status-only PUT: %d", code)
+	}
+
+	got, err := st.GetWorkItem(context.Background(), it.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != "review" {
+		t.Fatalf("status not applied: %+v", got)
+	}
+	if got.EstimateHours != 3 || got.Progress != 40 || got.SpentHours != 1.25 {
+		t.Fatalf("status-only PUT wiped run/estimate fields: %+v", got)
+	}
+	if got.ParentID != parent.ID || got.Description != "细节" || got.Type != "task" || got.Title != "子" {
+		t.Fatalf("status-only PUT wiped manual fields: %+v", got)
+	}
+
+	// 显式传空字符串描述是有意清空,应生效。
+	doJSON(t, "PUT", srv.URL+"/api/work-items/"+it.ID, map[string]any{"description": ""}, nil)
+	got, _ = st.GetWorkItem(context.Background(), it.ID)
+	if got.Description != "" {
+		t.Fatalf("explicit empty description should clear it: %+v", got)
+	}
+
+	// 自引用父级被拒。
+	if code := doJSON(t, "PUT", srv.URL+"/api/work-items/"+it.ID, map[string]any{"parentId": it.ID}, nil); code != 400 {
+		t.Fatalf("self-parent should 400, got %d", code)
+	}
+}
+
+// 附件回放必须按扩展名判定类型,不能信客户端 Content-Type(否则同源存储型 XSS)。
+func TestAttachmentServingIgnoresClientMimeAndHardensHeaders(t *testing.T) {
+	srv, _ := newWorkspaceTestServer(t)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "t"}, &it)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="evil.html"`)
+	h.Set("Content-Type", "text/html") // 攻击者声明的类型
+	part, _ := mw.CreatePart(h)
+	_, _ = part.Write([]byte("<script>alert(1)</script>"))
+	_ = mw.Close()
+
+	res, err := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	var att store.Attachment
+	_ = json.NewDecoder(res.Body).Decode(&att)
+	res.Body.Close()
+	if att.Mime == "text/html" {
+		t.Fatalf("client-declared text/html must not be stored verbatim: %+v", att)
+	}
+
+	dl, err := http.Get(srv.URL + "/api/attachments/" + att.ID)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	defer dl.Body.Close()
+	if ct := dl.Header.Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("html must not be served as text/html, got %q", ct)
+	}
+	if dl.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("missing X-Content-Type-Options: nosniff")
+	}
+	if cd := dl.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Errorf("unsafe type must download, not render; got %q", cd)
+	}
+
+	// 图片仍应内联展示。
+	var ibuf bytes.Buffer
+	imw := multipart.NewWriter(&ibuf)
+	ifw, _ := imw.CreateFormFile("file", "pic.png")
+	_, _ = ifw.Write([]byte("\x89PNG\r\n\x1a\n"))
+	_ = imw.Close()
+	ires, _ := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", imw.FormDataContentType(), &ibuf)
+	var iatt store.Attachment
+	_ = json.NewDecoder(ires.Body).Decode(&iatt)
+	ires.Body.Close()
+	idl, _ := http.Get(srv.URL + "/api/attachments/" + iatt.ID)
+	defer idl.Body.Close()
+	if idl.Header.Get("Content-Type") != "image/png" {
+		t.Errorf("png should serve as image/png, got %q", idl.Header.Get("Content-Type"))
+	}
+	if !strings.HasPrefix(idl.Header.Get("Content-Disposition"), "inline") {
+		t.Errorf("png should be inline, got %q", idl.Header.Get("Content-Disposition"))
+	}
+}
+
+func TestOkrRejectsMalformedKeyResults(t *testing.T) {
+	srv, _ := newWorkspaceTestServer(t)
+
+	for _, bad := range []string{`{"not":"an array"}`, `[{"target":1,"progress":0,"unit":"x"}]`, `[{"title":"MAU","unit":"x"}]`} {
+		if code := doJSON(t, "POST", srv.URL+"/api/okrs", map[string]any{"title": "Q3", "keyResults": bad}, nil); code != 400 {
+			t.Errorf("keyResults %s should 400, got %d", bad, code)
+		}
+	}
+	var o store.Okr
+	if code := doJSON(t, "POST", srv.URL+"/api/okrs",
+		map[string]any{"title": "Q3", "keyResults": `[{"title":"MAU","target":100,"progress":40,"unit":"万"}]`}, &o); code != 201 {
+		t.Fatalf("valid keyResults should succeed, got %d", code)
+	}
+	if code := doJSON(t, "PUT", srv.URL+"/api/okrs/"+o.ID, map[string]any{"title": "Q3", "keyResults": `[{"bad":1}]`}, nil); code != 400 {
+		t.Fatalf("malformed update should 400, got %d", code)
+	}
+}
+
+// 启动对账:重启后遗留的 in_progress 必须被解开,否则 /execute 永远 409。
+func TestReconcileStaleRunningUnsticksWorkItems(t *testing.T) {
+	srv, st := newWorkspaceTestServer(t)
+	ctx := context.Background()
+
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "卡住的"}, &it)
+	if err := st.UpdateWorkItemRun(ctx, it.ID, 30, "in_progress", 0.5); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	n, err := st.ReconcileStaleRunning(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("reconcile = (%d,%v), want (1,nil)", n, err)
+	}
+	got, _ := st.GetWorkItem(ctx, it.ID)
+	if got.Status != "review" {
+		t.Fatalf("stale in_progress not reconciled: %+v", got)
+	}
+	if got.Progress != 30 {
+		t.Fatalf("reconcile must not fabricate progress: %+v", got)
+	}
+}
+
+func TestUploadRejectsOversizeBody(t *testing.T) {
+	srv, _ := newWorkspaceTestServer(t)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "t"}, &it)
+
+	// 超过 maxUploadBytes 必须被拒,而不是写满磁盘。
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "big.bin")
+	_, _ = fw.Write(bytes.Repeat([]byte("A"), maxUploadBytes+1024))
+	_ = mw.Close()
+
+	res, err := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", mw.FormDataContentType(), &buf)
+	if err == nil {
+		defer res.Body.Close()
+		if res.StatusCode == 201 {
+			t.Fatal("oversize upload must be rejected")
+		}
+	}
+}
+
+func TestUpdateWorkItemRejectsMalformedBody(t *testing.T) {
+	srv, _ := newWorkspaceTestServer(t)
+	var it store.WorkItem
+	doJSON(t, "POST", srv.URL+"/api/work-items", map[string]any{"type": "task", "title": "t"}, &it)
+
+	req, _ := http.NewRequest("PUT", srv.URL+"/api/work-items/"+it.ID, bytes.NewReader([]byte(`{bad`)))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 400 {
+		t.Fatalf("malformed PUT should 400, got %d", res.StatusCode)
+	}
+}
+
+func TestSafeMimeClassification(t *testing.T) {
+	cases := []struct {
+		file   string
+		mime   string
+		inline bool
+	}{
+		{"a.PNG", "image/png", true},
+		{"a.jpeg", "image/jpeg", true},
+		{"a.jpg", "image/jpeg", true},
+		{"a.gif", "image/gif", true},
+		{"a.webp", "image/webp", true},
+		{"a.mp4", "video/mp4", true},
+		{"a.webm", "video/webm", true},
+		{"a.pdf", "application/pdf", true},
+		{"evil.html", "application/octet-stream", false},
+		{"evil.svg", "application/octet-stream", false},
+		{"noext", "application/octet-stream", false},
+	}
+	for _, c := range cases {
+		mime, inline := safeMime(c.file)
+		if mime != c.mime || inline != c.inline {
+			t.Errorf("safeMime(%q) = (%q,%v), want (%q,%v)", c.file, mime, inline, c.mime, c.inline)
+		}
+	}
+}
+
+// 频道附件走同一套存储与回放,owner 归属必须是 channel。
+func TestChannelAttachmentUploadAndList(t *testing.T) {
+	srv, _ := newWorkspaceTestServer(t)
+
+	var ch store.Channel
+	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "dev"}, &ch)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "shot.png")
+	_, _ = fw.Write([]byte("\x89PNG\r\n\x1a\n"))
+	_ = mw.Close()
+
+	res, err := http.Post(srv.URL+"/api/channels/"+ch.ID+"/attachments", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	var att store.Attachment
+	_ = json.NewDecoder(res.Body).Decode(&att)
+	res.Body.Close()
+	if res.StatusCode != 201 || att.OwnerType != "channel" || att.OwnerID != ch.ID || att.Mime != "image/png" {
+		t.Fatalf("channel attachment wrong: %d %+v", res.StatusCode, att)
+	}
+
+	var list []store.Attachment
+	doJSON(t, "GET", srv.URL+"/api/channels/"+ch.ID+"/attachments", nil, &list)
+	if len(list) != 1 || list[0].ID != att.ID {
+		t.Fatalf("channel attachment list wrong: %+v", list)
+	}
+
+	// 消息可引用该附件。
+	if code := doJSON(t, "POST", srv.URL+"/api/channels/"+ch.ID+"/messages", map[string]any{
+		"text":        "看图",
+		"attachments": []map[string]string{{"id": att.ID, "filename": att.Filename, "mime": att.Mime}},
+	}, nil); code != 200 {
+		t.Fatalf("post with attachment: %d", code)
+	}
+	var msgs []store.ChannelMessage
+	doJSON(t, "GET", srv.URL+"/api/channels/"+ch.ID+"/messages", nil, &msgs)
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m.PayloadJSON, att.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("message did not carry the attachment ref: %+v", msgs)
+	}
+
+	// 只有附件没有文字也应被接受。
+	if code := doJSON(t, "POST", srv.URL+"/api/channels/"+ch.ID+"/messages", map[string]any{
+		"attachments": []map[string]string{{"id": att.ID, "filename": att.Filename, "mime": att.Mime}},
+	}, nil); code != 200 {
+		t.Fatalf("attachment-only message should be accepted, got %d", code)
 	}
 }

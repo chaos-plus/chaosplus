@@ -97,6 +97,7 @@ func TestStoreOperationsFailAfterClose(t *testing.T) {
 		"UpdateWorkItem":        s.UpdateWorkItem(ctx, &WorkItem{ID: "x", Title: "t"}),
 		"UpdateWorkItemRun":     s.UpdateWorkItemRun(ctx, "x", 1, "open", 0),
 		"CalibrateEstimate":     s.CalibrateEstimate(ctx, "x", 1),
+		"RollupParent":          s.RollupParent(ctx, "p"),
 		"DeleteWorkItem":        s.DeleteWorkItem(ctx, "x"),
 		"CreateAttachment":      s.CreateAttachment(ctx, &Attachment{ID: "a", OwnerType: "work_item", OwnerID: "x", Filename: "f", StorePath: "p"}),
 		"DeleteAttachment":      s.DeleteAttachment(ctx, "a"),
@@ -203,5 +204,38 @@ func TestWorkItemCRUDWithSubtask(t *testing.T) {
 	items, _ = s.ListWorkItems(ctx, "", "", "wi-1")
 	if len(items) != 0 {
 		t.Fatalf("delete failed: %+v", items)
+	}
+}
+
+func TestReconcileStaleRunningOnlyTouchesInProgress(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	running := &WorkItem{ID: "r1", Type: "task", Title: "跑着的", Status: "in_progress", Progress: 30}
+	openItem := &WorkItem{ID: "o1", Type: "task", Title: "待办", Status: "open"}
+	done := &WorkItem{ID: "d1", Type: "task", Title: "完成", Status: "done", Progress: 100}
+	for _, w := range []*WorkItem{running, openItem, done} {
+		if err := s.CreateWorkItem(ctx, w); err != nil {
+			t.Fatalf("create %s: %v", w.ID, err)
+		}
+	}
+
+	n, err := s.ReconcileStaleRunning(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("reconcile = (%d,%v), want (1,nil)", n, err)
+	}
+	if g, _ := s.GetWorkItem(ctx, "r1"); g.Status != "review" || g.Progress != 30 {
+		t.Fatalf("running item wrong after reconcile: %+v", g)
+	}
+	if g, _ := s.GetWorkItem(ctx, "o1"); g.Status != "open" {
+		t.Fatalf("open item must not change: %+v", g)
+	}
+	if g, _ := s.GetWorkItem(ctx, "d1"); g.Status != "done" {
+		t.Fatalf("done item must not change: %+v", g)
+	}
+
+	// 无遗留时为 0,可重复执行。
+	if n, err := s.ReconcileStaleRunning(ctx); err != nil || n != 0 {
+		t.Fatalf("second reconcile = (%d,%v), want (0,nil)", n, err)
 	}
 }

@@ -5,6 +5,8 @@ ALTER TABLE work_items ADD COLUMN spent_hours REAL NOT NULL DEFAULT 0;
 ALTER TABLE work_items ADD COLUMN progress INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE work_items ADD COLUMN workflow_run_id TEXT NOT NULL DEFAULT '';
 
+CREATE INDEX idx_work_items_parent ON work_items(parent_id);
+
 CREATE TABLE attachments (
     id TEXT PRIMARY KEY,
     owner_type TEXT NOT NULL,      -- work_item | message
@@ -28,6 +30,7 @@ CREATE TABLE okrs (
 );
 
 -- +goose Down
+DROP INDEX idx_work_items_parent;
 DROP TABLE attachments;
 DROP TABLE okrs;
 ALTER TABLE work_items DROP COLUMN workflow_run_id;

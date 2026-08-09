@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { Toaster } from "@workspace/ui/components/sonner"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
 import { controlApi, type Channel } from "../lib/control-api"
@@ -331,6 +332,7 @@ export default function PlatformLayout() {
           </div>
         </main>
       </div>
+      <Toaster />
     </div>
   )
 }

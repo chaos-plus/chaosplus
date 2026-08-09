@@ -4,6 +4,7 @@ import { ReactFlow, Background, Controls, Handle, Position, type Edge, type Node
 import "@xyflow/react/dist/style.css"
 import { Check, ShieldQuestion, X } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
+import { toast } from "@workspace/ui/components/sonner"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Textarea } from "@workspace/ui/components/textarea"
@@ -146,7 +147,11 @@ export default function RunDetail() {
 
   const approveNode = async (nodeId: string) => {
     if (!runId) return
-    await controlApi.approve(runId, nodeId, true)
+    try {
+      await controlApi.approve(runId, nodeId, true)
+    } catch (e) {
+      toast.error(`通过审批失败:${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   const submitRejection = async () => {

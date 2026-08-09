@@ -1,4 +1,4 @@
-import { Toaster as Sonner } from "sonner"
+import { Toaster as Sonner, toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -31,4 +31,4 @@ function Toaster({ className, ...props }: ToasterProps) {
   )
 }
 
-export { Toaster }
+export { Toaster, toast }

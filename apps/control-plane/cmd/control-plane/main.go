@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -72,6 +73,12 @@ func main() {
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
+	if n, err := st.ReconcileStaleRunning(ctx); err != nil {
+		slog.Warn("reconcile stale work items", "err", err)
+	} else if n > 0 {
+		slog.Info("reconciled work items stuck in_progress from a previous process", "count", n)
+	}
+
 	chat := server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
 	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}

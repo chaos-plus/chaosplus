@@ -5,6 +5,7 @@ import { Card } from "@workspace/ui/components/card"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { toast } from "@workspace/ui/components/sonner"
 import { controlApi, type Okr } from "../../lib/control-api"
 
 interface KR { title: string; target: number; progress: number; unit: string }
@@ -19,15 +20,37 @@ export default function OkrsPage() {
   const [form, setForm] = useState({ title: "", objective: "", period: "", krs: "" })
 
   const load = useCallback(() => {
-    void controlApi.okrs().then((x) => setOkrs(x ?? [])).catch(() => setOkrs([]))
+    void controlApi.okrs().then((x) => setOkrs(x ?? [])).catch((e: unknown) => { setOkrs([]); toast.error(`加载 OKR 失败:${e instanceof Error ? e.message : String(e)}`) })
   }, [])
   useEffect(() => { load() }, [load])
 
+  const [krError, setKrError] = useState("")
+
   const create = async () => {
     if (!form.title.trim()) return
-    const krs = form.krs.trim() ? JSON.parse(form.krs) : []
-    await controlApi.createOkr({ title: form.title.trim(), objective: form.objective, period: form.period, keyResults: JSON.stringify(krs) })
-    setOpen(false); setForm({ title: "", objective: "", period: "", krs: "" }); load()
+    let krs: unknown = []
+    if (form.krs.trim()) {
+      try {
+        krs = JSON.parse(form.krs)
+      } catch {
+        setKrError("关键结果不是合法 JSON,示例:[{\"title\":\"MAU\",\"target\":100,\"progress\":40,\"unit\":\"万\"}]")
+        return
+      }
+    }
+    try {
+      await controlApi.createOkr({
+        title: form.title.trim(),
+        objective: form.objective,
+        period: form.period,
+        keyResults: JSON.stringify(krs),
+      })
+      setOpen(false)
+      setForm({ title: "", objective: "", period: "", krs: "" })
+      setKrError("")
+      load()
+    } catch (e) {
+      setKrError(e instanceof Error ? e.message : "创建失败")
+    }
   }
 
   return (
@@ -92,9 +115,10 @@ export default function OkrsPage() {
               <label className="text-sm font-medium">关键结果(JSON)</label>
               <Textarea rows={3} value={form.krs} onChange={(e) => setForm({ ...form, krs: e.target.value })} placeholder='[{"title":"MAU","target":100,"progress":40,"unit":"万"}]' />
             </div>
+            {krError && <p className="text-sm text-destructive">{krError}</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>取消</Button>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setOpen(false)}>取消</Button>
             <Button onClick={create} disabled={!form.title.trim()}>创建</Button>
           </DialogFooter>
         </DialogContent>

@@ -105,6 +105,18 @@ export interface ChannelMessage {
 
 const base = "/control/api"
 
+/** 上传走 FormData(不能带 JSON header),但错误信息要和 req() 一样能看见。 */
+async function upload(path: string, file: File): Promise<Attachment> {
+  const fd = new FormData()
+  fd.append("file", file)
+  const res = await fetch(base + path, { method: "POST", body: fd })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error ?? `上传失败(HTTP ${res.status})`)
+  }
+  return res.json() as Promise<Attachment>
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(base + path, {
     headers: { "Content-Type": "application/json" },
@@ -156,13 +168,7 @@ export const controlApi = {
   execution: (id: string) => req<ProgressEntry[]>(`/channels/${id}/execution`),
   postMessage: (id: string, text: string, attachments?: Array<{ id: string; filename: string; mime: string }>) =>
     req<{ ok: boolean }>(`/channels/${id}/messages`, { method: "POST", body: JSON.stringify({ text, attachments }) }),
-  uploadChannelAttachment: async (channelId: string, file: File): Promise<Attachment> => {
-    const fd = new FormData()
-    fd.append("file", file)
-    const res = await fetch(`${base}/channels/${channelId}/attachments`, { method: "POST", body: fd })
-    if (!res.ok) throw new Error("upload failed")
-    return res.json()
-  },
+  uploadChannelAttachment: (channelId: string, file: File) => upload(`/channels/${channelId}/attachments`, file),
 
   // 工作区 work-items(需求/任务/缺陷)
   workItems: (type?: string, status?: string) => {
@@ -181,13 +187,7 @@ export const controlApi = {
     req<WorkItem>(`/channels/${channelId}/work-items`, { method: "POST", body: JSON.stringify(w) }),
   executeWorkItem: (id: string) => req<{ runId: string }>(`/work-items/${id}/execute`, { method: "POST" }),
   attachments: (id: string) => req<Attachment[]>(`/work-items/${id}/attachments`),
-  uploadAttachment: async (id: string, file: File): Promise<Attachment> => {
-    const fd = new FormData()
-    fd.append("file", file)
-    const res = await fetch(`${base}/work-items/${id}/attachments`, { method: "POST", body: fd })
-    if (!res.ok) throw new Error("upload failed")
-    return res.json()
-  },
+  uploadAttachment: (id: string, file: File) => upload(`/work-items/${id}/attachments`, file),
   okrs: () => req<Okr[]>("/okrs"),
   createOkr: (o: Omit<Okr, "id" | "createdAt" | "updatedAt">) => req<Okr>("/okrs", { method: "POST", body: JSON.stringify(o) }),
   updateOkr: (id: string, o: Partial<Okr>) => req<Okr>(`/okrs/${id}`, { method: "PUT", body: JSON.stringify(o) }),

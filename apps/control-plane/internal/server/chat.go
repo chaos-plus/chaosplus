@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -311,6 +314,9 @@ func (cs *ChatService) createWorkItemFromChannel(w http.ResponseWriter, r *http.
 	writeJSON(w, 201, it)
 }
 
+// updateWorkItem 是部分更新:只覆盖请求里显式出现的字段。
+// 用指针接收 —— 否则一个只带 {status} 的 PUT 会把 estimate/progress/spent/
+// parent 等一并清零(前端正是这么调的),并冲掉正在执行的 run 投影。
 func (cs *ChatService) updateWorkItem(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	existing, err := cs.st.GetWorkItem(r.Context(), id)
@@ -318,27 +324,74 @@ func (cs *ChatService) updateWorkItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "work item not found")
 		return
 	}
-	var body store.WorkItem
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, 400, err.Error())
+	var patch struct {
+		Type          *string  `json:"type"`
+		Title         *string  `json:"title"`
+		Description   *string  `json:"description"`
+		Status        *string  `json:"status"`
+		ParentID      *string  `json:"parentId"`
+		EstimateHours *float64 `json:"estimateHours"`
+		SpentHours    *float64 `json:"spentHours"`
+		Progress      *int     `json:"progress"`
+		WorkflowRunID *string  `json:"workflowRunId"`
+		AssigneeAgent *string  `json:"assigneeAgent"`
+		ChannelID     *string  `json:"channelId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeErr(w, 400, "请求体格式不正确")
 		return
 	}
-	if body.Title == "" {
-		body.Title = existing.Title
+
+	updated := *existing
+	if patch.Type != nil {
+		updated.Type = *patch.Type
 	}
-	body.ID = existing.ID
-	if body.ChannelID == "" {
-		body.ChannelID = existing.ChannelID
+	if patch.Title != nil && *patch.Title != "" {
+		updated.Title = *patch.Title
 	}
-	changed := body.Status != existing.Status
-	if err := cs.st.UpdateWorkItem(r.Context(), &body); err != nil {
-		writeErr(w, 500, err.Error())
+	if patch.Description != nil {
+		updated.Description = *patch.Description
+	}
+	if patch.Status != nil && *patch.Status != "" {
+		updated.Status = *patch.Status
+	}
+	if patch.ParentID != nil {
+		// 不允许自引用,否则前端树递归会成环。
+		if *patch.ParentID == updated.ID {
+			writeErr(w, 400, "工作项不能以自己为父级")
+			return
+		}
+		updated.ParentID = *patch.ParentID
+	}
+	if patch.EstimateHours != nil {
+		updated.EstimateHours = *patch.EstimateHours
+	}
+	if patch.SpentHours != nil {
+		updated.SpentHours = *patch.SpentHours
+	}
+	if patch.Progress != nil {
+		updated.Progress = *patch.Progress
+	}
+	if patch.WorkflowRunID != nil {
+		updated.WorkflowRunID = *patch.WorkflowRunID
+	}
+	if patch.AssigneeAgent != nil {
+		updated.AssigneeAgent = *patch.AssigneeAgent
+	}
+	if patch.ChannelID != nil {
+		updated.ChannelID = *patch.ChannelID
+	}
+
+	changed := updated.Status != existing.Status
+	if err := cs.st.UpdateWorkItem(r.Context(), &updated); err != nil {
+		slog.Error("update work item", "id", id, "err", err)
+		writeErr(w, 500, "更新工作项失败")
 		return
 	}
 	if changed {
-		cs.notifyWorkItemChange(r.Context(), &body, "status")
+		cs.notifyWorkItemChange(r.Context(), &updated, "status")
 	}
-	writeJSON(w, 200, body)
+	writeJSON(w, 200, updated)
 }
 
 // notifyWorkItemChange 把工作项变化推送到关联的群聊频道(human/agent 实时跟进)。
@@ -622,7 +675,8 @@ func (cs *ChatService) executeWorkItem(w http.ResponseWriter, r *http.Request) {
 	defJSON, _ := json.Marshal(def)
 	workspace := filepath.Join(cs.wsRoot, "workitem-"+it.ID)
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		writeErr(w, 500, err.Error())
+		slog.Error("workitem workspace", "err", err)
+		writeErr(w, 500, "创建工作目录失败")
 		return
 	}
 	// 用 Background:HTTP 处理器返回后 run 仍需继续(r.Context() 会取消它)。
@@ -644,11 +698,24 @@ func (cs *ChatService) executeWorkItem(w http.ResponseWriter, r *http.Request) {
 func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 	start := time.Now()
 	ctx := context.Background()
+	lastProgress := 0
+	// 绝对上限:run 卡住(节点无超时、审批无人处理)时不能让这个 goroutine
+	// 连同每 2s 一次的写库永远活着。
+	deadline := start.Add(trackRunMaxDuration)
 	for {
 		time.Sleep(2 * time.Second)
 		st := run.Status()
 		if st == RunCompleted || st == RunFailed || st == RunPaused {
 			break
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("stop tracking run: exceeded max duration", "run", run.ID, "workItem", it.ID)
+			if err := cs.st.UpdateWorkItemRun(ctx, it.ID, lastProgress, "review", time.Since(start).Hours()); err != nil {
+				slog.Error("project stalled run", "workItem", it.ID, "err", err)
+			}
+			it.Status = "review"
+			cs.notifyWorkItemChange(ctx, it, "status")
+			return
 		}
 		evs := run.Events()
 		var done, total int
@@ -667,16 +734,28 @@ func (cs *ChatService) trackRunProgress(it *store.WorkItem, run *Run) {
 		if total > 0 {
 			progress = done * 100 / total
 		}
-		_ = cs.st.UpdateWorkItemRun(ctx, it.ID, progress, "in_progress", time.Since(start).Hours())
+		lastProgress = progress
+		if err := cs.st.UpdateWorkItemRun(ctx, it.ID, progress, "in_progress", time.Since(start).Hours()); err != nil {
+			slog.Error("project run progress", "workItem", it.ID, "err", err)
+		}
 	}
-	final := "done"
+	final, finalProgress := "done", 100
 	if run.Status() == RunFailed || run.Status() == RunPaused {
-		final = "review"
+		// 失败/暂停不是 100%:保留最后一次真实进度,否则父项汇总也会被抬高。
+		final, finalProgress = "review", lastProgress
 	}
 	spent := time.Since(start).Hours()
-	_ = cs.st.UpdateWorkItemRun(ctx, it.ID, 100, final, spent)
-	_ = cs.st.CalibrateEstimate(ctx, it.ID, spent) // 未人工估时 → 用实际耗时校准
-	_ = cs.st.RollupParent(ctx, it.ParentID)       // 子任务工时/进度汇总到父项
+	if err := cs.st.UpdateWorkItemRun(ctx, it.ID, finalProgress, final, spent); err != nil {
+		slog.Error("project run result", "workItem", it.ID, "err", err)
+	}
+	if final == "done" {
+		if err := cs.st.CalibrateEstimate(ctx, it.ID, spent); err != nil { // 未人工估时 → 用实际耗时校准
+			slog.Warn("calibrate estimate", "workItem", it.ID, "err", err)
+		}
+	}
+	if err := cs.st.RollupParent(ctx, it.ParentID); err != nil { // 子任务工时/进度汇总到父项
+		slog.Warn("rollup parent", "parent", it.ParentID, "err", err)
+	}
 	it.Status = final
 	cs.notifyWorkItemChange(ctx, it, "status")
 }
@@ -699,7 +778,6 @@ func taskWorkflowDef(it *store.WorkItem) (map[string]any, json.RawMessage) {
 }
 
 // uploadAttachment 接收 multipart 文件,存控制面 ARTIFACT_ROOT,元数据落库。
-// uploadAttachment 接收 multipart 文件,存控制面 ARTIFACT_ROOT,元数据落库。
 // ownerType 决定归属:work_item(工作项描述)或 channel(聊天引用)。
 func (cs *ChatService) uploadAttachmentFor(ownerType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { cs.storeUpload(w, r, ownerType) }
@@ -709,9 +787,41 @@ func (cs *ChatService) uploadAttachment(w http.ResponseWriter, r *http.Request) 
 	cs.storeUpload(w, r, "work_item")
 }
 
+// maxUploadBytes caps a single upload. ParseMultipartForm 的参数只是内存缓冲上限,
+// 不限制落盘大小 —— 必须用 MaxBytesReader 真正封顶,否则可被写满磁盘。
+const maxUploadBytes = 20 << 20
+
+// trackRunProgress 的绝对上限:超过就停止跟踪并把工作项置为待人工处理。
+const trackRunMaxDuration = 6 * time.Hour
+
+// safeMime 决定回放时用什么 Content-Type。客户端声明的 mime 不可信:允许
+// text/html 或 image/svg+xml 同源回放 = 存储型 XSS。只放行确定安全的类型,
+// 其余一律当二进制附件下载。
+func safeMime(filename string) (mime string, inline bool) {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".gif":
+		return "image/gif", true
+	case ".webp":
+		return "image/webp", true
+	case ".mp4":
+		return "video/mp4", true
+	case ".webm":
+		return "video/webm", true
+	case ".pdf":
+		return "application/pdf", true
+	default:
+		return "application/octet-stream", false
+	}
+}
+
 func (cs *ChatService) storeUpload(w http.ResponseWriter, r *http.Request, ownerType string) {
-	if err := r.ParseMultipartForm(20 << 20); err != nil { // 20MB
-		writeErr(w, 400, "bad multipart: "+err.Error())
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		writeErr(w, 400, "上传失败:文件过大或格式不正确")
 		return
 	}
 	file, header, err := r.FormFile("file")
@@ -727,31 +837,35 @@ func (cs *ChatService) storeUpload(w http.ResponseWriter, r *http.Request, owner
 	id := "att-" + randHex(8)
 	dir := filepath.Join(root, "attachments")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeErr(w, 500, err.Error())
+		slog.Error("attachment dir", "err", err)
+		writeErr(w, 500, "存储附件失败")
 		return
 	}
 	path := filepath.Join(dir, id)
 	dst, err := os.Create(path)
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		slog.Error("create attachment", "err", err)
+		writeErr(w, 500, "存储附件失败")
 		return
 	}
 	n, err := io.Copy(dst, file)
 	dst.Close()
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		_ = os.Remove(path) // 半截文件不留在磁盘上
+		slog.Error("write attachment", "err", err)
+		writeErr(w, 500, "存储附件失败")
 		return
 	}
+	mime, _ := safeMime(header.Filename)
 	a := &store.Attachment{
 		ID: id, OwnerType: ownerType, OwnerID: r.PathValue("id"),
-		Filename: header.Filename, Mime: header.Header.Get("Content-Type"),
+		Filename: header.Filename, Mime: mime,
 		SizeBytes: n, StorePath: path,
 	}
-	if a.Mime == "" {
-		a.Mime = "application/octet-stream"
-	}
 	if err := cs.st.CreateAttachment(r.Context(), a); err != nil {
-		writeErr(w, 500, err.Error())
+		_ = os.Remove(path) // 元数据没落库 → 文件成孤儿,删掉
+		slog.Error("persist attachment", "err", err)
+		writeErr(w, 500, "存储附件失败")
 		return
 	}
 	writeJSON(w, 201, a)
@@ -764,8 +878,40 @@ func (cs *ChatService) serveAttachment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "attachment not found")
 		return
 	}
-	w.Header().Set("Content-Type", a.Mime)
+	mime, inline := safeMime(a.Filename)
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	disposition := "attachment"
+	if inline {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename*=UTF-8''%s", disposition, url.PathEscape(a.Filename)))
 	http.ServeFile(w, r, a.StorePath)
+}
+
+// validateKeyResults 拒绝形状不对的 KR —— 存进去就会让前端进度计算出 NaN。
+func validateKeyResults(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	var krs []struct {
+		Title    string   `json:"title"`
+		Target   *float64 `json:"target"`
+		Progress *float64 `json:"progress"`
+		Unit     string   `json:"unit"`
+	}
+	if err := json.Unmarshal([]byte(raw), &krs); err != nil {
+		return fmt.Errorf("keyResults 必须是 [{title,target,progress,unit}] 数组")
+	}
+	for i, k := range krs {
+		if k.Title == "" {
+			return fmt.Errorf("keyResults[%d].title 不能为空", i)
+		}
+		if k.Target == nil || k.Progress == nil {
+			return fmt.Errorf("keyResults[%d] 需要数值型 target 与 progress", i)
+		}
+	}
+	return nil
 }
 
 func (cs *ChatService) createOkr(w http.ResponseWriter, r *http.Request) {
@@ -777,6 +923,10 @@ func (cs *ChatService) createOkr(w http.ResponseWriter, r *http.Request) {
 	o.ID = "okr-" + randHex(6)
 	if o.KeyResults == "" {
 		o.KeyResults = "[]"
+	}
+	if err := validateKeyResults(o.KeyResults); err != nil {
+		writeErr(w, 400, err.Error())
+		return
 	}
 	if err := cs.st.CreateOkr(r.Context(), &o); err != nil {
 		writeErr(w, 500, err.Error())
@@ -792,6 +942,10 @@ func (cs *ChatService) updateOkr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.ID = r.PathValue("id")
+	if err := validateKeyResults(o.KeyResults); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if err := cs.st.UpdateOkr(r.Context(), &o); err != nil {
 		writeErr(w, 500, err.Error())
 		return

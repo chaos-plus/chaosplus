@@ -11,21 +11,21 @@ import (
 // WorkItem is a workspace item (requirement / task / bug) — the system of record
 // that chat channels reference and subscribe to.
 type WorkItem struct {
-	bun.BaseModel  `bun:"table:work_items"`
-	ID             string  `bun:"id,pk" json:"id"`
-	Type           string  `bun:"type,notnull,default:'task'" json:"type"`
-	Title          string  `bun:"title,notnull" json:"title"`
-	Description    string  `bun:"description,notnull,default:''" json:"description"`
-	Status         string  `bun:"status,notnull,default:'open'" json:"status"`
-	ParentID       string  `bun:"parent_id,notnull,default:''" json:"parentId"`
-	EstimateHours  float64 `bun:"estimate_hours,notnull,default:0" json:"estimateHours"`
-	SpentHours     float64 `bun:"spent_hours,notnull,default:0" json:"spentHours"`
-	Progress       int     `bun:"progress,notnull,default:0" json:"progress"`
-	WorkflowRunID  string  `bun:"workflow_run_id,notnull,default:''" json:"workflowRunId"`
-	AssigneeAgent  string  `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
-	ChannelID      string  `bun:"channel_id,notnull,default:''" json:"channelId"`
-	CreatedAt      int64   `bun:"created_at,notnull,default:0" json:"createdAt"`
-	UpdatedAt      int64   `bun:"updated_at,notnull,default:0" json:"updatedAt"`
+	bun.BaseModel `bun:"table:work_items"`
+	ID            string  `bun:"id,pk" json:"id"`
+	Type          string  `bun:"type,notnull,default:'task'" json:"type"`
+	Title         string  `bun:"title,notnull" json:"title"`
+	Description   string  `bun:"description,notnull,default:''" json:"description"`
+	Status        string  `bun:"status,notnull,default:'open'" json:"status"`
+	ParentID      string  `bun:"parent_id,notnull,default:''" json:"parentId"`
+	EstimateHours float64 `bun:"estimate_hours,notnull,default:0" json:"estimateHours"`
+	SpentHours    float64 `bun:"spent_hours,notnull,default:0" json:"spentHours"`
+	Progress      int     `bun:"progress,notnull,default:0" json:"progress"`
+	WorkflowRunID string  `bun:"workflow_run_id,notnull,default:''" json:"workflowRunId"`
+	AssigneeAgent string  `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
+	ChannelID     string  `bun:"channel_id,notnull,default:''" json:"channelId"`
+	CreatedAt     int64   `bun:"created_at,notnull,default:0" json:"createdAt"`
+	UpdatedAt     int64   `bun:"updated_at,notnull,default:0" json:"updatedAt"`
 }
 
 func (s *Store) CreateWorkItem(ctx context.Context, w *WorkItem) error {
@@ -76,6 +76,21 @@ func (s *Store) UpdateWorkItem(ctx context.Context, w *WorkItem) error {
 		return fmt.Errorf("update work item: %w", err)
 	}
 	return nil
+}
+
+// ReconcileStaleRunning 把重启前遗留的 in_progress 工作项收回到 review。
+// RunManager 是内存态:进程重启后那些 run 已不存在,工作项会永远卡在执行中
+// 且被 /execute 的 409 挡住,只能靠启动时对账解开。
+func (s *Store) ReconcileStaleRunning(ctx context.Context) (int64, error) {
+	res, err := s.db.NewUpdate().Model(&WorkItem{}).
+		Where("status = ?", "in_progress").
+		Set("status = ?", "review").Set("updated_at = ?", time.Now().UnixMilli()).
+		Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile stale running: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // CalibrateEstimate 回填估时:首次执行完成且人工未估时,用实际耗时作为校准值。

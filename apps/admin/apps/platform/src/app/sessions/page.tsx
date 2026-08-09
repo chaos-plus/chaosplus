@@ -14,6 +14,7 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import { toast } from "@workspace/ui/components/sonner"
 import { controlApi, type Agent, type Channel, type ChannelMessage, type ProgressEntry } from "../../lib/control-api"
 
 function messageText(m: ChannelMessage): string {
@@ -170,6 +171,12 @@ export default function SessionsPage() {
     try {
       await controlApi.postMessage(channelId, text, files.length ? files : undefined)
       void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
+    } catch (e) {
+      toast.error(`发送失败:${e instanceof Error ? e.message : String(e)}`)
+      setDraft(text) // 把内容还给用户,别让他重打
+      setPendingFiles(files)
+      waitingReply.current = false
+      setBusy(false)
     } finally {
       if (!hasAgent) setBusy(false)
     }
@@ -442,12 +449,16 @@ export default function SessionsPage() {
             if (!list?.length || !channelId) return
             setUploading(true)
             try {
-              const added: MsgAttachment[] = []
+              // 逐个提交并即时入列:中途失败时,已成功的文件不能丢(否则它们
+              // 留在服务端却没有任何消息引用,成为孤儿)。
               for (const f of Array.from(list)) {
-                const a = await controlApi.uploadChannelAttachment(channelId, f)
-                added.push({ id: a.id, filename: a.filename, mime: a.mime })
+                try {
+                  const a = await controlApi.uploadChannelAttachment(channelId, f)
+                  setPendingFiles((prev) => [...prev, { id: a.id, filename: a.filename, mime: a.mime }])
+                } catch (err) {
+                  toast.error(`${f.name} 上传失败:${err instanceof Error ? err.message : String(err)}`)
+                }
               }
-              setPendingFiles((prev) => [...prev, ...added])
             } finally {
               setUploading(false)
               if (chatFileRef.current) chatFileRef.current.value = ""

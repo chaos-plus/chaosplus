@@ -18,7 +18,13 @@ import { Input } from "@workspace/ui/components/input"
 import { Progress } from "@workspace/ui/components/progress"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/components/sheet"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { toast } from "@workspace/ui/components/sonner"
 import { controlApi, type Attachment, type WorkItem } from "../../lib/control-api"
+
+/** 统一把失败暴露给用户 —— 静默失败会让人以为操作成功了。 */
+function reportError(action: string, e: unknown) {
+  toast.error(`${action}失败:${e instanceof Error ? e.message : String(e)}`)
+}
 
 const TYPE_LABEL: Record<string, string> = { requirement: "需求", task: "任务", test: "测试", bug: "缺陷" }
 const STATUS_LABEL: Record<string, string> = { open: "待办", in_progress: "进行中", review: "评审中", done: "已完成" }
@@ -73,41 +79,61 @@ export default function WorkspacePage() {
 
   const create = async () => {
     if (!form.title.trim()) return
-    await controlApi.createWorkItem({
-      type,
-      title: form.title.trim(),
-      description: form.description,
-      status: "open",
-      parentId: createFor.parent,
-      estimateHours: Number(form.estimateHours) || 0,
-    })
-    setCreateFor({ open: false, parent: "" })
-    setForm({ title: "", description: "", estimateHours: "" })
-    void load()
+    try {
+      await controlApi.createWorkItem({
+        type,
+        title: form.title.trim(),
+        description: form.description,
+        status: "open",
+        parentId: createFor.parent,
+        estimateHours: Number(form.estimateHours) || 0,
+      })
+      setCreateFor({ open: false, parent: "" })
+      setForm({ title: "", description: "", estimateHours: "" })
+      void load()
+    } catch (e) {
+      reportError("创建", e)
+    }
   }
 
   const setStatus = async (id: string, status: string) => {
-    await controlApi.updateWorkItem(id, { status })
-    void load()
+    try {
+      await controlApi.updateWorkItem(id, { status })
+      void load()
+    } catch (e) {
+      reportError("更新状态", e)
+      void load() // 回滚到服务端真实状态
+    }
   }
 
   const remove = async (id: string) => {
-    await controlApi.deleteWorkItem(id)
-    if (detail?.id === id) setDetail(null)
-    void load()
+    try {
+      await controlApi.deleteWorkItem(id)
+      if (detail?.id === id) setDetail(null)
+      void load()
+    } catch (e) {
+      reportError("删除", e)
+    }
   }
 
   const execute = async (id: string) => {
-    const r = await controlApi.executeWorkItem(id)
-    void load()
-    navigate(`/workflow/runs/${r.runId}`)
+    try {
+      const r = await controlApi.executeWorkItem(id)
+      void load()
+      navigate(`/workflow/runs/${r.runId}`)
+    } catch (e) {
+      reportError("执行", e)
+    }
   }
 
   const childrenOf = (id: string) => items.filter((it) => it.parentId === id)
   const roots = items.filter((it) => !it.parentId || !items.some((p) => p.id === it.parentId))
 
-  const renderRow = (it: WorkItem, depth: number): React.ReactNode => {
-    const kids = childrenOf(it.id)
+  // seen 防环:parentId 由 API 可写,自引用或 A→B→A 会让递归爆栈。
+  const renderRow = (it: WorkItem, depth: number, seen: ReadonlySet<string> = new Set()): React.ReactNode => {
+    if (seen.has(it.id)) return null
+    const nextSeen = new Set(seen).add(it.id)
+    const kids = childrenOf(it.id).filter((c) => !nextSeen.has(c.id))
     const isCollapsed = collapsed[it.id]
     return (
       <div key={it.id}>
@@ -200,7 +226,7 @@ export default function WorkspacePage() {
           </div>
           {it.description && <p className="mt-1.5 line-clamp-2 pl-7 text-sm text-muted-foreground">{it.description}</p>}
         </Card>
-        {!isCollapsed && kids.map((c) => renderRow(c, depth + 1))}
+        {!isCollapsed && kids.map((c) => renderRow(c, depth + 1, nextSeen))}
       </div>
     )
   }
@@ -351,16 +377,20 @@ function DetailSheet({
   if (!item) return null
 
   const save = async () => {
-    await controlApi.updateWorkItem(item.id, {
-      title: item.title,
-      description: desc,
-      status: item.status,
-      channelId: item.channelId,
-      parentId: item.parentId,
-      estimateHours: Number(estimate) || 0,
-    })
-    await onChanged()
-    onClose()
+    try {
+      await controlApi.updateWorkItem(item.id, {
+        title: item.title,
+        description: desc,
+        status: item.status,
+        channelId: item.channelId,
+        parentId: item.parentId,
+        estimateHours: Number(estimate) || 0,
+      })
+      await onChanged()
+      onClose()
+    } catch (e) {
+      reportError("保存", e)
+    }
   }
 
   const upload = async (files: FileList | null) => {
@@ -368,8 +398,11 @@ function DetailSheet({
     setUploading(true)
     try {
       for (const f of Array.from(files)) await controlApi.uploadAttachment(item.id, f)
-      setAtts((await controlApi.attachments(item.id)) ?? [])
+    } catch (e) {
+      reportError("上传附件", e)
     } finally {
+      // 无论成功与否都刷新:部分成功的文件也要显示出来。
+      setAtts((await controlApi.attachments(item.id).catch(() => [])) ?? [])
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ""
     }
