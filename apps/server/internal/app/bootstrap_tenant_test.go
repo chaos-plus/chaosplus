@@ -28,6 +28,15 @@ func openTestDB(t *testing.T) *bun.DB {
 	if _, err := db.Exec(`CREATE TABLE iam_tenant_members (tenant_id TEXT, user_subject TEXT, display_name TEXT, email TEXT, status TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id, user_subject))`); err != nil {
 		t.Fatalf("create members: %v", err)
 	}
+	for _, ddl := range []string{
+		`CREATE TABLE iam_roles (tenant_id TEXT, id TEXT, name TEXT, description TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id,id))`,
+		`CREATE TABLE iam_role_permissions (tenant_id TEXT, role_id TEXT, permission_code TEXT, condition_json TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,permission_code))`,
+		`CREATE TABLE iam_role_members (tenant_id TEXT, role_id TEXT, user_subject TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,user_subject))`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("create role table: %v", err)
+		}
+	}
 	return db
 }
 
@@ -81,15 +90,6 @@ func TestBootstrapTenantRejectsNilDB(t *testing.T) {
 func TestBootstrapTenantGrantsOwnerRole(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
-	if err := db.Exec(`CREATE TABLE iam_roles (tenant_id TEXT, id TEXT, name TEXT, description TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id,id))`); err != nil {
-		t.Fatalf("create roles: %v", err)
-	}
-	if err := db.Exec(`CREATE TABLE iam_role_permissions (tenant_id TEXT, role_id TEXT, permission_code TEXT, condition_json TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,permission_code))`); err != nil {
-		t.Fatalf("create perms: %v", err)
-	}
-	if err := db.Exec(`CREATE TABLE iam_role_members (tenant_id TEXT, role_id TEXT, user_subject TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,user_subject))`); err != nil {
-		t.Fatalf("create role members: %v", err)
-	}
 
 	if err := bootstrapTenantForVerifiedUser(ctx, db, "pr-owner", "o@chaos.plus"); err != nil {
 		t.Fatalf("bootstrap: %v", err)
