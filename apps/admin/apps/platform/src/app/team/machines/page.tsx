@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
+import { Copy } from "lucide-react"
+import { useTranslations } from "use-intl"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
-import { controlApi, type Machine } from "../../../lib/control-api"
+import { toast } from "@workspace/ui/components/sonner"
+import { controlApi, machineConnectCommand, type Machine } from "../../../lib/control-api"
 
 export default function MachinesPage() {
   const navigate = useNavigate()
+  const t = useTranslations("platform")
   const [machines, setMachines] = useState<Machine[]>([])
-  const [wizard, setWizard] = useState<{ token: string; machineId: string; expiresIn: number } | null>(null)
-  const [countdown, setCountdown] = useState(0)
+  const [wizard, setWizard] = useState<{ token: string; machineId: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
@@ -18,16 +21,9 @@ export default function MachinesPage() {
 
   useEffect(() => {
     load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
   }, [load])
-
-  useEffect(() => {
-    if (!wizard) return
-    setCountdown(wizard.expiresIn)
-    const t = setInterval(() => setCountdown((c) => Math.max(0, c - 1)), 1000)
-    return () => clearInterval(t)
-  }, [wizard])
 
   const startWizard = async () => {
     setBusy(true)
@@ -51,39 +47,42 @@ export default function MachinesPage() {
     setWizard(null)
   }
 
-  const refresh = async () => {
+  const copyCommand = () => {
     if (!wizard) return
-    const t = await controlApi.refreshToken(wizard.machineId)
-    setWizard({ ...wizard, token: t.token, expiresIn: 0 })
+    void navigator.clipboard.writeText(machineConnectCommand(wizard.token)).then(
+      () => toast.success(t("machines.copied")),
+      () => toast.error(t("machines.copyFailed"))
+    )
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">机器 Machines</h1>
+        <h1 className="text-xl font-semibold">{t("nav.machines")}</h1>
         <Button onClick={startWizard} disabled={busy}>
-          ＋ 添加 Machine
+          {t("machines.add")}
         </Button>
       </div>
 
       {wizard && (
         <Card className="border-primary/50">
           <CardHeader>
-            <CardTitle className="text-sm">接入新机器(token {countdown}s 内确认;长期 token 仅手动轮换)</CardTitle>
+            <CardTitle className="text-sm">{t("machines.wizardTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-              bun run src/serve.ts --server http://{location.host} --token {wizard.token}
+              {machineConnectCommand(wizard.token)}
             </pre>
-            <div className="flex gap-2">
-              <Button onClick={confirm} disabled={countdown <= 0}>
-                确认接入
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" className="cursor-pointer gap-1.5" onClick={copyCommand}>
+                <Copy className="size-4" />
+                {t("machines.copyCommand")}
+              </Button>
+              <Button onClick={confirm}>
+                {t("machines.confirm")}
               </Button>
               <Button variant="outline" onClick={cancel}>
-                取消
-              </Button>
-              <Button variant="outline" onClick={refresh}>
-                刷新命令
+                {t("common.cancel")}
               </Button>
             </div>
           </CardContent>
@@ -100,15 +99,17 @@ export default function MachinesPage() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between text-base">
                 <span>{m.name}</span>
-                <Badge variant={m.online ? "default" : "secondary"}>{m.online ? "在线" : "离线"}</Badge>
+                <Badge variant={m.online ? "default" : "secondary"}>
+                  {m.online ? t("dashboard.online") : t("machines.offline")}
+                </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm text-muted-foreground">
               <div>id: {m.id}</div>
-              <div>地址: {m.address}</div>
-              <div>托管 agent: {m.agentCount}</div>
-              <div>最近心跳: {m.lastHeartbeatAt ? new Date(m.lastHeartbeatAt).toLocaleTimeString() : "—"}</div>
-              <div className="pt-1 text-xs text-primary">查看详情 →</div>
+              <div>{t("machines.address")}: {m.address}</div>
+              <div>{t("machines.agentCount")}: {m.agentCount}</div>
+              <div>{t("dashboard.lastHeartbeat")}: {m.lastHeartbeatAt ? new Date(m.lastHeartbeatAt).toLocaleTimeString() : "—"}</div>
+              <div className="pt-1 text-xs text-primary">{t("machines.viewDetail")} →</div>
             </CardContent>
           </Card>
         ))}

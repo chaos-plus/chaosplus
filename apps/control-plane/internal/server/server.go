@@ -29,7 +29,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 	// machines — runner onboarding (PRD §5.3.1).
 	mux.HandleFunc("POST /api/machines/tokens", func(w http.ResponseWriter, r *http.Request) {
 		machineID, token := hub.IssueToken()
-		writeJSON(w, 201, map[string]any{"token": token, "machineId": machineID, "expiresIn": 300})
+		writeJSON(w, 201, map[string]any{"token": token, "machineId": machineID, "longTerm": true})
 	})
 	mux.HandleFunc("GET /api/machines/ws", hub.HandleWS)
 	mux.HandleFunc("GET /api/machines", func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 400, "bad request: "+err.Error())
 			return
 		}
-		if err := hub.Confirm(r.Context(), id, body.Token, r.RemoteAddr); err != nil {
+		if err := hub.Confirm(r.Context(), id, body.Token); err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}
@@ -134,6 +134,16 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 	mux.HandleFunc("DELETE /api/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		hub.Cancel(r.PathValue("id"))
 		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("GET /api/machines/{id}/token", func(w http.ResponseWriter, r *http.Request) {
+		// 只读返回当前 token(展示接入命令),不轮换、不踢守护进程。
+		token, err := hub.GetToken(r.PathValue("id"))
+		if err != nil {
+			// 控制面重启后内存只有 hash,原始 token 取不到 → 提示轮换生成。
+			writeErr(w, 404, "no token in memory; rotate to generate a new command")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"token": token})
 	})
 	mux.HandleFunc("POST /api/machines/{id}/refresh-token", func(w http.ResponseWriter, r *http.Request) {
 		token, err := hub.RefreshToken(r.PathValue("id"))

@@ -182,15 +182,26 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// daemon 直连 Go 控制面(它自己拼 /api/machines/ws)。控制面开发默认 127.0.0.1:8081,
+// 换部署地址改这一处常量即可,不引 env。
+const CONTROL_PLANE_URL = "http://127.0.0.1:8081"
+
+/** 机器接入命令:daemon 用 server + token 直连控制面 WS。显示/复制都以完整命令为准。 */
+export function machineConnectCommand(token: string): string {
+  return `bun run src/serve.ts --server ${CONTROL_PLANE_URL} --token ${token}`
+}
+
 export const controlApi = {
   // machines (PRD §5.3.1)
   machines: () => req<Machine[]>("/machines"),
   machineDetail: (id: string) => req<MachineDetail>(`/machines/${id}`),
-  issueToken: () => req<{ token: string; machineId: string; expiresIn: number }>("/machines/tokens", { method: "POST" }),
+  issueToken: () => req<{ token: string; machineId: string; longTerm: boolean }>("/machines/tokens", { method: "POST" }),
   confirmMachine: (id: string, token: string) =>
     req<{ ok: boolean }>(`/machines/${id}/confirm`, { method: "POST", body: JSON.stringify({ token }) }),
   cancelMachine: (id: string) => req<{ ok: boolean }>(`/machines/${id}`, { method: "DELETE" }),
   refreshToken: (id: string) => req<{ token: string; longTerm: boolean }>(`/machines/${id}/refresh-token`, { method: "POST" }),
+  /** 只读取当前 token(展示接入命令),不轮换不踢守护进程;无原始 token(如重启后)返回 404。 */
+  machineToken: (id: string) => req<{ token: string }>(`/machines/${id}/token`),
 
   // runs + approvals
   runs: () => req<Run[]>("/runs"),

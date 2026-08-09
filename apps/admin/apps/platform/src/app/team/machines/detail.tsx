@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router"
-import { ArrowLeft, Bot, KeyRound, Search } from "lucide-react"
+import { ArrowLeft, Bot, Copy, Eye, RefreshCw, Search } from "lucide-react"
+import { useTranslations } from "use-intl"
 import { Button } from "@workspace/ui/components/button"
 import { Card } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { toast } from "@workspace/ui/components/sonner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
-import { controlApi, type MachineDetail } from "../../../lib/control-api"
+import { controlApi, machineConnectCommand, type MachineDetail } from "../../../lib/control-api"
 
-const AGENT_STATUS: Record<string, string> = { running: "运行中", stopped: "已停止", retired: "已注销" }
+/** agent status → platform.machines.* 文案 key。 */
+const AGENT_STATUS_KEY: Record<string, string> = {
+  running: "machines.agentRunning",
+  stopped: "machines.agentStopped",
+  retired: "machines.agentRetired",
+}
 
 function timeText(ts: number): string {
   return ts ? new Date(ts).toLocaleString() : "—"
@@ -17,10 +23,11 @@ function timeText(ts: number): string {
 export default function MachineDetailPage() {
   const { machineId = "" } = useParams()
   const navigate = useNavigate()
+  const t = useTranslations("platform")
   const [detail, setDetail] = useState<MachineDetail | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [filter, setFilter] = useState("")
-  const [newToken, setNewToken] = useState("")
+  const [command, setCommand] = useState("")
 
   const load = useCallback(() => {
     if (!machineId) return
@@ -35,18 +42,37 @@ export default function MachineDetailPage() {
 
   useEffect(() => {
     load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
   }, [load])
 
-  const rotate = async () => {
+  // 只读查看当前接入命令:不轮换、不踢守护进程。控制面重启后内存无原始 token → 提示轮换。
+  const viewCommand = async () => {
+    try {
+      const r = await controlApi.machineToken(machineId)
+      setCommand(machineConnectCommand(r.token))
+    } catch {
+      toast.error(t("machines.noToken"))
+    }
+  }
+
+  // 轮换接入命令:重新签发长期 token,旧 token 失效、旧守护进程被踢下线。
+  const refreshCommand = async () => {
     try {
       const r = await controlApi.refreshToken(machineId)
-      setNewToken(r.token)
-      toast.success("长期 token 已轮换,旧 token 立即失效")
+      setCommand(machineConnectCommand(r.token))
+      toast.success(t("machines.rotated"))
     } catch (e) {
-      toast.error(`轮换失败:${e instanceof Error ? e.message : String(e)}`)
+      toast.error(`${t("machines.rotateFailed")}:${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+
+  const copyCommand = () => {
+    if (!command) return
+    void navigator.clipboard.writeText(command).then(
+      () => toast.success(t("machines.copied")),
+      () => toast.error(t("machines.copyFailed"))
+    )
   }
 
   if (notFound) {
@@ -54,13 +80,13 @@ export default function MachineDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" className="cursor-pointer gap-1.5" onClick={() => navigate("/team/machines")}>
           <ArrowLeft className="size-4" />
-          返回列表
+          {t("machines.backToList")}
         </Button>
-        <p className="text-sm text-muted-foreground">找不到这台 machine,可能已被取消接入。</p>
+        <p className="text-sm text-muted-foreground">{t("machines.notFound")}</p>
       </div>
     )
   }
-  if (!detail) return <div className="text-sm text-muted-foreground">加载中…</div>
+  if (!detail) return <div className="text-sm text-muted-foreground">{t("common.loading")}</div>
 
   const agents = detail.agents.filter((a) => !filter || a.name.toLowerCase().includes(filter.toLowerCase()))
 
@@ -69,7 +95,7 @@ export default function MachineDetailPage() {
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" className="cursor-pointer gap-1.5" onClick={() => navigate("/team/machines")}>
           <ArrowLeft className="size-4" />
-          返回
+          {t("machines.back")}
         </Button>
         <h1 className="text-xl font-semibold">{detail.name}</h1>
         <span
@@ -77,27 +103,27 @@ export default function MachineDetailPage() {
             detail.online ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"
           }`}
         >
-          {detail.online ? "在线" : "离线"}
+          {detail.online ? t("dashboard.online") : t("machines.offline")}
         </span>
       </div>
 
       <Tabs defaultValue="info">
         <TabsList>
-          <TabsTrigger value="info" className="cursor-pointer">关键信息</TabsTrigger>
-          <TabsTrigger value="runtime" className="cursor-pointer">运行时</TabsTrigger>
-          <TabsTrigger value="agents" className="cursor-pointer">agent 列表({detail.agents.length})</TabsTrigger>
+          <TabsTrigger value="info" className="cursor-pointer">{t("machines.tabInfo")}</TabsTrigger>
+          <TabsTrigger value="runtime" className="cursor-pointer">{t("machines.tabRuntime")}</TabsTrigger>
+          <TabsTrigger value="agents" className="cursor-pointer">{t("machines.tabAgents", { count: detail.agents.length })}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="info">
           <Card className="p-4">
             <dl className="grid gap-3 sm:grid-cols-2">
               {[
-                ["ID", detail.id],
-                ["地址", detail.address || "—"],
-                ["操作系统", detail.os || "未上报"],
-                ["状态", detail.status],
-                ["注册时间", timeText(detail.registeredAt)],
-                ["最近心跳", timeText(detail.lastHeartbeatAt)],
+                [t("machines.fieldId"), detail.id],
+                [t("machines.fieldAddress"), detail.address || "—"],
+                [t("machines.fieldOs"), detail.os || t("machines.unreported")],
+                [t("machines.fieldStatus"), detail.status],
+                [t("machines.fieldRegisteredAt"), timeText(detail.registeredAt)],
+                [t("machines.fieldLastHeartbeat"), timeText(detail.lastHeartbeatAt)],
               ].map(([k, v]) => (
                 <div key={k}>
                   <dt className="text-xs text-muted-foreground">{k}</dt>
@@ -107,25 +133,34 @@ export default function MachineDetailPage() {
             </dl>
 
             <div className="mt-4 border-t pt-4">
-              <p className="text-sm font-medium">长期 token</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">token 长期有效,只能手动轮换;轮换后该机需用新 token 重连。</p>
-              <Button size="sm" variant="outline" className="mt-2 cursor-pointer gap-1.5" onClick={rotate}>
-                <KeyRound className="size-3.5" />
-                轮换 token
-              </Button>
-              {newToken && (
-                <div className="mt-2 rounded-md border bg-muted p-2">
-                  <p className="text-xs text-muted-foreground">新 token(仅此一次可见):</p>
-                  <code className="text-xs break-all">{newToken}</code>
+              <p className="text-sm font-medium">{t("machines.connectCommand")}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{t("machines.connectCommandHint")}</p>
+              {command && (
+                <div className="mt-2 space-y-2">
+                  <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">{command}</pre>
+                  <Button size="sm" variant="outline" className="cursor-pointer gap-1.5" onClick={copyCommand}>
+                    <Copy className="size-3.5" />
+                    {t("machines.copyCommand")}
+                  </Button>
                 </div>
               )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="cursor-pointer gap-1.5" onClick={viewCommand}>
+                  <Eye className="size-3.5" />
+                  {t("machines.viewCommand")}
+                </Button>
+                <Button size="sm" variant="outline" className="cursor-pointer gap-1.5" onClick={refreshCommand}>
+                  <RefreshCw className="size-3.5" />
+                  {t("machines.rotateCommand")}
+                </Button>
+              </div>
             </div>
           </Card>
         </TabsContent>
 
         <TabsContent value="runtime">
           <Card className="p-4">
-            <p className="text-sm font-medium">检测到的执行器</p>
+            <p className="text-sm font-medium">{t("machines.detectedRuntimes")}</p>
             {detail.runtimes.length > 0 ? (
               <ul className="mt-2 flex flex-wrap gap-2">
                 {detail.runtimes.map((rt) => (
@@ -136,10 +171,10 @@ export default function MachineDetailPage() {
               </ul>
             ) : (
               <p className="mt-2 text-sm text-muted-foreground">
-                {detail.online ? "该机未上报可用执行器。" : "机器离线,重新连接后会上报。"}
+                {detail.online ? t("machines.noRuntimes") : t("machines.offlineRuntimes")}
               </p>
             )}
-            <p className="mt-3 text-xs text-muted-foreground">新建数字人时,运行时下拉的选项就来自这里。</p>
+            <p className="mt-3 text-xs text-muted-foreground">{t("machines.runtimeHint")}</p>
           </Card>
         </TabsContent>
 
@@ -147,12 +182,12 @@ export default function MachineDetailPage() {
           <Card className="p-4">
             <div className="flex items-center gap-2">
               <Search className="size-4 text-muted-foreground" aria-hidden="true" />
-              <label htmlFor="agent-filter" className="sr-only">按名称过滤</label>
+              <label htmlFor="agent-filter" className="sr-only">{t("machines.filterAgents")}</label>
               <Input
                 id="agent-filter"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                placeholder="按名称过滤"
+                placeholder={t("machines.filterAgents")}
                 className="h-8 max-w-xs"
               />
             </div>
@@ -167,15 +202,17 @@ export default function MachineDetailPage() {
                       {a.description ? ` · ${a.description}` : ""}
                     </p>
                   </div>
-                  <span className="text-xs text-muted-foreground">{AGENT_STATUS[a.status] ?? a.status}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {AGENT_STATUS_KEY[a.status] ? t(AGENT_STATUS_KEY[a.status]) : a.status}
+                  </span>
                   <Button size="sm" variant="ghost" className="cursor-pointer" onClick={() => navigate("/team/agents")}>
-                    管理
+                    {t("machines.manage")}
                   </Button>
                 </li>
               ))}
               {agents.length === 0 && (
                 <li className="py-6 text-center text-sm text-muted-foreground">
-                  {detail.agents.length === 0 ? "这台机器还没有托管数字人。" : "没有匹配的数字人。"}
+                  {detail.agents.length === 0 ? t("machines.noAgents") : t("machines.noAgentsMatch")}
                 </li>
               )}
             </ul>

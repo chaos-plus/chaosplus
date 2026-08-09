@@ -14,8 +14,8 @@ func TestTokenLifecycle(t *testing.T) {
 	if err != nil || v.MachineID != "m1" || v.LongTerm {
 		t.Fatalf("validate = %+v, %v", v, err)
 	}
-	// 格式 xxxx.xxxx.xxxxxxxxx。
-	if len(at.Token) != 4+1+4+1+9 {
+	// 格式 xxxx.xxxx.xxxx.xxxx.xxxx.xxxx(24 字符 + 5 点)。
+	if len(at.Token) != 24+5 {
 		t.Fatalf("token format wrong: %q", at.Token)
 	}
 
@@ -49,6 +49,20 @@ func TestTokenExpiry(t *testing.T) {
 
 	if _, err := ts.Validate(at.Token); err != ErrTokenExpired {
 		t.Fatalf("expired token error = %v, want ErrTokenExpired", err)
+	}
+}
+
+func TestTokenRehydrate(t *testing.T) {
+	ts := NewTokenStore()
+	ts.Rehydrate("m1", hashToken("saved-long-token"))
+	v, err := ts.Validate("saved-long-token")
+	if err != nil || v.MachineID != "m1" || !v.LongTerm {
+		t.Fatalf("rehydrated token validate = %+v, %v", v, err)
+	}
+	// 空 hash 直接忽略,不 panic、不占位。
+	ts.Rehydrate("m2", "")
+	if _, err := ts.Validate("saved-long-token"); err != nil {
+		t.Fatalf("existing token must survive an empty rehydrate: %v", err)
 	}
 }
 

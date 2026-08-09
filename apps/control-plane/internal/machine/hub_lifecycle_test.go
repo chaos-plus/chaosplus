@@ -70,7 +70,7 @@ func TestMachineOnboardingLifecycle(t *testing.T) {
 	}
 
 	// 确认 → 落库为 confirmed。
-	if err := hub.Confirm(ctx, machineID, token, "127.0.0.1"); err != nil {
+	if err := hub.Confirm(ctx, machineID, token); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	list, err := hub.ListMachines(ctx)
@@ -94,7 +94,7 @@ func TestMachineOnboardingLifecycle(t *testing.T) {
 	}
 
 	// 错误令牌不能确认。
-	if err := hub.Confirm(ctx, machineID, "wrong-token", "127.0.0.1"); err == nil {
+	if err := hub.Confirm(ctx, machineID, "wrong-token"); err == nil {
 		t.Error("confirm with a wrong token must fail")
 	}
 
@@ -106,7 +106,7 @@ func TestMachineOnboardingLifecycle(t *testing.T) {
 	if rotated == "" || rotated == token {
 		t.Fatalf("rotated token must be new and non-empty (old=%q new=%q)", token, rotated)
 	}
-	if err := hub.Confirm(ctx, machineID, token, "127.0.0.1"); err == nil {
+	if err := hub.Confirm(ctx, machineID, token); err == nil {
 		t.Error("the old token must stop working after rotation")
 	}
 

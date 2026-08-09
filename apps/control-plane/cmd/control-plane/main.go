@@ -68,6 +68,10 @@ func main() {
 	// Machine hub = NATS↔WS bridge for daemons; engine reaches daemons via the
 	// NATS gateway (any instance), never through the bridge directly.
 	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
+	// 重启后回灌 DB 里的长期 token hash,daemon 才能用旧 token 重连。
+	if err := hub.LoadTokens(ctx); err != nil {
+		log.Fatalf("load machine tokens: %v", err)
+	}
 	link := &workflow.NatsRunnerLink{G: g}
 	rm := server.NewRunManager(nc, link, st, envOr("CONTROL_RUNNER_ID", ""))
 	if err := rm.Start(ctx); err != nil {

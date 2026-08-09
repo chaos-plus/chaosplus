@@ -75,6 +75,16 @@ func (s *Store) ListMachines(ctx context.Context) ([]Machine, error) {
 	return out, nil
 }
 
+// UpdateMachineAddress 记录 daemon 实际连接地址(来自 WS 握手,非 confirm 的浏览器地址)。
+func (s *Store) UpdateMachineAddress(ctx context.Context, id, address string) error {
+	if _, err := s.db.NewUpdate().Model(&Machine{}).
+		Set("address = ?", address).
+		Where("id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("update machine address %s: %w", id, err)
+	}
+	return nil
+}
+
 // TouchMachineHeartbeat updates last_heartbeat_at (unix ms).
 func (s *Store) TouchMachineHeartbeat(ctx context.Context, id string) error {
 	if _, err := s.db.NewUpdate().Model(&Machine{}).

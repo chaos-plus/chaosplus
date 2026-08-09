@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,38 @@ func (t *TokenStore) MakeLongTerm(machineID, token string) error {
 	return nil
 }
 
+// Rehydrate 把 DB 持久化的长期 token hash 回灌进内存 store:控制面重启后
+// 已确认机器的长期 token 仍可验证(否则内存 store 为空,daemon 重连全挂)。
+func (t *TokenStore) Rehydrate(machineID, tokenHash string) {
+	if tokenHash == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.byHash[tokenHash]; exists {
+		return
+	}
+	t.byHash[tokenHash] = &AccessToken{MachineID: machineID, LongTerm: true}
+	if t.byMachine[machineID] == nil {
+		t.byMachine[machineID] = make(map[string]struct{})
+	}
+	t.byMachine[machineID][tokenHash] = struct{}{}
+}
+
+// GetToken 只读返回某机器当前在内存里的原始 token(用于展示接入命令),
+// 不轮换、不失效、不踢守护进程。控制面重启后回灌的 token 只有 hash,
+// 原始值不在内存 → 返回 ErrTokenInvalid,调用方应走轮换重新生成。
+func (t *TokenStore) GetToken(machineID string) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key := range t.byMachine[machineID] {
+		if at := t.byHash[key]; at != nil && at.Token != "" {
+			return at.Token, nil
+		}
+	}
+	return "", ErrTokenInvalid
+}
+
 // Invalidate revokes all tokens for a machine (cancel / timeout / force-offline).
 func (t *TokenStore) Invalidate(machineID string) {
 	t.mu.Lock()
@@ -121,18 +154,21 @@ func hashToken(s string) string {
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// randomToken produces the PRD-shaped `xxxx.xxxx.xxxxxxxxx` onboarding token.
+// randomToken produces a bias-free bearer token (~143 bit entropy: 24 chars from
+// a 62-char alphabet, grouped xxxx.xxxx.xxxx.xxxx.xxxx.xxxx). crypto/rand.Int
+// picks each char uniformly — no % 取模偏差; entropy exceeds the 128-bit bearer
+// standard, so collisions are negligible.
 func randomToken() string {
-	b := make([]byte, 17)
-	if _, err := rand.Read(b); err != nil {
-		panic(err) // crypto/rand failure is unrecoverable
-	}
-	encode := func(n int) string {
-		var sb strings.Builder
-		for i := 0; i < n; i++ {
-			sb.WriteByte(charset[int(b[i])%len(charset)])
+	var sb strings.Builder
+	for i := 0; i < 24; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			panic(err) // crypto/rand failure is unrecoverable
 		}
-		return sb.String()
+		sb.WriteByte(charset[n.Int64()])
+		if i%4 == 3 && i != 23 {
+			sb.WriteByte('.')
+		}
 	}
-	return encode(4) + "." + encode(4) + "." + encode(9)
+	return sb.String()
 }

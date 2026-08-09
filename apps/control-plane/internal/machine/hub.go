@@ -57,6 +57,7 @@ type pendingReq struct {
 // gorilla/websocket allows only one concurrent writer per connection.
 type daemonConn struct {
 	machineID string
+	addr      string // daemon WS 握手来源地址(机器真实地址)
 	ws        *websocket.Conn
 	wmu       sync.Mutex
 	mu        sync.Mutex
@@ -127,7 +128,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := &daemonConn{machineID: at.MachineID, ws: conn, reqs: make(map[int64]*pendingReq)}
+	c := &daemonConn{machineID: at.MachineID, addr: r.RemoteAddr, ws: conn, reqs: make(map[int64]*pendingReq)}
 
 	// Bridge: subscribe this machine's command subject, forward each request over WS.
 	sub, err := h.nc.Subscribe(fmt.Sprintf(cmdSubjectFmt, at.MachineID), func(m *nats.Msg) {
@@ -159,6 +160,11 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		h.pending[at.MachineID] = true
 	}
 	h.mu.Unlock()
+	if h.machines != nil {
+		// 记录 daemon 实际连接地址(来自 WS 握手,不是浏览器 confirm 的地址)。
+		// 未确认的机器还没落库,更新是 no-op,confirm 时再从连接里取。
+		_ = h.machines.UpdateMachineAddress(r.Context(), at.MachineID, r.RemoteAddr)
+	}
 	_ = c.writeJSON(map[string]any{"type": "ready"})
 	h.serve(c, sub)
 }
@@ -285,14 +291,19 @@ func (h *Hub) ListMachines(ctx context.Context) ([]store.Machine, error) {
 	return h.machines.ListMachines(ctx)
 }
 
-func (h *Hub) Confirm(ctx context.Context, machineID, token, address string) error {
+func (h *Hub) Confirm(ctx context.Context, machineID, token string) error {
 	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
 		return err
 	}
 	// A confirmed machine is no longer pending — otherwise its disconnect would
 	// be misread as an unconfirmed-abandon and invalidate the long-term token.
+	// 地址取 daemon 实际连接来源(HandleWS 握手时记录),daemon 未连接则为空。
 	h.mu.Lock()
 	delete(h.pending, machineID)
+	address := ""
+	if c := h.conns[machineID]; c != nil {
+		address = c.addr
+	}
 	h.mu.Unlock()
 	if h.machines != nil {
 		return h.machines.UpsertMachine(ctx, store.Machine{
@@ -313,9 +324,33 @@ func (h *Hub) Disconnect(machineID string) {
 	}
 }
 
+// LoadTokens 启动时回灌 DB 里已确认机器的长期 token hash,否则控制面重启后
+// daemon 用旧 token 重连会因内存 store 为空而失败。
+func (h *Hub) LoadTokens(ctx context.Context) error {
+	if h.machines == nil {
+		return nil
+	}
+	machines, err := h.machines.ListMachines(ctx)
+	if err != nil {
+		return err
+	}
+	for _, m := range machines {
+		if m.TokenHash != "" {
+			h.tokens.Rehydrate(m.ID, m.TokenHash)
+		}
+	}
+	return nil
+}
+
+// GetToken 只读返回当前 token(构建接入命令),不轮换不踢守护进程。
+func (h *Hub) GetToken(machineID string) (string, error) {
+	return h.tokens.GetToken(machineID)
+}
+
 func (h *Hub) IssueToken() (machineID, token string) {
+	// 接入即长期 token(用户确认):没有 300s 倒计时,daemon 随时可连接。
 	machineID = newMachineID()
-	at := h.tokens.Issue(machineID)
+	at := h.tokens.IssueLongTerm(machineID)
 	return machineID, at.Token
 }
 
@@ -339,6 +374,7 @@ func (h *Hub) RefreshToken(machineID string) (string, error) {
 		}
 	}
 	h.tokens.Invalidate(machineID)
+	h.Disconnect(machineID) // 轮换后旧 daemon 的 token 立即失效,踢下线等新命令重连
 	at := h.tokens.IssueLongTerm(machineID)
 	if h.machines != nil {
 		if err := h.machines.UpdateMachineToken(context.Background(), machineID, hashToken(at.Token)); err != nil {
