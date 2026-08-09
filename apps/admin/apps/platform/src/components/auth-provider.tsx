@@ -24,10 +24,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    // 平台是本地单用户工具,无登录体系:跳过挂载时的会话探测,直接匿名。
-    // 避免对不存在的 /api/authn/session 发请求产生 404 噪音。
-    setStatus("anonymous")
-  }, [])
+    // 挂载时探测会话:IAM 未起或未登录 → anonymous,登录过 → authenticated。
+    // 注册/登录后由 finishLogin 刷新到 authenticated。
+    void refresh()
+  }, [refresh])
 
   const finishLogin = useCallback(
     async (result: LoginResult) => {

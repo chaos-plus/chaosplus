@@ -1,0 +1,194 @@
+name: "" # app name
+debug: false # debug mode
+timezone: UTC # timezone
+worker_lease: 3600 # guid worker-id lease seconds; heartbeat renews at a third of this
+log:
+    file: logs/app.log # log file path, empty for stdout only
+    level: info # log level
+    format: json # log format
+    max_size: 10 # max size of log file in MB
+    rotate_size: 10 # size of file to trigger rotation in MB
+    rotate_backups: 5 # max number of old log files to keep
+rest:
+    host: 0.0.0.0 # host
+    port: 18080 # http/rest port
+    trusted_proxies: [] # CIDRs allowed to supply X-Forwarded-For; empty trusts no proxy
+grpc:
+    host: 0.0.0.0 # host
+    port: 9090 # grpc port
+redis:
+    addrs: [] # redis addresses host:port (1=standalone, N=cluster, or sentinel addrs); empty disables redis
+    master_name: "" # sentinel master name; set to use sentinel/failover
+    username: "" # redis username
+    password: "" # redis password
+    password_file: "" # file containing the Redis password; mutually exclusive with password
+    db: 0 # redis database index
+ratelimit:
+    enabled: false # enable rate limiting (requires redis)
+    prefix: rl # redis key prefix
+    ip:
+        enabled: false # enable this dimension
+        rate: 0 # allowed requests per period
+        period: 1m # rate window, e.g. 1m
+        burst: 0 # max burst; defaults to rate when 0
+    account:
+        enabled: false # enable this dimension
+        rate: 0 # allowed requests per period
+        period: 1m # rate window, e.g. 1m
+        burst: 0 # max burst; defaults to rate when 0
+        header: X-Account-Id # header carrying the account id; only trust this when the proxy sets it after authentication
+cors:
+    enabled: false # enable CORS
+    allowed_origins: [] # allowed origins, e.g. https://app.example.com or *
+    allowed_methods: [] # allowed methods; empty = GET,POST,PUT,PATCH,DELETE,OPTIONS
+    allowed_headers: [] # allowed request headers; empty = *
+    exposed_headers: [] # response headers exposed to the browser
+    allow_credentials: false # allow cookies/credentials (not valid with origin *)
+    max_age: 300 # preflight cache seconds
+security:
+    enabled: true # send security response headers
+    hsts: false # send Strict-Transport-Security (enable only behind TLS)
+authn:
+    enabled: true # enable local identity and authentication
+    issuer: "http://127.0.0.1:18080" # local issuer
+    audience: [] # accepted JWT audience values; empty skips audience check
+    jwks_url: "" # optional upstream JWKS URL for federation adapters
+    http_timeout: 5s # upstream discovery/JWKS HTTP timeout
+    clock_skew: 30s # allowed token clock skew
+    signing_key: "yE7rumBzaKWrrW8HZI4zE5qzSByx1PbbN8FH2JwG3d4=" # local dev signing seed
+    signing_key_file: "" # file containing the base64 Ed25519 seed
+    access_token_ttl: 15m # local OAuth access token lifetime
+    web:
+        enabled: true # enable browser OIDC BFF
+        post_login_url: "http://localhost:8092/"
+        post_logout_url: "http://localhost:8092/login"
+        allowed_return_urls: ["http://localhost:8092/", "http://localhost:8092/login"]
+        allowed_origins: ["http://localhost:8092"]
+        cookie_name: cp_session # opaque session cookie name
+        cookie_secure: false # local dev over http
+        session_ttl: 8h # absolute browser session lifetime
+        idle_ttl: 30m # browser session inactivity lifetime
+    password:
+        max_failed_attempts: 5 # consecutive failed login attempts before lockout
+        lock_duration: 15m # account lockout duration after max failed attempts
+    mfa_policy:
+        require_mfa: false # require all users to enroll MFA before accessing protected resources
+    mfa:
+        issuer: "" # TOTP issuer shown by authenticator applications; defaults to the configured app name
+        encryption_key: "56KzYYcvpgTBiERPt/yq6KXSm0zHCRFLziaQKEg1Jjw=" # local dev MFA key
+        encryption_key_file: "" # file containing the base64 32-byte MFA encryption key
+        enrollment_ttl: 10m # lifetime of an unconfirmed TOTP enrollment
+        challenge_ttl: 5m # lifetime of a password-verified MFA login challenge
+        recovery_codes: 10 # one-time recovery codes issued after enrollment
+        max_attempts: 5 # failed codes allowed per login challenge
+    passkey:
+        enabled: false # enable passkey registration and passwordless login
+        rp_id: "" # WebAuthn relying party domain without scheme or port
+        display_name: "" # relying party name shown by authenticators; defaults to the configured app name
+        origins: [] # exact trusted WebAuthn browser origins
+        challenge_ttl: 5m # one-time registration and login challenge lifetime
+        max_credentials: 10 # maximum active passkeys per principal
+        attestation_preference: none # WebAuthn attestation conveyance: none, indirect, direct, or enterprise
+        allowed_attestation_formats: [] # accepted attestation statement formats; empty allows every format
+        allowed_aaguid: [] # accepted authenticator AAGUID hex values; empty allows every authenticator
+    notification:
+        url: "http://127.0.0.1:19999/hook" # dev mail bridge
+        authorization: "" # optional Authorization header; prefer authorization_file
+        authorization_file: "" # file containing the optional notification Authorization header
+        poll_interval: 5s # notification outbox polling interval
+        request_timeout: 10s # notification webhook request timeout
+        max_attempts: 10 # notification delivery attempts before permanent failure
+    recovery:
+        enabled: false # enable password recovery
+        token_ttl: 15m # single-use password recovery credential lifetime
+        cooldown: 24h # post-recovery restriction window for high-risk account changes
+        reset_url: "" # absolute browser URL used to complete password recovery
+    email_verification:
+        enabled: true # enable primary email verification
+        token_ttl: 24h # single-use email verification credential lifetime
+        verify_url: "http://localhost:8092/verify-email" # absolute browser URL used to complete email verification
+    registration:
+        enabled: true # enable email-verified self-service registration
+audit:
+    anchor:
+        enabled: false # anchor verified audit heads into an external S3-compatible object lock store
+        endpoint: "" # S3-compatible endpoint, e.g. http://127.0.0.1:9000
+        bucket: chaosplus-audit # bucket holding audit anchors; created with object locking when it does not exist
+        region: "" # signing region; empty is fine for MinIO
+        access_key: "" # S3 access key
+        secret_key: "" # S3 secret key
+        retention_days: 365 # object lock retention in days (COMPLIANCE mode)
+        signing_key: "" # base64-encoded 32-byte Ed25519 seed signing anchored audit roots; anchors embed the public key so signatures verify without further configuration
+federation:
+    enabled: false # enable inbound OIDC identity provider federation
+    encryption_key: "56KzYYcvpgTBiERPt/yq6KXSm0zHCRFLziaQKEg1Jjw=" # local dev provider key
+    encryption_key_file: "" # file containing the base64 32-byte federation encryption key
+    http_timeout: 10s # upstream discovery, JWKS, and token endpoint timeout
+    clock_skew: 30s # allowed ID token clock skew
+    state_ttl: 10m # login state cookie lifetime
+    saml:
+        enabled: false # enable the SAML 2.0 identity provider
+        signing_key_file: "" # PEM RSA private key used to sign assertions; empty generates and persists a key
+        certificate_file: "" # PEM X.509 certificate matching the signing key
+        login_path: /login # browser login page unauthenticated SSO requests are redirected to
+        valid_duration: 5m # assertion and metadata validity window
+        max_issue_delay: 5m # maximum age of incoming AuthnRequest and LogoutRequest messages
+provisioning:
+    encryption_key: "" # base64 32-byte key encrypting outbound SCIM target bearer tokens; prefer encryption_key_file
+    encryption_key_file: "" # file containing the base64 32-byte provisioning encryption key
+    http_timeout: 10s # outbound SCIM request timeout
+    sync_interval: "0" # background reconciliation interval for outbound SCIM targets; 0 disables
+authz:
+    enabled: false # enable local database-backed authorization
+plugins:
+    enabled: false # enable signed WASM claim plugins
+    manifests: [] # JSON plugin manifest paths
+    trusted_keys:
+        mapkey: "" # example entry — rename to your key
+    allow_unsigned: false # allow unsigned manifests; development only
+migrations: # Ed25519 public keys by key id, base64 encoded
+    auto: false # run embedded SQL migrations during API startup; keep false in production
+bootstrap:
+    auto: false # provision the local initial administrator before server startup
+    lock_timeout: 30s # maximum wait for the deployment advisory lock
+    database:
+        type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
+        dsn: "C:/tmp/chaosplus-iam.db" # dsn
+        dsn_file: "" # file containing the DSN; mutually exclusive with dsn
+        writable: true # writable
+        readable: true # readable
+        max_open_conns: 25 # max open conns
+        max_idle_conns: 0 # max idle conns
+        conn_max_lifetime: 30m # conn max lifetime
+        conn_max_idle_time: 1m # conn max idle time
+    initial_admin:
+        tenant_id: "" # initial tenant receiving the first administrator
+        login_name: "" # initial local administrator login name
+        password: "" # initial password; prefer password_file
+        password_file: "" # file containing the initial password
+        display_name: "" # initial administrator display name
+        email: "" # initial administrator email
+database:
+    dbkey: # example entry — rename to your key
+        type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
+        dsn: "C:/tmp/chaosplus-iam.db" # dsn
+        dsn_file: "" # file containing the DSN; mutually exclusive with dsn
+        writable: true # writable
+        readable: true # readable
+        max_open_conns: 25 # max open conns
+        max_idle_conns: 0 # max idle conns
+        conn_max_lifetime: 30m # conn max lifetime
+        conn_max_idle_time: 1m # conn max idle time
+geoip:
+    geolite2:
+        owner: "" # geolite2 github owner
+        repo: "" # geolite2 github repo
+        db: "" # geolite2 db asset name
+        api_base_url: "" # github-compatible release API base URL
+    ip2region:
+        enabled: false # enable ip2region database maintenance (clones and builds the xdb from source)
+    ip2location:
+        token: "" # ip2location token
+        download_base_url: "" # ip2location download endpoint
+    ipapi:
+        base_url: "" # ipapi-compatible lookup endpoint
