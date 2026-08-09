@@ -600,7 +600,8 @@ func (cs *ChatService) runAgent(ctx context.Context, channelID string, agent *st
 		return "", errors.New("没有在线的 machine")
 	}
 	runnerID := runners[0]
-	ws := filepath.Join(cs.wsRoot, agent.ID)
+	// 每个 daemon(machine)独立 workspace:会话/消息/任务/记忆都在 wsRoot/<machine>/<agent>。
+	ws := filepath.Join(cs.wsRoot, runnerID, agent.ID)
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		return "", err
 	}
