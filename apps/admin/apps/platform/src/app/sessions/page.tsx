@@ -182,6 +182,9 @@ export default function SessionsPage() {
             >
               {m.kind === "agent" ? <Bot className="size-3.5 text-primary" aria-hidden="true" /> : <UserIcon className="size-3.5" aria-hidden="true" />}
               {m.kind === "agent" ? (agentNames.get(m.memberId) ?? m.memberId) : "human"}
+              {m.kind === "human" && (
+                <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-semibold leading-tight text-primary-foreground">owner</span>
+              )}
             </span>
           ))}
           <select
@@ -220,12 +223,19 @@ export default function SessionsPage() {
             const name = isAgent ? (agentNames.get(m.authorMemberId) ?? "agent") : "你"
             return (
               <div key={m.id} className={`flex items-start gap-2.5 ${isAgent ? "" : "flex-row-reverse"}`}>
-                <span
-                  className={`grid size-8 shrink-0 place-items-center rounded-full ${
-                    isAgent ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
-                  }`}
-                >
-                  {isAgent ? <Bot className="size-4" aria-hidden="true" /> : <UserIcon className="size-4" aria-hidden="true" />}
+                <span className="relative shrink-0">
+                  <span
+                    className={`grid size-8 place-items-center rounded-full ${
+                      isAgent ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
+                    }`}
+                  >
+                    {isAgent ? <Bot className="size-4" aria-hidden="true" /> : <UserIcon className="size-4" aria-hidden="true" />}
+                  </span>
+                  {!isAgent && (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary px-1.5 py-px text-[9px] font-semibold leading-tight text-primary-foreground">
+                      owner
+                    </span>
+                  )}
                 </span>
                 <div className={`max-w-[72%] ${isAgent ? "" : "text-right"}`}>
                   <div className={`mb-1 flex items-center gap-2 text-xs text-muted-foreground ${isAgent ? "" : "flex-row-reverse"}`}>
