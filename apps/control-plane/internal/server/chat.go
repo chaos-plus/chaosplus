@@ -207,20 +207,28 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route to the first agent member if any. Agent 执行是异步的:先秒回「收到」,
-	// claude 在后台跑,回执写入后由前端轮询显示。
+	// 路由到 agent 成员:@mention 指定执行者;无 @ 则默认第一个 agent。异步执行。
 	members, err := cs.st.ListChannelMembers(ctx, channelID)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	target := mentionName(body.Text)
 	var agent *store.AgentSpec
 	for _, m := range members {
-		if m.Kind == "agent" {
-			if spec, e := cs.st.GetAgent(ctx, m.MemberID); e == nil {
-				agent = spec
-				break
-			}
+		if m.Kind != "agent" {
+			continue
+		}
+		spec, e := cs.st.GetAgent(ctx, m.MemberID)
+		if e != nil {
+			continue
+		}
+		if target != "" && spec.Name == target {
+			agent = spec
+			break
+		}
+		if agent == nil {
+			agent = spec // 默认第一个
 		}
 	}
 
@@ -278,7 +286,7 @@ func (cs *ChatService) runAgent(ctx context.Context, channelID string, agent *st
 	spawnID := fmt.Sprintf("chat-%s-%d", agent.ID, cs.seq.Add(1))
 	prompt := fmt.Sprintf("用户任务: %s\n\n请完成任务,并把结果写入 workspace 根目录的 output.json(单个 JSON 对象,含 ok、summary(执行摘要)与 reply(你用聊天口吻给用户的回复,直接回答用户,不要提 output.json))。", task)
 
-	cs.appendExec(channelID, "spawn", "已调度 agent 执行任务…")
+	cs.appendExec(channelID, "spawn", "已调度 agent「"+agent.Name+"」执行任务…")
 	if err := cs.g.Spawn(ctx, runnerID, gateway.Spawn{
 		RunID: "chat", NodeID: agent.ID, Attempt: 1, SpawnID: spawnID,
 		ExecutorType: agent.Runtime, Prompt: prompt, Cwd: ws, SystemPrompt: agent.SystemPrompt,
@@ -334,6 +342,27 @@ func (cs *ChatService) runAgent(ctx context.Context, channelID string, agent *st
 			return "", maxCtx.Err()
 		}
 	}
+}
+
+// mentionName extracts "@name" from a message (letters/digits/underscore).
+func mentionName(text string) string {
+	i := 0
+	for i < len(text) {
+		if text[i] != '@' {
+			i++
+			continue
+		}
+		start := i + 1
+		j := start
+		for j < len(text) && (text[j] == '_' || text[j] >= 'a' && text[j] <= 'z' || text[j] >= 'A' && text[j] <= 'Z' || text[j] >= '0' && text[j] <= '9') {
+			j++
+		}
+		if j > start {
+			return text[start:j]
+		}
+		i = j
+	}
+	return ""
 }
 
 func randHex(n int) string {

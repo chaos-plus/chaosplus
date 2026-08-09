@@ -323,7 +323,7 @@ export default function SessionsPage() {
         }}
       >
         <Input
-          placeholder="给 agent 下达任务,如:写一个 hello world"
+          placeholder="给 agent 下达任务;多个 agent 时 @agent名 指定执行者"
           className="border-0 bg-transparent shadow-none focus-visible:ring-0"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
