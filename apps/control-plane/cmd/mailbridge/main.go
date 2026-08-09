@@ -1,6 +1,7 @@
 // mailbridge is a dev mail catcher for the IAM authn notification webhook.
-// It writes each notification to disk and serves them back over HTTP, so the
-// verification link can be clicked in a real browser to complete signup.
+// It writes each notification to disk, serves them back over HTTP (so the
+// verification link can be clicked in a real browser), and optionally forwards
+// them to an SMTP server (e.g. MailHog) via MAILBRIDGE_SMTP.
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/smtp"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,6 +34,28 @@ var dir = func() string {
 	return d
 }()
 
+// forwardToSMTP 把通知邮件转发到 SMTP(如 10.0.0.100 的 MailHog),真实可查。
+func forwardToSMTP(n notificationPayload) {
+	host := os.Getenv("MAILBRIDGE_SMTP")
+	if host == "" {
+		return
+	}
+	var body string
+	switch {
+	case n.VerificationURL != "":
+		body = "请点击以下链接完成验证:\n\n" + n.VerificationURL + "\n"
+	case n.RecoveryURL != "":
+		body = "请点击以下链接重置密码:\n\n" + n.RecoveryURL + "\n"
+	default:
+		return
+	}
+	msg := "From: chaosplus@local\r\nTo: " + n.Recipient + "\r\nSubject: " + n.Type +
+		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body
+	if err := smtp.SendMail(host, nil, "chaosplus@local", []string{n.Recipient}, []byte(msg)); err != nil {
+		log.Printf("smtp forward failed: %v", err)
+	}
+}
+
 func main() {
 	addr := os.Getenv("MAILBRIDGE_ADDR")
 	if addr == "" {
@@ -54,13 +78,13 @@ func main() {
 			w.WriteHeader(500)
 			return
 		}
-		kind := n.Type
-		url := n.VerificationURL
+		kind, url := n.Type, n.VerificationURL
 		if n.RecoveryURL != "" {
 			url = n.RecoveryURL
 			kind = "recovery"
 		}
 		log.Printf("mail %s -> %s\n  %s\n", kind, n.Recipient, url)
+		forwardToSMTP(n)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
