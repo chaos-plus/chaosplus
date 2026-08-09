@@ -18,6 +18,7 @@ type Machine struct {
 	LastHeartbeatAt int64  `bun:"last_heartbeat_at,notnull,default:0"` // unix ms
 	TokenHash       string `bun:"token_hash,notnull,default:''"`
 	OS              string `bun:"os,notnull,default:''"`
+	EntityID        string `bun:"entity_id,notnull,default:''"`
 	RegisteredAt    int64  `bun:"registered_at,notnull,default:0"` // unix ms,首次确认时间
 }
 

@@ -20,6 +20,7 @@ type AgentSpec struct {
 	Model         string `bun:"model,notnull,default:''" json:"model"`
 	Provider      string `bun:"provider,notnull,default:''" json:"provider"`
 	SystemPrompt  string `bun:"system_prompt,notnull,default:''" json:"systemPrompt"`
+	EntityID      string `bun:"entity_id,notnull,default:''" json:"entityId"`
 	Description   string `bun:"description,notnull,default:''" json:"description"`
 	// MachineID 是数字人所属的 machine(PRD D.4);空表示未绑定。
 	MachineID       string `bun:"machine_id,notnull,default:''" json:"machineId"`
@@ -40,7 +41,11 @@ func (s *Store) CreateAgent(ctx context.Context, a *AgentSpec) error {
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentSpec, error) {
 	out := []AgentSpec{}
-	if err := s.db.NewSelect().Model(&out).Order("created_at ASC").Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(&out)
+	if e := EntityOf(ctx); e != "" {
+		q = q.Where("entity_id = ?", e)
+	}
+	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
 	return out, nil
@@ -118,6 +123,7 @@ type Channel struct {
 	Name          string `bun:"name,notnull" json:"name"`
 	// OwnerID 是频道创建者;只有 owner 能解散频道。
 	OwnerID   string `bun:"owner_id,notnull,default:'human'" json:"ownerId"`
+	EntityID  string `bun:"entity_id,notnull,default:''" json:"entityId"`
 	CreatedAt int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 }
 
@@ -145,7 +151,11 @@ func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {
 
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	out := []Channel{}
-	if err := s.db.NewSelect().Model(&out).Order("created_at ASC").Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(&out)
+	if e := EntityOf(ctx); e != "" {
+		q = q.Where("entity_id = ?", e)
+	}
+	if err := q.Order("created_at ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)
 	}
 	return out, nil

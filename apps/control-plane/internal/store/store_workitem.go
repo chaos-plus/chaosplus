@@ -24,6 +24,7 @@ type WorkItem struct {
 	WorkflowRunID string  `bun:"workflow_run_id,notnull,default:''" json:"workflowRunId"`
 	AssigneeAgent string  `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
 	ChannelID     string  `bun:"channel_id,notnull,default:''" json:"channelId"`
+	EntityID      string  `bun:"entity_id,notnull,default:''" json:"entityId"`
 	CreatedAt     int64   `bun:"created_at,notnull,default:0" json:"createdAt"`
 	UpdatedAt     int64   `bun:"updated_at,notnull,default:0" json:"updatedAt"`
 }
@@ -40,6 +41,9 @@ func (s *Store) CreateWorkItem(ctx context.Context, w *WorkItem) error {
 func (s *Store) ListWorkItems(ctx context.Context, itemType, status, parent string) ([]WorkItem, error) {
 	out := []WorkItem{}
 	q := s.db.NewSelect().Model(&out)
+	if e := EntityOf(ctx); e != "" {
+		q = q.Where("entity_id = ?", e)
+	}
 	if itemType != "" {
 		q = q.Where("type = ?", itemType)
 	}
@@ -71,7 +75,7 @@ func (s *Store) UpdateWorkItem(ctx context.Context, w *WorkItem) error {
 		Set("estimate_hours = ?", w.EstimateHours).Set("spent_hours = ?", w.SpentHours).
 		Set("progress = ?", w.Progress).Set("workflow_run_id = ?", w.WorkflowRunID).
 		Set("assignee_agent = ?", w.AssigneeAgent).
-		Set("channel_id = ?", w.ChannelID).Set("updated_at = ?", w.UpdatedAt).
+		Set("channel_id = ?", w.ChannelID).Set("entity_id = ?", w.EntityID).Set("updated_at = ?", w.UpdatedAt).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("update work item: %w", err)
 	}

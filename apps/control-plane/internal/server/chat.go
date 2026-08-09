@@ -110,6 +110,7 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 			return
 		}
 		a.ID = "ag-" + randHex(6)
+		a.EntityID = store.EntityOf(r.Context())
 		if err := cs.st.CreateAgent(r.Context(), &a); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -196,6 +197,7 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		if c.OwnerID == "" {
 			c.OwnerID = "human" // 本地单用户;接入登录后改为当前用户
 		}
+		c.EntityID = store.EntityOf(r.Context())
 		if err := cs.st.CreateChannel(r.Context(), &c); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -348,6 +350,7 @@ func (cs *ChatService) createWorkItem(w http.ResponseWriter, r *http.Request) {
 		body.Type = "task"
 	}
 	body.ID = "wi-" + randHex(8)
+	body.EntityID = store.EntityOf(r.Context())
 	if err := cs.st.CreateWorkItem(r.Context(), &body); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -1072,6 +1075,7 @@ func (cs *ChatService) createOkr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.ID = "okr-" + randHex(6)
+	o.EntityID = store.EntityOf(r.Context())
 	if o.KeyResults == "" {
 		o.KeyResults = "[]"
 	}

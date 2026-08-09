@@ -300,7 +300,14 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
-	return mux
+	// 实体隔离:把调用方的 X-Entity(instance)注入 context,store 据此过滤/落库。
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		if e := r.Header.Get("X-Entity"); e != "" {
+			ctx = store.WithEntity(ctx, e)
+		}
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // handleWS upgrades to WebSocket, replays buffered events, then streams live.

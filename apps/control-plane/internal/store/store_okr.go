@@ -15,7 +15,8 @@ type Okr struct {
 	Title         string `bun:"title,notnull" json:"title"`
 	Objective     string `bun:"objective,notnull,default:''" json:"objective"`
 	Period        string `bun:"period,notnull,default:''" json:"period"`
-	KeyResults    string `bun:"key_results,notnull,default:'[]'" json:"keyResults"` // JSON [{title,target,progress,unit}]
+	KeyResults    string `bun:"key_results,notnull,default:'[]'" json:"keyResults"`
+	EntityID      string `bun:"entity_id,notnull,default:''" json:"entityId"` // JSON [{title,target,progress,unit}]
 	CreatedAt     int64  `bun:"created_at,notnull,default:0" json:"createdAt"`
 	UpdatedAt     int64  `bun:"updated_at,notnull,default:0" json:"updatedAt"`
 }
@@ -31,7 +32,11 @@ func (s *Store) CreateOkr(ctx context.Context, o *Okr) error {
 
 func (s *Store) ListOkrs(ctx context.Context) ([]Okr, error) {
 	out := []Okr{}
-	if err := s.db.NewSelect().Model(&out).Order("updated_at DESC").Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(&out)
+	if e := EntityOf(ctx); e != "" {
+		q = q.Where("entity_id = ?", e)
+	}
+	if err := q.Order("updated_at DESC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list okrs: %w", err)
 	}
 	return out, nil

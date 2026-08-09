@@ -145,6 +145,8 @@ export interface ChannelMessage {
   payloadJson: string
 }
 
+import { getEntity } from "./iam-api"
+
 const base = "/control/api"
 
 /** 上传走 FormData(不能带 JSON header),但错误信息要和 req() 一样能看见。 */
@@ -160,8 +162,12 @@ async function upload(path: string, file: File): Promise<Attachment> {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const entity = getEntity()
   const res = await fetch(base + path, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(entity ? { "X-Entity": entity } : {}),
+    },
     ...init,
   })
   if (!res.ok) {
