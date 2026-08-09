@@ -47,9 +47,11 @@ type RunEvent struct {
 	RunID  string          `json:"runId"`
 	NodeID string          `json:"nodeId,omitempty"`
 	Status workflow.Status `json:"status"`
-	Output json.RawMessage `json:"output,omitempty"`
-	Error  string          `json:"error,omitempty"`
-	Review *ReviewInfo     `json:"review,omitempty"`
+	// RunStatus is set only on run-level lifecycle events (RUN_STARTED/…).
+	RunStatus RunStatus       `json:"runStatus,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Review    *ReviewInfo     `json:"review,omitempty"`
 }
 
 // RunSubscriber receives live events for one run (a WS connection's channel).
@@ -318,7 +320,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		m.failPersistedRun(run.ID)
 		return nil, err
 	}
-	m.emit(run, RunEvent{Status: workflow.StatusPending})
+	m.emit(run, RunEvent{RunStatus: RunRunning})
 	go func() {
 		defer cancel()
 		eng.OnEvent = func(ev workflow.Event) {
@@ -332,6 +334,8 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		}
 		_, err := eng.Run(runCtx, req.Context)
 		run.setStatus(m.finalStatus(run, err))
+		// Run-level terminal event (F.2 RUN_COMPLETED/FAILED/PAUSED).
+		m.emit(run, RunEvent{RunStatus: run.Status()})
 		if m.st != nil {
 			if err := m.st.UpdateRunStatus(context.Background(), run.ID, string(run.Status()), time.Now().UnixMilli()); err != nil {
 				slog.Warn("persist run status", "run", run.ID, "err", err)
@@ -500,11 +504,21 @@ func (m *RunManager) recordReviewProjection(run *Run, nodeID string, d workflow.
 }
 
 func storeTypeFor(ev RunEvent) string {
+	// Run-level lifecycle events (F.2 RUN_STARTED/COMPLETED/FAILED/PAUSED).
+	if ev.RunStatus != "" {
+		switch ev.RunStatus {
+		case RunRunning:
+			return "RUN_STARTED"
+		case RunCompleted:
+			return "RUN_COMPLETED"
+		case RunFailed:
+			return "RUN_FAILED"
+		case RunPaused, RunWaitingApproval:
+			return "RUN_PAUSED"
+		}
+	}
 	switch {
 	case ev.NodeID == "":
-		if ev.Status == workflow.StatusFailed {
-			return "RUN_FAILED"
-		}
 		return "RUN_EVENT"
 	case ev.Review != nil:
 		if ev.Review.Approved {

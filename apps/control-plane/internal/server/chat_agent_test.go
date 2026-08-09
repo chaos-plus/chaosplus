@@ -12,7 +12,10 @@ func TestStoreTypeForMapsEventsToPRDTypes(t *testing.T) {
 		ev   RunEvent
 		want string
 	}{
-		{"run failed", RunEvent{Status: workflow.StatusFailed}, "RUN_FAILED"},
+		{"run started", RunEvent{RunStatus: RunRunning}, "RUN_STARTED"},
+		{"run completed", RunEvent{RunStatus: RunCompleted}, "RUN_COMPLETED"},
+		{"run failed", RunEvent{RunStatus: RunFailed}, "RUN_FAILED"},
+		{"run paused", RunEvent{RunStatus: RunPaused}, "RUN_PAUSED"},
 		{"run generic", RunEvent{Status: workflow.StatusRunning}, "RUN_EVENT"},
 		{"review approved", RunEvent{NodeID: "ap", Review: &ReviewInfo{Approved: true}}, "REVIEW_APPROVED"},
 		{"review rejected", RunEvent{NodeID: "ap", Review: &ReviewInfo{Approved: false}}, "REVIEW_REJECTED"},
