@@ -256,8 +256,26 @@ export default function SessionsPage() {
     }
     load()
     notifiedSeq.current = 0 // 换频道重新建立基线
-    const t = setInterval(load, 3000)
-    return () => clearInterval(t)
+
+    // PRD §9.1 实时:频道消息 WS 推送;按 id 去重合并,避免与轮询重复。
+    const proto = location.protocol === "https:" ? "wss:" : "ws:"
+    const ws = new WebSocket(`${proto}//${location.host}/control/api/channels/${channelId}/events`)
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data) as ChannelMessage
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
+      } catch {
+        // 忽略坏帧;轮询兜底。
+      }
+    }
+    ws.onerror = () => ws.close()
+
+    // 轮询降为兜底(断线/WS 不可用时仍能收消息)。
+    const t = setInterval(load, 15000)
+    return () => {
+      clearInterval(t)
+      ws.close()
+    }
   }, [channelId])
 
   useEffect(() => {

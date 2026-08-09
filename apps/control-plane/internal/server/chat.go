@@ -20,6 +20,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
@@ -38,6 +40,7 @@ type ChatService struct {
 	runnerID string
 	wsRoot   string
 	seq      atomic.Int64
+	hub      *channelHub // live message fan-out (PRD §9.1 realtime)
 
 	execMu  sync.Mutex
 	execLog map[string][]ProgressEntry // channelID → 本次 agent 执行的实时活动
@@ -55,7 +58,82 @@ type ProgressEntry struct {
 }
 
 func NewChatService(st *store.Store, link workflow.RunnerLink, g *gateway.Gateway, rm *RunManager, runnerID, wsRoot string) *ChatService {
-	return &ChatService{st: st, link: link, g: g, rm: rm, runnerID: runnerID, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry), agentBusy: make(map[string]int)}
+	return &ChatService{st: st, link: link, g: g, rm: rm, runnerID: runnerID, wsRoot: wsRoot,
+		execLog: make(map[string][]ProgressEntry), agentBusy: make(map[string]int), hub: newChannelHub()}
+}
+
+// channelHub fans a newly-persisted channel message out to the channel's live
+// WS subscribers (PRD §9.1 realtime). In-memory, per-instance; subscribers
+// reconnect on WS drop. Missing subscribers are dropped (best-effort fan-out).
+type channelHub struct {
+	mu   sync.Mutex
+	subs map[string]map[chan store.ChannelMessage]struct{}
+}
+
+func newChannelHub() *channelHub {
+	return &channelHub{subs: make(map[string]map[chan store.ChannelMessage]struct{})}
+}
+
+func (h *channelHub) subscribe(channelID string) (chan store.ChannelMessage, func()) {
+	ch := make(chan store.ChannelMessage, 64)
+	h.mu.Lock()
+	if h.subs[channelID] == nil {
+		h.subs[channelID] = make(map[chan store.ChannelMessage]struct{})
+	}
+	h.subs[channelID][ch] = struct{}{}
+	h.mu.Unlock()
+	return ch, func() {
+		h.mu.Lock()
+		delete(h.subs[channelID], ch)
+		h.mu.Unlock()
+	}
+}
+
+func (h *channelHub) publish(channelID string, msg store.ChannelMessage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs[channelID] {
+		select {
+		case ch <- msg: // buffered; drop slow subscribers rather than block
+		default:
+		}
+	}
+}
+
+// channelEventsWS streams a channel's messages live (PRD §9.1). It replays the
+// recent history first so nothing is missed between the client's initial fetch
+// and this subscription; the client dedups by message id.
+func (cs *ChatService) channelEventsWS(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	ch, unsub := cs.hub.subscribe(channelID)
+	defer unsub()
+
+	if recent, err := cs.st.ListChannelMessages(r.Context(), channelID, 50); err == nil {
+		for i := range recent {
+			data, _ := json.Marshal(recent[i])
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		}
+	}
+
+	for {
+		select {
+		case msg := <-ch:
+			data, _ := json.Marshal(msg)
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (cs *ChatService) busyOf(agentID string) int {
@@ -307,6 +385,8 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		writeJSON(w, 200, cs.execution(r.PathValue("id")))
 	})
 	mux.HandleFunc("POST /api/channels/{id}/messages", cs.postMessage)
+	// PRD §9.1 实时:频道消息 WS——订阅后推送新消息(客户端仍可轮询兜底)。
+	mux.HandleFunc("GET /api/channels/{id}/events", cs.channelEventsWS)
 
 	// ---- 工作区 work-items(需求/任务/测试/缺陷)+ 执行 + 附件 + OKR + 群聊订阅 ----
 	mux.HandleFunc("GET /api/work-items", func(w http.ResponseWriter, r *http.Request) {
@@ -508,12 +588,17 @@ func (cs *ChatService) notifyWorkItemChange(ctx context.Context, it *store.WorkI
 	case "status":
 		text += " 状态 → " + workItemStatusLabel(it.Status)
 	}
-	_ = cs.st.AppendChannelMessage(ctx, &store.ChannelMessage{
+	wfMsg := &store.ChannelMessage{
 		ID: "msg-" + randHex(8), ChannelID: it.ChannelID,
 		AuthorMemberID: "workflow", AuthorKind: "workflow",
 		IdempotencyKey: fmt.Sprintf("%s:workflow:%s", it.ChannelID, randHex(8)),
 		PayloadJSON:    mustJSON(map[string]any{"text": text}),
-	})
+	}
+	if err := cs.st.AppendChannelMessage(ctx, wfMsg); err != nil {
+		slog.Warn("append workflow channel message", "channel", it.ChannelID, "err", err)
+	} else {
+		cs.hub.publish(it.ChannelID, *wfMsg)
+	}
 }
 
 func workItemTypeLabel(t string) string {
@@ -574,6 +659,7 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	cs.hub.publish(channelID, *userMsg)
 
 	// 路由到 agent 成员:@mention 指定执行者;无 @ 则默认第一个 agent。异步执行。
 	members, err := cs.st.ListChannelMembers(ctx, channelID)
@@ -621,7 +707,11 @@ func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agen
 		// task 随消息带回,前端失败时可用它「重试」。
 		PayloadJSON: mustJSON(map[string]any{"text": replyText, "task": task}),
 	}
-	_ = cs.st.AppendChannelMessage(ctx, agentMsg)
+	if err := cs.st.AppendChannelMessage(ctx, agentMsg); err != nil {
+		slog.Warn("append agent channel message", "channel", channelID, "err", err)
+	} else {
+		cs.hub.publish(channelID, *agentMsg)
+	}
 }
 
 // runAgent executes the agent on the first connected machine, in the channel's
@@ -829,13 +919,16 @@ func (cs *ChatService) relayRunEvents(ctx context.Context, it *store.WorkItem, r
 		default:
 			continue // 其余中间态不刷屏
 		}
-		if err := cs.st.AppendChannelMessage(ctx, &store.ChannelMessage{
+		relayMsg := &store.ChannelMessage{
 			ID: "msg-" + randHex(8), ChannelID: it.ChannelID,
 			AuthorMemberID: "workflow", AuthorKind: "workflow",
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d", it.ChannelID, run.ID, ev.Seq),
 			PayloadJSON:    mustJSON(payload),
-		}); err != nil {
+		}
+		if err := cs.st.AppendChannelMessage(ctx, relayMsg); err != nil {
 			slog.Warn("relay run event to channel", "run", run.ID, "seq", ev.Seq, "err", err)
+		} else {
+			cs.hub.publish(it.ChannelID, *relayMsg)
 		}
 	}
 	return cursor

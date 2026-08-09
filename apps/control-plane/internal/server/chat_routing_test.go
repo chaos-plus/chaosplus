@@ -2,10 +2,15 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 )
@@ -380,5 +385,52 @@ func TestChannelCanBeRecreatedAfterDissolve(t *testing.T) {
 	members, _ := st.ListChannelMembers(ctx, second.ID)
 	if len(members) == 0 {
 		t.Fatal("creator should be auto-joined")
+	}
+}
+
+// PRD §9.1 realtime: a channel WS subscriber receives newly-posted messages.
+func TestChannelEventsWSRealtime(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "ws.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	ch := &store.Channel{ID: "ch-ws", Name: "ws-test", OwnerID: "human"}
+	if err := st.CreateChannel(ctx, ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	cs := NewChatService(st, nil, nil, nil, "", t.TempDir())
+	mux := http.NewServeMux()
+	cs.register(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/channels/" + ch.ID + "/events"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer ws.Close()
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	// 先收到回放(空)或直接收到实时消息。
+	resp, err := http.Post(ts.URL+"/api/channels/"+ch.ID+"/messages",
+		"application/json", strings.NewReader(`{"text":"hello ws"}`))
+	if err != nil {
+		t.Fatalf("post message: %v", err)
+	}
+	resp.Body.Close()
+
+	var got store.ChannelMessage
+	if err := ws.ReadJSON(&got); err != nil {
+		t.Fatalf("read ws: %v", err)
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(got.PayloadJSON), &payload)
+	if got.ChannelID != ch.ID || payload["text"] != "hello ws" {
+		t.Fatalf("ws message = %+v, want text 'hello ws' in %s", got, ch.ID)
 	}
 }
