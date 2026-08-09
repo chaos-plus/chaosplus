@@ -13,7 +13,7 @@ import {
   Settings,
   UsersRound,
 } from "lucide-react"
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router"
+import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router"
 import { useTranslations } from "use-intl"
 import type { Locale } from "@workspace/ui/i18n/config"
 import { useClientLocale } from "@workspace/ui/i18n/intl-provider"
@@ -163,6 +163,9 @@ export default function PlatformLayout() {
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
   }, [top])
+
+  // 未登录一律去 /login;登录成功后 finishLogin 会回首页。
+  if (status === "anonymous") return <Navigate to="/login" replace />
 
   // 本地单用户工具:无登录体系,shell 直接渲染(租户默认 platform)。
   if (status === "loading" && session)
