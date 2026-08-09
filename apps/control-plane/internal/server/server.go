@@ -126,6 +126,9 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 400, err.Error())
 			return
 		}
+		if e := r.Header.Get("X-Entity"); e != "" && chat != nil {
+			_ = chat.st.UpdateMachineEntity(r.Context(), id, e)
+		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("DELETE /api/machines/{id}", func(w http.ResponseWriter, r *http.Request) {

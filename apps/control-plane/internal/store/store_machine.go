@@ -34,7 +34,7 @@ func (s *Store) UpsertMachine(ctx context.Context, m Machine) error {
 		Set("status = EXCLUDED.status").
 		Set("last_heartbeat_at = EXCLUDED.last_heartbeat_at").
 		Set("token_hash = EXCLUDED.token_hash").
-		Set("os = EXCLUDED.os").Set("owner_id = EXCLUDED.owner_id").
+		Set("os = EXCLUDED.os").Set("owner_id = EXCLUDED.owner_id").Set("entity_id = EXCLUDED.entity_id").
 		// registered_at 只在首次写入,重连不刷新。SQLite 的 UPSERT 里裸列名即旧值,
 		// 带表名前缀会被当成未知列。
 		Set("registered_at = CASE WHEN registered_at = 0 THEN EXCLUDED.registered_at ELSE registered_at END").
@@ -54,9 +54,22 @@ func (s *Store) UpdateMachineOwner(ctx context.Context, id, ownerID string) erro
 	return nil
 }
 
+// UpdateMachineEntity 给已确认的 machine 绑定实例实体。
+func (s *Store) UpdateMachineEntity(ctx context.Context, id, entityID string) error {
+	if _, err := s.db.NewUpdate().Model(&Machine{}).Where("id = ?", id).
+		Set("entity_id = ?", entityID).Exec(ctx); err != nil {
+		return fmt.Errorf("update machine entity: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListMachines(ctx context.Context) ([]Machine, error) {
 	out := []Machine{}
-	if err := s.db.NewSelect().Model(&out).Order("id ASC").Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(&out)
+	if e := EntityOf(ctx); e != "" {
+		q = q.Where("entity_id = ?", e)
+	}
+	if err := q.Order("id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list machines: %w", err)
 	}
 	return out, nil
