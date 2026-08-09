@@ -42,6 +42,7 @@ export default function SessionsPage() {
   const [membersOpen, setMembersOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const pendingAgentSeq = useRef(-1) // 发送时已知的最大 agent 消息 seq,收到更新回复后清 busy
 
   const loadChannels = useCallback(() => {
     void controlApi.channels().then((x) => setChannels(x ?? [])).catch(() => setChannels([]))
@@ -60,7 +61,15 @@ export default function SessionsPage() {
   useEffect(() => {
     if (!channelId) return
     const load = () => {
-      void controlApi.messages(channelId).then((x) => setMessages(x ?? [])).catch(() => setMessages([]))
+      void controlApi.messages(channelId).then((x) => {
+        const list = x ?? []
+        setMessages(list)
+        // agent 回执到达 → 结束「执行中」。
+        if (pendingAgentSeq.current >= 0 && list.some((m) => m.authorKind === "agent" && m.seq > pendingAgentSeq.current)) {
+          setBusy(false)
+          pendingAgentSeq.current = -1
+        }
+      }).catch(() => setMessages([]))
       void controlApi.members(channelId).then((x) => setMembers(x ?? [])).catch(() => setMembers([]))
     }
     load()
@@ -97,14 +106,17 @@ export default function SessionsPage() {
   const send = async () => {
     if (!channelId || !draft.trim() || busy) return
     const text = draft.trim()
-    setDraft("") // 发送瞬间即清空,不等 agent 执行完(控制面同步执行 ~30s)
-    setBusy(true)
+    setDraft("") // 发送瞬间即清空
+    const hasAgent = members.some((m) => m.kind === "agent")
+    if (hasAgent) {
+      pendingAgentSeq.current = Math.max(-1, ...messages.filter((m) => m.authorKind === "agent").map((m) => m.seq))
+      setBusy(true) // agent 异步执行,回执到达后由轮询清掉「执行中」
+    }
     try {
       await controlApi.postMessage(channelId, text)
-      await new Promise((r) => setTimeout(r, 600))
       void controlApi.messages(channelId).then((x) => setMessages(x ?? []))
     } finally {
-      setBusy(false)
+      if (!hasAgent) setBusy(false)
     }
   }
 

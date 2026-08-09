@@ -174,7 +174,8 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route to the first agent member if any.
+	// Route to the first agent member if any. Agent 执行是异步的:先秒回「收到」,
+	// claude 在后台跑,回执写入后由前端轮询显示。
 	members, err := cs.st.ListChannelMembers(ctx, channelID)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -191,20 +192,25 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if agent != nil {
-		replyText, aerr := cs.runAgent(ctx, agent, body.Text)
-		if aerr != nil {
-			replyText = "⚠️ " + aerr.Error()
-		}
-		agentMsg := &store.ChannelMessage{
-			ID: "msg-" + randHex(8), ChannelID: channelID,
-			AuthorMemberID: agent.ID, AuthorKind: "agent",
-			IdempotencyKey: fmt.Sprintf("%s:agent:%s", channelID, randHex(8)),
-			PayloadJSON:    mustJSON(map[string]any{"text": replyText}),
-		}
-		_ = cs.st.AppendChannelMessage(ctx, agentMsg)
+		go cs.runAgentReply(context.Background(), channelID, agent, body.Text)
 	}
 
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// runAgentReply executes an agent in the background and appends its reply.
+func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agent *store.AgentSpec, task string) {
+	replyText, aerr := cs.runAgent(ctx, agent, task)
+	if aerr != nil {
+		replyText = "⚠️ " + aerr.Error()
+	}
+	agentMsg := &store.ChannelMessage{
+		ID: "msg-" + randHex(8), ChannelID: channelID,
+		AuthorMemberID: agent.ID, AuthorKind: "agent",
+		IdempotencyKey: fmt.Sprintf("%s:agent:%s", channelID, randHex(8)),
+		PayloadJSON:    mustJSON(map[string]any{"text": replyText}),
+	}
+	_ = cs.st.AppendChannelMessage(ctx, agentMsg)
 }
 
 // runAgent executes the agent on the first connected machine, in the channel's
