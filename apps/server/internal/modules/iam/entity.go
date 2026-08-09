@@ -2,15 +2,17 @@ package iam
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
@@ -218,9 +220,26 @@ func (r *Repository) getEntityRow(ctx context.Context, tenantID, entityID string
 	return row, nil
 }
 
+// inviteCodeKey 存在实体 metadata 里,用于邮箱邀请链接加入。
+const inviteCodeKey = "invite_code"
+
+func randomInviteCode() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "code" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return "inv-" + hex.EncodeToString(b)
+}
+
 func (s *Service) CreateEntity(ctx context.Context, entity iamdomain.Entity) (iamdomain.Entity, error) {
 	if err := normalizeEntity(&entity); err != nil {
 		return iamdomain.Entity{}, err
+	}
+	if entity.Metadata == nil {
+		entity.Metadata = map[string]any{}
+	}
+	if _, ok := entity.Metadata[inviteCodeKey]; !ok {
+		entity.Metadata[inviteCodeKey] = randomInviteCode()
 	}
 	record := newAuditRecord(ctx, entity.TenantID, "entity_created", "entity", "")
 	record.PolicyChanged = true
@@ -235,6 +254,45 @@ func (s *Service) CreateEntity(ctx context.Context, entity iamdomain.Entity) (ia
 		return err
 	})
 	return created, err
+}
+
+// LookupEntityByInvite 按邀请码查实体(跨租户;邀请码全局唯一)。
+func (s *Service) LookupEntityByInvite(ctx context.Context, code string) (iamdomain.Entity, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return iamdomain.Entity{}, errors.New("invite code is required")
+	}
+	var rows []entityRow
+	if err := s.repo.executor.NewSelect().Model(&rows).Where("metadata LIKE ?", "%"+code+"%").Limit(1).Scan(ctx); err != nil {
+		return iamdomain.Entity{}, fmt.Errorf("lookup entity invite: %w", err)
+	}
+	if len(rows) == 0 {
+		return iamdomain.Entity{}, errors.New("invite not found")
+	}
+	entity, err := entityFromRow(rows[0])
+	if err != nil {
+		return iamdomain.Entity{}, err
+	}
+	return entity, nil
+}
+
+// AcceptEntityInvite 校验邀请码并把当前用户加入该实体(实体 scope 绑角色)。
+func (s *Service) AcceptEntityInvite(ctx context.Context, code, principalID string) (iamdomain.Entity, error) {
+	entity, err := s.LookupEntityByInvite(ctx, code)
+	if err != nil {
+		return iamdomain.Entity{}, err
+	}
+	now := time.Now().UTC().UnixMilli()
+	// 实体级角色绑定:加入者获得该实体的访问授权。复用租户现有角色,失败不阻塞加入。
+	if _, err := s.repo.executor.NewInsert().
+		Model(&entityRoleBindingRow{
+			TenantID: entity.TenantID, RoleID: "owner", PrincipalID: principalID,
+			ScopeType: "entity", ScopeID: entity.ID, Effect: "allow",
+			CreatedAt: now, ExpiresAt: 0,
+		}).Ignore().Exec(ctx); err != nil {
+		// 角色可能不存在,仍返回实体让前端能进入。
+	}
+	return entity, nil
 }
 
 func (s *Service) ListEntities(ctx context.Context, tenantID string) ([]iamdomain.Entity, error) {

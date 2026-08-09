@@ -254,6 +254,10 @@ type entityInput struct {
 	EntityID string `path:"entity_id" maxLength:"64"`
 }
 
+type entityInviteInput struct {
+	Code string `path:"code" maxLength:"128"`
+}
+
 type createEntityInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
 	Body     struct {
@@ -316,6 +320,34 @@ type authorizationExplanationInput struct {
 
 // RegisterREST mounts IAM discovery endpoints for the management UI.
 func RegisterREST(a huma.API, svc *Service, registrar *authz.Registrar) {
+	// 邮箱邀请:按邀请码查实例信息 / 加入(登录即可,无需租户)。
+	authz.RegisterAuthenticated(registrar, a, huma.Operation{
+		OperationID: "iam-lookup-entity-invite", Method: http.MethodGet,
+		Path: "/iam/entities/invite/{code}", Summary: "Look up an entity by invite code",
+		Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity},
+	}, func(ctx context.Context, in *entityInviteInput) (*respx.Body[Entity], error) {
+		entity, err := svc.LookupEntityByInvite(ctx, in.Code)
+		if err != nil {
+			return nil, apiError("lookup entity invite", err)
+		}
+		return respx.OK(ctx, entityFromDomain(entity)), nil
+	})
+	authz.RegisterAuthenticated(registrar, a, huma.Operation{
+		OperationID: "iam-accept-entity-invite", Method: http.MethodPost,
+		Path: "/iam/entities/invite/{code}/accept", Summary: "Accept an entity invite",
+		Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity},
+	}, func(ctx context.Context, in *entityInviteInput) (*respx.Body[Entity], error) {
+		claims, _ := authnext.FromContext(ctx)
+		if claims == nil || claims.Subject == "" {
+			return nil, huma.Error401Unauthorized("unauthorized")
+		}
+		entity, err := svc.AcceptEntityInvite(ctx, in.Code, claims.Subject)
+		if err != nil {
+			return nil, apiError("accept entity invite", err)
+		}
+		return respx.OK(ctx, entityFromDomain(entity)), nil
+	})
+
 	registerRelationshipREST(a, svc, registrar)
 	registerPlatformREST(a, svc, registrar)
 	authz.Register(registrar, a, huma.Operation{
