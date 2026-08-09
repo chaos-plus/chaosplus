@@ -778,8 +778,7 @@ export function getTenant(): string {
     (typeof localStorage === "undefined"
       ? undefined
       : localStorage.getItem(tenantKey)) ??
-    import.meta.env.VITE_DEFAULT_TENANT ??
-    "platform"
+    "" // 缺省为空:让上层(如实体页)先解析真实租户,而不是把占位符当 X-Tenant-Id
   )
 }
 

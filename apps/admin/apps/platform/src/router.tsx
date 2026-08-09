@@ -19,6 +19,8 @@ export const router = createBrowserRouter([
         ),
         children: [
           { path: "/login", lazy: async () => ({ Component: (await import("./app/login/page")).default }) },
+          // 实体创建/加入:登录后若无实例实体则被重定向到这里,选一个才能看资源。
+          { path: "/entities", lazy: async () => ({ Component: (await import("./app/entities/page")).default }) },
           {
             lazy: async () => ({ Component: (await import("./app/layout")).default }),
             children: [

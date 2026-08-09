@@ -30,7 +30,7 @@ import { Toaster } from "@workspace/ui/components/sonner"
 import { useAuth } from "../components/auth"
 import { ThemeModeButton } from "../components/theme-mode-button"
 import { controlApi, type Channel } from "../lib/control-api"
-import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity, type Tenant } from "../lib/iam-api"
+import { getEntity, getTenant, iamApi, setEntity, setTenant, type Entity } from "../lib/iam-api"
 
 interface NavItem {
   /** i18n key,位于 platform.nav.*。 */
@@ -95,7 +95,6 @@ export default function PlatformLayout() {
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [entityValue, setEntityValue] = useState(getEntity())
   const [tenantEntities, setTenantEntities] = useState<Entity[]>([])
-  const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
   const { setLocale } = useClientLocale()
   const [lang, setLang] = useState<Locale>(() => currentLocale())
   const [channels, setChannels] = useState<Channel[]>([])
@@ -110,13 +109,12 @@ export default function PlatformLayout() {
     // 登录用户自己的租户(注册即自动创建);平台级 /iam/tenants 需管理员。
     const refresh = () => {
       void iamApi.myTenants().then((x) => {
-        setPlatformTenants(x ?? [])
         const mine = (x ?? [])[0]
         if (mine && !session?.organization_id && !getEntity()) {
           setTenantValue(mine.id)
           setTenant(mine.id)
         }
-      }).catch(() => setPlatformTenants(null))
+      }).catch(() => {})
     }
     refresh()
     window.addEventListener("tenant-catalog-change", refresh)
@@ -211,6 +209,12 @@ export default function PlatformLayout() {
   // 未登录一律去 /login;登录成功后 finishLogin 会回首页。
   if (status === "anonymous") return <Navigate to="/login" replace />
 
+  // 登录但没有选择实例实体 → 强制去实体创建/加入页;没有实体看不到任何资源。
+  const hasEntity = !!getEntity()
+  if (status === "authenticated" && !hasEntity && !location.pathname.startsWith("/entities")) {
+    return <Navigate to="/entities" replace />
+  }
+
   // 本地单用户工具:无登录体系,shell 直接渲染(租户默认 platform)。
   if (status === "loading" && session)
     return (
@@ -251,32 +255,6 @@ export default function PlatformLayout() {
             ))}
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
-            {/* 当前租户(下拉选择 + 可新建) */}
-            <label htmlFor="tenant-select" className="sr-only">当前租户</label>
-            <select
-              id="tenant-select"
-              value={tenantValue}
-              onChange={(e) => {
-                const v = e.target.value
-                if (!v) return
-                setTenant(v)
-                setTenantValue(v)
-                setEntity("") // 切租户 → 清空实体
-                navigate("/")
-              }}
-              className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
-            >
-              {session?.organization_id && (
-                <option value={session.organization_id}>
-                  {session.organization_id}
-                </option>
-              )}
-              {(platformTenants ?? []).map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </select>
             {/* 当前实体(instance):租户下的 entity + 新建 */}
             <label htmlFor="entity-select" className="sr-only">当前实体</label>
             <select
@@ -285,14 +263,7 @@ export default function PlatformLayout() {
               onChange={(e) => {
                 const v = e.target.value
                 if (v === "__new__") {
-                  const name = window.prompt("新实体(instance)名称:", "my-instance")
-                  if (name?.trim()) {
-                    void iamApi.createEntity({ type: "instance", name: name.trim(), status: "active", metadata: {} }).then((en) => {
-                      setEntity(en.id)
-                      setEntityValue(en.id)
-                      setTenantEntities((prev) => [...prev, en])
-                    })
-                  }
+                  navigate("/entities")
                   return
                 }
                 setEntity(v)
@@ -319,7 +290,7 @@ export default function PlatformLayout() {
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuLabel>配置管理</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate("/workspace/requirements")}>平台设置</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/workspace/requirements")}>平台配置</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => navigate("/team/machines")}>接入配置</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
