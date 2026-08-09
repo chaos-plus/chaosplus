@@ -5,6 +5,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { WorkflowCanvas } from "../../../components/workflow-canvas"
 import { controlApi, type Run } from "../../../lib/control-api"
 
 export const smokeWorkflow = {
@@ -31,6 +32,15 @@ export default function RunsPage() {
   const [workflowJSON, setWorkflowJSON] = useState(JSON.stringify(smokeWorkflow, null, 2))
   const [workspace, setWorkspace] = useState("C:/tmp/chaos-smoke-ws")
   const [busy, setBusy] = useState(false)
+
+  // 实时解析工作流 JSON,渲染 React Flow 预览。
+  let preview: { nodes: { id: string; type?: string }[]; edges: { from: string; to: string; condition?: string }[] } | null = null
+  try {
+    const def = JSON.parse(workflowJSON) as { nodes?: { id: string; type?: string }[]; edges?: { from: string; to: string; condition?: string }[] }
+    if (Array.isArray(def.nodes)) preview = { nodes: def.nodes, edges: def.edges ?? [] }
+  } catch {
+    preview = null
+  }
 
   const load = useCallback(() => {
     void controlApi.runs().then(setRuns).catch(() => setRuns([]))
@@ -70,6 +80,13 @@ export default function RunsPage() {
           <Button onClick={launch} disabled={busy}>▶ 发起 Run</Button>
         </CardContent>
       </Card>
+
+      {preview && (
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-muted-foreground">DAG 预览(React Flow)</h2>
+          <WorkflowCanvas nodes={preview.nodes} edges={preview.edges} height={420} />
+        </div>
+      )}
 
       <div className="space-y-2">
         {runs.map((r) => (
