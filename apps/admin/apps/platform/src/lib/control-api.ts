@@ -153,7 +153,12 @@ const base = "/control/api"
 async function upload(path: string, file: File): Promise<Attachment> {
   const fd = new FormData()
   fd.append("file", file)
-  const res = await fetch(base + path, { method: "POST", body: fd })
+  const entity = getEntity()
+  const res = await fetch(base + path, {
+    method: "POST",
+    body: fd,
+    headers: entity ? { "X-Entity": entity } : {},
+  })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string }
     throw new Error(body.error ?? `上传失败(HTTP ${res.status})`)
