@@ -38,7 +38,7 @@ interface NavItem {
 const TOP_MENUS: NavItem[] = [
   { label: "仪表盘", path: "/", icon: LayoutDashboard },
   { label: "会话区", path: "/sessions", icon: MessagesSquare },
-  { label: "工作区", path: "/workspace", icon: FolderKanban },
+  { label: "工作区", path: "/workspace/requirements", icon: FolderKanban },
   { label: "工作流", path: "/workflow/runs", icon: GitBranch },
   { label: "团队管理", path: "/team/machines", icon: UsersRound },
 ]
@@ -210,7 +210,7 @@ export default function PlatformLayout() {
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuLabel>配置管理</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate("/workspace")}>平台设置</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/workspace/requirements")}>平台设置</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => navigate("/team/machines")}>接入配置</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
