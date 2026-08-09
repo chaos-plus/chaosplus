@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
@@ -33,6 +34,9 @@ type ChatService struct {
 
 	execMu  sync.Mutex
 	execLog map[string][]ProgressEntry // channelID → 本次 agent 执行的实时活动
+
+	busyMu    sync.Mutex
+	agentBusy map[string]int // agentID → 并发执行数(路由时选更闲的)
 }
 
 // ProgressEntry is one agent-activity line surfaced to the frontend (chat
@@ -44,7 +48,22 @@ type ProgressEntry struct {
 }
 
 func NewChatService(st *store.Store, link workflow.RunnerLink, g *gateway.Gateway, wsRoot string) *ChatService {
-	return &ChatService{st: st, link: link, g: g, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry)}
+	return &ChatService{st: st, link: link, g: g, wsRoot: wsRoot, execLog: make(map[string][]ProgressEntry), agentBusy: make(map[string]int)}
+}
+
+func (cs *ChatService) busyOf(agentID string) int {
+	cs.busyMu.Lock()
+	defer cs.busyMu.Unlock()
+	return cs.agentBusy[agentID]
+}
+
+func (cs *ChatService) markBusy(agentID string, delta int) {
+	cs.busyMu.Lock()
+	defer cs.busyMu.Unlock()
+	cs.agentBusy[agentID] += delta
+	if cs.agentBusy[agentID] < 0 {
+		cs.agentBusy[agentID] = 0
+	}
 }
 
 func (cs *ChatService) appendExec(channelID, kind, content string) {
@@ -213,24 +232,8 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	target := mentionName(body.Text)
-	var agent *store.AgentSpec
-	for _, m := range members {
-		if m.Kind != "agent" {
-			continue
-		}
-		spec, e := cs.st.GetAgent(ctx, m.MemberID)
-		if e != nil {
-			continue
-		}
-		if target != "" && spec.Name == target {
-			agent = spec
-			break
-		}
-		if agent == nil {
-			agent = spec // 默认第一个
-		}
-	}
+	// 路由:@mention 指定;无则按职责匹配分 + 忙闲度选择(B),LLM 路由(A)后续接入。
+	agent := cs.routeAgent(body.Text, members)
 
 	if agent != nil {
 		go cs.runAgentReply(context.Background(), channelID, agent, body.Text)
@@ -243,6 +246,8 @@ func (cs *ChatService) postMessage(w http.ResponseWriter, r *http.Request) {
 // The chat shows the agent's conversational `reply` (or `summary`), NOT the raw
 // output.json — output.json is the machine artifact, not the conversation.
 func (cs *ChatService) runAgentReply(ctx context.Context, channelID string, agent *store.AgentSpec, task string) {
+	cs.markBusy(agent.ID, 1)
+	defer cs.markBusy(agent.ID, -1)
 	out, aerr := cs.runAgent(ctx, channelID, agent, task)
 	replyText := string(out)
 	if aerr != nil {
@@ -343,6 +348,68 @@ func (cs *ChatService) runAgent(ctx context.Context, channelID string, agent *st
 			return "", maxCtx.Err()
 		}
 	}
+}
+
+// routeAgent picks the agent for a task when no @mention: role-match score
+// (system prompt vs task keywords) first, then the least-busy agent among ties
+// — so with several backend/frontend agents the most relevant idle one runs.
+func (cs *ChatService) routeAgent(task string, members []store.ChannelMember) *store.AgentSpec {
+	target := mentionName(task)
+	var best *store.AgentSpec
+	bestScore, bestBusy := -1, 1<<30
+	for _, m := range members {
+		if m.Kind != "agent" {
+			continue
+		}
+		spec, err := cs.st.GetAgent(context.Background(), m.MemberID)
+		if err != nil {
+			continue
+		}
+		if target != "" && spec.Name == target {
+			return spec
+		}
+		score := roleMatchScore(spec.SystemPrompt, task)
+		busy := cs.busyOf(m.MemberID)
+		if score > bestScore || (score == bestScore && busy < bestBusy) {
+			best, bestScore, bestBusy = spec, score, busy
+		}
+	}
+	return best
+}
+
+// roleMatchScore counts keyword overlap between an agent's system prompt and the
+// task (bag-of-tokens; CJK tokens are bigrams).
+func roleMatchScore(systemPrompt, task string) int {
+	promptSet := tokenSet(systemPrompt)
+	score := 0
+	for t, c := range tokenSet(task) {
+		score += c * promptSet[t]
+	}
+	return score
+}
+
+func tokenSet(s string) map[string]int {
+	set := map[string]int{}
+	var sb []rune
+	flush := func() {
+		if len(sb) >= 2 {
+			for i := 0; i+1 < len(sb); i++ {
+				set[string(sb[i:i+2])]++
+			}
+		} else if len(sb) == 1 {
+			set[string(sb[0])]++
+		}
+		sb = sb[:0]
+	}
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r > 127 {
+			sb = append(sb, unicode.ToLower(r))
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return set
 }
 
 // mentionName extracts "@name" from a message (letters/digits/underscore).
