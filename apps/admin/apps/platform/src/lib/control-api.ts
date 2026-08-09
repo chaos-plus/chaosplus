@@ -87,6 +87,23 @@ export interface Okr {
   updatedAt: number
 }
 
+export interface PendingApproval {
+  runId: string
+  nodeId: string
+  channelId: string
+  title: string
+}
+
+/** PRD D.1 仪表盘数据源。 */
+export interface DashboardStats {
+  runsByStatus: Record<string, number>
+  pendingApprovals: PendingApproval[]
+  machinesTotal: number
+  machinesOnline: number
+  lastHeartbeatAt: number
+  costTodayUsd: number
+}
+
 export interface ProgressEntry {
   ts: number
   kind: string // message | tool | spawn | done | error
@@ -140,6 +157,7 @@ export const controlApi = {
 
   // runs + approvals
   runs: () => req<Run[]>("/runs"),
+  dashboard: () => req<DashboardStats>("/stats/dashboard"),
   launchRun: (workflowJSON: unknown, workspace: string) =>
     req<{ runId: string }>("/runs", { method: "POST", body: JSON.stringify({ workflowJSON, workspace }) }),
   approve: (runId: string, nodeId: string, approve: boolean, reason?: string, feedback?: Feedback) =>

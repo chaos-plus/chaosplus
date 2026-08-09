@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func openStore(t *testing.T) *Store {
@@ -237,5 +238,46 @@ func TestReconcileStaleRunningOnlyTouchesInProgress(t *testing.T) {
 	// 无遗留时为 0,可重复执行。
 	if n, err := s.ReconcileStaleRunning(ctx); err != nil || n != 0 {
 		t.Fatalf("second reconcile = (%d,%v), want (0,nil)", n, err)
+	}
+}
+
+func TestSumCostSinceAggregatesReportedCost(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	// Append 以服务端时间盖戳(日志时间归服务端),所以这里都是"现在"的事件;
+	// 窗口过滤用未来的 since 来验证。
+	now := time.Now().UnixMilli()
+	rows := []Event{
+		{ID: "e1", Type: "spawn-done", IdempotencyKey: "k1", PayloadJSON: `{"type":"spawn-done","costUsd":0.25}`},
+		{ID: "e2", Type: "spawn-done", IdempotencyKey: "k2", PayloadJSON: `{"type":"spawn-done","costUsd":0.75}`},
+		{ID: "e4", Type: "heartbeat", IdempotencyKey: "k4", PayloadJSON: `{"type":"heartbeat"}`},
+	}
+	for _, e := range rows {
+		if err := s.Append(ctx, e); err != nil {
+			t.Fatalf("append %s: %v", e.ID, err)
+		}
+	}
+
+	total, err := s.SumCostSince(ctx, now-3600*1000)
+	if err != nil {
+		t.Fatalf("sum: %v", err)
+	}
+	if total < 0.999 || total > 1.001 {
+		t.Fatalf("SumCostSince = %v, want 1.0(心跳无成本,不能计入)", total)
+	}
+
+	// 窗口之外返回 0,不能把历史全算进"今日"。
+	if future, err := s.SumCostSince(ctx, now+3600*1000); err != nil || future != 0 {
+		t.Fatalf("SumCostSince(future) = (%v,%v), want (0,nil)", future, err)
+	}
+
+	// 桥接后成本可能嵌在 event 字段里,也要算。
+	if err := s.Append(ctx, Event{ID: "e5", TS: now, Type: "spawn-done", IdempotencyKey: "k5", PayloadJSON: `{"event":{"costUsd":0.5}}`}); err != nil {
+		t.Fatalf("append nested: %v", err)
+	}
+	total, _ = s.SumCostSince(ctx, now-3600*1000)
+	if total < 1.499 || total > 1.501 {
+		t.Fatalf("nested costUsd not counted: %v", total)
 	}
 }

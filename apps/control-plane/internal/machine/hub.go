@@ -35,10 +35,14 @@ type wsCommand struct {
 
 // wsEvent is a daemon→control unsolicited event (heartbeat / spawn lifecycle).
 type wsEvent struct {
+	// Seq 由桥接方按连接递增。daemon 不带序号,而下游用 (runner,type,seq)
+	// 做事件落库的幂等键 —— 恒为 0 会让同类事件只存下第一条(§15.1 被破坏)。
+	Seq      int64           `json:"seq,omitempty"`
 	Type     string          `json:"type"`
 	SpawnID  string          `json:"spawnId,omitempty"`
 	OK       *bool           `json:"ok,omitempty"`
 	ExitCode int             `json:"exitCode,omitempty"`
+	CostUSD  *float64        `json:"costUsd,omitempty"` // agent 上报的本次花费(仪表盘汇总)
 	Message  string          `json:"message,omitempty"`
 	Event    json.RawMessage `json:"event,omitempty"` // AgentEvent (message/tool) content, kept for progress
 }
@@ -56,6 +60,7 @@ type daemonConn struct {
 	wmu       sync.Mutex
 	mu        sync.Mutex
 	reqs      map[int64]*pendingReq
+	evtSeq    atomic.Int64 // 事件序号,保证下游幂等键唯一
 }
 
 func (c *daemonConn) writeJSON(v any) error {
@@ -182,6 +187,7 @@ func (h *Hub) serve(c *daemonConn, sub *nats.Subscription) {
 			}
 		case "event":
 			if m.Event != nil {
+				m.Event.Seq = c.evtSeq.Add(1)
 				h.bridgeEvent(c.machineID, m.Event)
 			}
 		case "register":

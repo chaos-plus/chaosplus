@@ -131,6 +131,8 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
     spawnId,
     ok: done?.ok ?? false,
     exitCode: done?.exitCode ?? 1,
+    // 成本要随完成事件上报,控制面才能汇总今日花费(PRD D.1)。
+    ...(done && "costUsd" in done && done.costUsd != null ? { costUsd: done.costUsd } : {}),
     ...(done?.ok === false || err ? { error: err && "message" in err ? err.message : "no done event" } : {}),
   });
   sessions.delete(spawnId);

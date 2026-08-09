@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/machine"
+	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
 )
 
@@ -126,6 +128,81 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			"id":     run.ID,
 			"status": run.Status(),
 			"def":    run.Def,
+		})
+	})
+	// PRD D.1 仪表盘:活跃 run 状态分布 / runner 健康 / 待审批队列 / 今日成本。
+	mux.HandleFunc("GET /api/stats/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		type pending struct {
+			RunID  string `json:"runId"`
+			NodeID string `json:"nodeId"`
+			// ChannelID 让前端能跳到对应频道的审批卡片(D.1 要求点击跳转)。
+			ChannelID string `json:"channelId"`
+			Title     string `json:"title"`
+		}
+		byStatus := map[string]int{}
+		approvals := []pending{}
+		for _, run := range m.List() {
+			byStatus[string(run.Status())]++
+			if run.Status() != RunWaitingApproval {
+				continue
+			}
+			for _, ev := range run.Events() {
+				if ev.Status == workflow.StatusWaitingApproval && ev.NodeID != "" {
+					approvals = append(approvals, pending{RunID: run.ID, NodeID: ev.NodeID})
+				}
+			}
+		}
+		// 关联工作项 → 频道,供点击跳转。
+		if chat != nil && chat.st != nil {
+			items, err := chat.st.ListWorkItems(r.Context(), "", "", "")
+			if err == nil {
+				for i := range approvals {
+					for _, it := range items {
+						if it.WorkflowRunID == approvals[i].RunID {
+							approvals[i].ChannelID, approvals[i].Title = it.ChannelID, it.Title
+						}
+					}
+				}
+			}
+		}
+
+		machines := []store.Machine{}
+		var online int
+		var lastHeartbeat int64
+		if hub != nil {
+			if list, err := hub.ListMachines(r.Context()); err == nil {
+				machines = list
+				connected := map[string]bool{}
+				for _, id := range hub.RegisteredRunners() {
+					connected[id] = true
+				}
+				for _, mm := range machines {
+					if connected[mm.ID] {
+						online++
+					}
+					if mm.LastHeartbeatAt > lastHeartbeat {
+						lastHeartbeat = mm.LastHeartbeatAt
+					}
+				}
+			}
+		}
+
+		var costToday float64
+		if chat != nil && chat.st != nil {
+			now := time.Now()
+			midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).UnixMilli()
+			if c, err := chat.st.SumCostSince(r.Context(), midnight); err == nil {
+				costToday = c
+			}
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"runsByStatus":     byStatus,
+			"pendingApprovals": approvals,
+			"machinesTotal":    len(machines),
+			"machinesOnline":   online,
+			"lastHeartbeatAt":  lastHeartbeat,
+			"costTodayUsd":     costToday,
 		})
 	})
 	mux.HandleFunc("GET /api/runs/{id}/events", m.handleWS)

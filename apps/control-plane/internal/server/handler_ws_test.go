@@ -216,3 +216,68 @@ func TestApprovalRejectionRequiresStructuredFeedbackOverHTTP(t *testing.T) {
 		return false
 	}, 10*time.Second)
 }
+
+// PRD D.1:仪表盘必须给出 run 状态分布、runner 健康、待审批队列、今日成本。
+func TestDashboardStatsEndpoint(t *testing.T) {
+	srv, _ := newHandlerTestServer(t)
+
+	var empty map[string]any
+	if code := doJSON(t, "GET", srv.URL+"/api/stats/dashboard", nil, &empty); code != 200 {
+		t.Fatalf("stats: %d", code)
+	}
+	for _, k := range []string{"runsByStatus", "pendingApprovals", "machinesTotal", "machinesOnline", "lastHeartbeatAt", "costTodayUsd"} {
+		if _, ok := empty[k]; !ok {
+			t.Errorf("stats missing key %q: %+v", k, empty)
+		}
+	}
+	// 空数组不能是 null,前端要 .map。
+	if _, ok := empty["pendingApprovals"].([]any); !ok {
+		t.Fatalf("pendingApprovals must be an array, got %T", empty["pendingApprovals"])
+	}
+
+	// 起一个停在审批门的 run → 状态分布与待审批队列都要反映出来。
+	var launched struct {
+		RunID string `json:"runId"`
+	}
+	doJSON(t, "POST", srv.URL+"/api/runs",
+		map[string]any{"workflowJSON": json.RawMessage(testDefRaw), "workspace": t.TempDir()}, &launched)
+
+	waitFor(t, func() bool {
+		var s map[string]any
+		doJSON(t, "GET", srv.URL+"/api/stats/dashboard", nil, &s)
+		byStatus, _ := s["runsByStatus"].(map[string]any)
+		pending, _ := s["pendingApprovals"].([]any)
+		return byStatus["waiting_approval"] != nil && len(pending) > 0
+	}, 15*time.Second)
+
+	var s map[string]any
+	doJSON(t, "GET", srv.URL+"/api/stats/dashboard", nil, &s)
+	pending := s["pendingApprovals"].([]any)
+	first := pending[0].(map[string]any)
+	if first["runId"] != launched.RunID || first["nodeId"] == "" {
+		t.Fatalf("pending approval missing run/node reference: %+v", first)
+	}
+}
+
+// hub/chat 缺省时(最小装配)仪表盘不能 panic,要给出零值而不是 500。
+func TestDashboardStatsDegradesWithoutHubOrStore(t *testing.T) {
+	nc := startTestNATS(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	m := NewRunManager(nc, nil, nil, "runner-1")
+	m.baseFactory = func(_ string) workflow.Executor { return &workflow.MockExecutor{} }
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("run manager: %v", err)
+	}
+	cs := NewChatService(nil, nil, nil, m, "runner-1", t.TempDir())
+	srv := httptest.NewServer(NewHandler(m, nil, cs))
+	defer srv.Close()
+
+	var s map[string]any
+	if code := doJSON(t, "GET", srv.URL+"/api/stats/dashboard", nil, &s); code != 200 {
+		t.Fatalf("stats without hub/store: %d", code)
+	}
+	if s["machinesTotal"].(float64) != 0 || s["costTodayUsd"].(float64) != 0 {
+		t.Fatalf("expected zeroed stats, got %+v", s)
+	}
+}

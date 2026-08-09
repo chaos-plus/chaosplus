@@ -29,7 +29,7 @@ export type RunnerEvent =
   | { type: "heartbeat"; ts: number }
   | { type: "spawn-started"; spawnId: string }
   | { type: "spawn-event"; spawnId: string; event: unknown }
-  | { type: "spawn-done"; spawnId: string; ok: boolean; exitCode: number }
+  | { type: "spawn-done"; spawnId: string; ok: boolean; exitCode: number; costUsd?: number; error?: string }
   | { type: "spawn-error"; spawnId: string; message: string };
 
 /**
