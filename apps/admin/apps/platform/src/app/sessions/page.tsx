@@ -318,6 +318,17 @@ export default function SessionsPage() {
                   >
                     <ReactMarkdown>{messageText(m)}</ReactMarkdown>
                   </div>
+                  {!isAgent && (
+                    <button
+                      onClick={() => {
+                        void controlApi.createWorkItemFromChannel(channelId!, { type: "task", title: messageText(m).slice(0, 60) })
+                          .then(() => void controlApi.messages(channelId!).then((x) => setMessages(x ?? [])))
+                      }}
+                      className="mt-1 inline-flex items-center gap-1 rounded-full border border-input px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    >
+                      转为工作项
+                    </button>
+                  )}
                   {isAgent && messageText(m).startsWith("⚠️") && messageTask(m) && (
                     <div className={`mt-1 ${isAgent ? "" : "hidden"}`}>
                       <button

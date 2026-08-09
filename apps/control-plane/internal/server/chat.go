@@ -199,6 +199,141 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		writeJSON(w, 200, cs.execution(r.PathValue("id")))
 	})
 	mux.HandleFunc("POST /api/channels/{id}/messages", cs.postMessage)
+
+	// ---- 工作区 work-items(需求/任务/缺陷)+ 群聊订阅 ----
+	mux.HandleFunc("GET /api/work-items", func(w http.ResponseWriter, r *http.Request) {
+		items, err := cs.st.ListWorkItems(r.Context(), r.URL.Query().Get("type"), r.URL.Query().Get("status"))
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
+	})
+	mux.HandleFunc("POST /api/work-items", cs.createWorkItem)
+	mux.HandleFunc("PUT /api/work-items/{id}", cs.updateWorkItem)
+	mux.HandleFunc("DELETE /api/work-items/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := cs.st.DeleteWorkItem(r.Context(), r.PathValue("id")); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/channels/{id}/work-items", cs.createWorkItemFromChannel)
+}
+
+// createWorkItem 创建工作项;关联频道时向群聊推送订阅通知。
+func (cs *ChatService) createWorkItem(w http.ResponseWriter, r *http.Request) {
+	var body store.WorkItem
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
+		writeErr(w, 400, "title is required")
+		return
+	}
+	if body.Type == "" {
+		body.Type = "task"
+	}
+	body.ID = "wi-" + randHex(8)
+	if err := cs.st.CreateWorkItem(r.Context(), &body); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	cs.notifyWorkItemChange(r.Context(), &body, "created")
+	writeJSON(w, 201, body)
+}
+
+func (cs *ChatService) createWorkItemFromChannel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Type        string `json:"type"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
+		writeErr(w, 400, "title is required")
+		return
+	}
+	it := store.WorkItem{ID: "wi-" + randHex(8), Type: body.Type, Title: body.Title, Description: body.Description, ChannelID: r.PathValue("id")}
+	if it.Type == "" {
+		it.Type = "task"
+	}
+	if err := cs.st.CreateWorkItem(r.Context(), &it); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	cs.notifyWorkItemChange(r.Context(), &it, "created")
+	writeJSON(w, 201, it)
+}
+
+func (cs *ChatService) updateWorkItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := cs.st.GetWorkItem(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, "work item not found")
+		return
+	}
+	var body store.WorkItem
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if body.Title == "" {
+		body.Title = existing.Title
+	}
+	body.ID = existing.ID
+	if body.ChannelID == "" {
+		body.ChannelID = existing.ChannelID
+	}
+	changed := body.Status != existing.Status
+	if err := cs.st.UpdateWorkItem(r.Context(), &body); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if changed {
+		cs.notifyWorkItemChange(r.Context(), &body, "status")
+	}
+	writeJSON(w, 200, body)
+}
+
+// notifyWorkItemChange 把工作项变化推送到关联的群聊频道(human/agent 实时跟进)。
+func (cs *ChatService) notifyWorkItemChange(ctx context.Context, it *store.WorkItem, reason string) {
+	if it.ChannelID == "" {
+		return
+	}
+	text := fmt.Sprintf("📌 %s #%s「%s」", workItemTypeLabel(it.Type), it.ID, it.Title)
+	switch reason {
+	case "created":
+		text += " 已创建(" + workItemStatusLabel(it.Status) + ")"
+	case "status":
+		text += " 状态 → " + workItemStatusLabel(it.Status)
+	}
+	_ = cs.st.AppendChannelMessage(ctx, &store.ChannelMessage{
+		ID: "msg-" + randHex(8), ChannelID: it.ChannelID,
+		AuthorMemberID: "workflow", AuthorKind: "workflow",
+		IdempotencyKey: fmt.Sprintf("%s:workflow:%s", it.ChannelID, randHex(8)),
+		PayloadJSON:    mustJSON(map[string]any{"text": text}),
+	})
+}
+
+func workItemTypeLabel(t string) string {
+	switch t {
+	case "requirement":
+		return "需求"
+	case "bug":
+		return "缺陷"
+	default:
+		return "任务"
+	}
+}
+
+func workItemStatusLabel(s string) string {
+	switch s {
+	case "in_progress":
+		return "进行中"
+	case "review":
+		return "评审中"
+	case "done":
+		return "已完成"
+	default:
+		return "待办"
+	}
 }
 
 // postMessage appends a user message; if the channel has an agent member, routes

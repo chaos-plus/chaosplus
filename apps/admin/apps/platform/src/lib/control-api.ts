@@ -39,6 +39,18 @@ export interface ChannelMember {
   kind: string
 }
 
+export interface WorkItem {
+  id: string
+  type: string // requirement | task | bug
+  title: string
+  description: string
+  status: string // open | in_progress | review | done
+  assigneeAgent: string
+  channelId: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface ProgressEntry {
   ts: number
   kind: string // message | tool | spawn | done | error
@@ -108,4 +120,20 @@ export const controlApi = {
   execution: (id: string) => req<ProgressEntry[]>(`/channels/${id}/execution`),
   postMessage: (id: string, text: string) =>
     req<{ ok: boolean }>(`/channels/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
+
+  // 工作区 work-items(需求/任务/缺陷)
+  workItems: (type?: string, status?: string) => {
+    const q = new URLSearchParams()
+    if (type) q.set("type", type)
+    if (status) q.set("status", status)
+    const s = q.toString()
+    return req<WorkItem[]>(`/work-items${s ? `?${s}` : ""}`)
+  },
+  createWorkItem: (w: Omit<WorkItem, "id" | "createdAt" | "updatedAt">) =>
+    req<WorkItem>("/work-items", { method: "POST", body: JSON.stringify(w) }),
+  updateWorkItem: (id: string, w: Partial<WorkItem>) =>
+    req<WorkItem>(`/work-items/${id}`, { method: "PUT", body: JSON.stringify(w) }),
+  deleteWorkItem: (id: string) => req<{ ok: boolean }>(`/work-items/${id}`, { method: "DELETE" }),
+  createWorkItemFromChannel: (channelId: string, w: { type: string; title: string; description?: string }) =>
+    req<WorkItem>(`/channels/${channelId}/work-items`, { method: "POST", body: JSON.stringify(w) }),
 }
