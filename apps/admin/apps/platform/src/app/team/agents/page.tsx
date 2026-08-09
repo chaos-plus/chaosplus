@@ -23,8 +23,11 @@ const EMPTY_FORM = {
   runtime: "",
   model: "",
   provider: "",
-  defaultChannels: "# ALL",
+  defaultChannels: "",
 }
+
+/** 运行时即供应商(二选一):claude→anthropic, codex→openai, mock→空。 */
+const RUNTIME_PROVIDER: Record<string, string> = { claude: "anthropic", codex: "openai", mock: "" }
 
 function fail(action: string, e: unknown) {
   toast.error(`${action}失败:${e instanceof Error ? e.message : String(e)}`)
@@ -72,7 +75,7 @@ export default function AgentsPage() {
       runtime: a.runtime,
       model: a.model,
       provider: a.provider,
-      defaultChannels: a.defaultChannels || "# ALL",
+      defaultChannels: a.defaultChannels || "",
     })
     setOpen(true)
   }
@@ -289,7 +292,7 @@ function AgentFormDialog({
             <select
               id="ag-runtime"
               value={form.runtime}
-              onChange={(e) => setForm({ ...form, runtime: e.target.value })}
+              onChange={(e) => setForm({ ...form, runtime: e.target.value, provider: RUNTIME_PROVIDER[e.target.value] ?? form.provider })}
               className="h-9 cursor-pointer rounded-md border border-input bg-transparent px-2 text-sm"
               disabled={!form.machineId}
             >
@@ -309,7 +312,13 @@ function AgentFormDialog({
             </div>
             <div className="grid gap-1.5">
               <label htmlFor="ag-provider" className="text-sm font-medium">供应商</label>
-              <Input id="ag-provider" value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })} placeholder="anthropic / bedrock…" />
+              <Input
+                id="ag-provider"
+                value={form.provider}
+                onChange={(e) => setForm({ ...form, provider: e.target.value })}
+                placeholder="由运行时决定(可覆盖)"
+                disabled={!!RUNTIME_PROVIDER[form.runtime]}
+              />
             </div>
           </div>
           <div className="grid gap-1.5">
