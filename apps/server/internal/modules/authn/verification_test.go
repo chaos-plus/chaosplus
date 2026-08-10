@@ -59,8 +59,8 @@ func TestEmailVerificationLifecycle(t *testing.T) {
 	assert.NotContains(t, queued.PayloadCiphertext, token)
 	assert.Equal(t, "sent", queued.Status)
 
-	require.NoError(t, service.CompleteEmailVerification(t.Context(), token))
-	assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token), authnext.ErrInvalidEmailVerification)
+	require.NoError(t, service.CompleteEmailVerification(t.Context(), token, ""))
+	assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token, ""), authnext.ErrInvalidEmailVerification)
 	claims, err := service.Authenticate(t.Context(), "", cookie)
 	require.NoError(t, err)
 	assert.True(t, claims.EmailVerified)
@@ -120,7 +120,7 @@ func TestEmailVerificationStateGuards(t *testing.T) {
 		token := emailVerificationTokenFromOutbox(t, service)
 		_, err = service.db.NewUpdate().Model((*principalRow)(nil)).Set("email = 'changed@example.com'").Where("id = ?", principalID).Exec(t.Context())
 		require.NoError(t, err)
-		assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token), authnext.ErrInvalidEmailVerification)
+		assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token, ""), authnext.ErrInvalidEmailVerification)
 
 		_, err = service.db.NewUpdate().Model((*principalRow)(nil)).Set("email = 'admin@example.com'").Where("id = ?", principalID).Exec(t.Context())
 		require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestEmailVerificationStateGuards(t *testing.T) {
 		assert.Equal(t, 1, active)
 		_, err = service.db.NewUpdate().Model((*emailVerificationRow)(nil)).Set("expires_at = ?", service.now().Add(-time.Second).UnixMilli()).Where("token_hmac = ?", service.emailVerificationHMAC(token)).Exec(t.Context())
 		require.NoError(t, err)
-		assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token), authnext.ErrInvalidEmailVerification)
+		assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), token, ""), authnext.ErrInvalidEmailVerification)
 	})
 
 	t.Run("storage failures close the flow", func(t *testing.T) {
@@ -180,7 +180,7 @@ func TestEmailVerificationStateGuards(t *testing.T) {
 		service, token := preparedEmailVerification(t)
 		_, err := service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_email_verified BEFORE UPDATE OF email_verified ON iam_principals BEGIN SELECT RAISE(ABORT, 'verification denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token), "complete email verification")
+		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token, ""), "complete email verification")
 		var consumedAt int64
 		require.NoError(t, service.db.NewSelect().Model((*emailVerificationRow)(nil)).Column("consumed_at").Where("token_hmac = ?", service.emailVerificationHMAC(token)).Scan(t.Context(), &consumedAt))
 		assert.Zero(t, consumedAt)
@@ -190,14 +190,14 @@ func TestEmailVerificationStateGuards(t *testing.T) {
 		service, token := preparedEmailVerification(t)
 		_, err := service.db.NewDropTable().Model((*emailVerificationRow)(nil)).Exec(t.Context())
 		require.NoError(t, err)
-		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token), "load email verification credential")
+		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token, ""), "load email verification credential")
 	})
 
 	t.Run("audit failure rolls back verification", func(t *testing.T) {
 		service, token := preparedEmailVerification(t)
 		_, err := service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_verification_audit BEFORE INSERT ON iam_audit_events BEGIN SELECT RAISE(ABORT, 'audit denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token), "complete email verification")
+		assert.ErrorContains(t, service.CompleteEmailVerification(t.Context(), token, ""), "complete email verification")
 		var verified bool
 		require.NoError(t, service.db.NewSelect().Model((*principalRow)(nil)).Column("email_verified").Where("id = ?", principalIDForVerificationToken(t, service, token)).Scan(t.Context(), &verified))
 		assert.False(t, verified)
@@ -222,7 +222,7 @@ func TestEmailVerificationConcurrentSingleUse(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			results <- service.CompleteEmailVerification(t.Context(), token)
+			results <- service.CompleteEmailVerification(t.Context(), token, "")
 		}()
 	}
 	close(start)
@@ -247,7 +247,7 @@ func TestEmailVerificationConfiguration(t *testing.T) {
 	service, _ := newLocalService(t)
 	assert.False(t, service.EmailVerificationEnabled())
 	assert.ErrorIs(t, service.BeginEmailVerification(t.Context(), "", ""), authnext.ErrEmailVerificationDisabled)
-	assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), "token"), authnext.ErrEmailVerificationDisabled)
+	assert.ErrorIs(t, service.CompleteEmailVerification(t.Context(), "token", ""), authnext.ErrEmailVerificationDisabled)
 	require.NoError(t, service.StartNotificationWorker(t.Context()))
 	require.NoError(t, service.StopNotificationWorker(t.Context()))
 

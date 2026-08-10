@@ -64,7 +64,7 @@ func TestRegistrationLifecycle(t *testing.T) {
 		return loginErr
 	}(), authnext.ErrInvalidCredentials)
 
-	require.NoError(t, service.CompleteEmailVerification(t.Context(), token))
+	require.NoError(t, service.CompleteEmailVerification(t.Context(), token, ""))
 	require.NoError(t, service.db.NewSelect().Model(&principal).Where("id = ?", principal.ID).Scan(t.Context()))
 	assert.False(t, principal.ActivationRequired)
 	assert.True(t, principal.EmailVerified)
