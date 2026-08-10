@@ -39,8 +39,10 @@ export const router = createBrowserRouter([
               { path: "/team/humans", lazy: async () => ({ Component: (await import("./app/team/humans/page")).default }) },
               { path: "/team/agents", lazy: async () => ({ Component: (await import("./app/team/agents/page")).default }) },
               // 工作流
+              { path: "/workflow", lazy: async () => ({ Component: (await import("./app/workflow/list/page")).default }) },
               { path: "/workflow/runs", lazy: async () => ({ Component: (await import("./app/workflow/runs/page")).default }) },
               { path: "/workflow/runs/:runId", lazy: async () => ({ Component: (await import("./app/workflow/runs/detail")).default }) },
+              { path: "/workflow/editor", lazy: async () => ({ Component: (await import("./app/workflow/editor/page")).default }) },
               { path: "/workflow/approvals", lazy: async () => ({ Component: (await import("./app/workflow/approvals/page")).default }) },
             ],
           },
