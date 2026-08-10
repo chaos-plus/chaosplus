@@ -132,15 +132,15 @@ func TestLoopConverges(t *testing.T) {
 
 	attempt := 0
 	e, err := NewEngine(def, &MockExecutor{
-		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (json.RawMessage, error) {
+		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (AgentResult, error) {
 			if n.ID == "work" {
 				attempt++
 				if attempt < 2 {
-					return json.RawMessage(`{"ok":false}`), nil
+					return AgentResult{Output: json.RawMessage(`{"ok":false}`)}, nil
 				}
-				return json.RawMessage(`{"ok":true}`), nil
+				return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
 			}
-			return json.RawMessage(`{"ok":true}`), nil
+			return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
 		},
 	})
 	if err != nil {
@@ -177,8 +177,8 @@ func TestLoopMaxIterationsFails(t *testing.T) {
 	}`)
 
 	e, err := NewEngine(def, &MockExecutor{
-		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok":false}`), nil
+		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (AgentResult, error) {
+			return AgentResult{Output: json.RawMessage(`{"ok":false}`)}, nil
 		},
 	})
 	if err != nil {
@@ -232,15 +232,15 @@ func TestHumanApprovalReject(t *testing.T) {
 // stubExecutor lets tests drive approval outcomes.
 type stubExecutor struct {
 	approve bool
-	runFn   func(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
+	runFn   func(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error)
 }
 
-func (s *stubExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
+func (s *stubExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	if s.runFn != nil {
 		return s.runFn(ctx, node, input)
 	}
 	out, _ := json.Marshal(map[string]any{"ok": true})
-	return out, nil
+	return AgentResult{Output: out}, nil
 }
 
 func (s *stubExecutor) Approve(ctx context.Context, node *Node) (bool, error) {

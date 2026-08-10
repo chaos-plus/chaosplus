@@ -5,30 +5,34 @@ import (
 	"encoding/json"
 )
 
+// AgentResult is the output of RunAgent: the node's JSON output + optional
+// inline preview for live rendering on canvas nodes (ComfyUI pattern).
+type AgentResult struct {
+	Output  json.RawMessage
+	Preview *struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+}
+
 // Executor runs agent nodes and decides human-approval gates. The engine is
-// executor-agnostic (PRD §18): M1 ships MockExecutor; a runner-backed executor
-// dispatches via the NATS RunnerGateway in a later phase.
+// executor-agnostic (PRD §18).
 type Executor interface {
-	// RunAgent executes an agent node. input is the JSON Logic variable scope
-	// (run context ∪ completed node outputs). Returns the node's output JSON.
-	RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
-	// Approve decides a human_approval gate. false = rejected.
+	RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error)
 	Approve(ctx context.Context, node *Node) (bool, error)
 }
 
-// MockExecutor is a deterministic executor for tests and the M1 example. Agent
-// output is `{"ok":true,"node":"<id>"}`; approvals always pass. Override
-// RunAgent to script scenario behavior in tests.
+// MockExecutor is a deterministic executor for tests and the M1 example.
 type MockExecutor struct {
-	RunAgentFn func(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error)
+	RunAgentFn func(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error)
 }
 
-func (m *MockExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
+func (m *MockExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	if m.RunAgentFn != nil {
 		return m.RunAgentFn(ctx, node, input)
 	}
-	out, err := json.Marshal(map[string]any{"ok": true, "node": node.ID})
-	return out, err
+	out, _ := json.Marshal(map[string]any{"ok": true, "node": node.ID})
+	return AgentResult{Output: out}, nil
 }
 
 func (m *MockExecutor) Approve(ctx context.Context, node *Node) (bool, error) {

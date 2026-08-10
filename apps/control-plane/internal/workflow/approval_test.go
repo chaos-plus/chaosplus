@@ -67,15 +67,15 @@ func TestApprovalBrokerOnDecision(t *testing.T) {
 
 func TestApprovalExecutorDelegates(t *testing.T) {
 	b := NewApprovalBroker()
-	base := &MockExecutor{RunAgentFn: func(_ context.Context, _ *Node, _ json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`{"agent":"ran"}`), nil
+	base := &MockExecutor{RunAgentFn: func(_ context.Context, _ *Node, _ json.RawMessage) (AgentResult, error) {
+		return AgentResult{Output: json.RawMessage(`{"agent":"ran"}`)}, nil
 	}}
 	ae := NewApprovalExecutor(base, b)
 
 	// RunAgent 委托 base。
 	out, err := ae.RunAgent(context.Background(), &Node{ID: "a"}, nil)
-	if err != nil || string(out) != `{"agent":"ran"}` {
-		t.Fatalf("RunAgent delegate: %s %v", out, err)
+	if err != nil || string(out.Output) != `{"agent":"ran"}` {
+		t.Fatalf("RunAgent delegate: %s %v", string(out.Output), err)
 	}
 
 	// Approve 阻塞到 Resolve。

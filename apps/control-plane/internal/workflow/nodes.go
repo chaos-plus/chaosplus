@@ -46,14 +46,14 @@ func (e *Engine) execTrigger(st *nodeState) error {
 
 func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 	input, _ := json.Marshal(e.scope)
-	out, err := e.exec.RunAgent(ctx, st.node, input)
+	result, err := e.exec.RunAgent(ctx, st.node, input)
 	if err != nil {
 		st.err = err.Error()
 		return err
 	}
-	st.output = out
+	st.output = result.Output
 	e.updateScope(st)
-	e.mark(st.node.ID, StatusCompleted, out, "")
+	e.mark(st.node.ID, StatusCompleted, result.Output, "")
 	return nil
 }
 

@@ -43,13 +43,17 @@ type ReviewInfo struct {
 
 // RunEvent is the wire/UI event: node lifecycle + run-level + review metadata.
 type RunEvent struct {
-	Seq    int             `json:"seq"`
-	RunID  string          `json:"runId"`
-	NodeID string          `json:"nodeId,omitempty"`
-	Status workflow.Status `json:"status"`
-	Output json.RawMessage `json:"output,omitempty"`
-	Error  string          `json:"error,omitempty"`
-	Review *ReviewInfo     `json:"review,omitempty"`
+	Seq     int             `json:"seq"`
+	RunID   string          `json:"runId"`
+	NodeID  string          `json:"nodeId,omitempty"`
+	Status  workflow.Status `json:"status"`
+	Output  json.RawMessage `json:"output,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Review  *ReviewInfo     `json:"review,omitempty"`
+	Preview *struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	} `json:"preview,omitempty"`
 }
 
 // RunSubscriber receives live events for one run (a WS connection's channel).

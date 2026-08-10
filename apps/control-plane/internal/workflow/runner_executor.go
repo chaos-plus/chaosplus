@@ -58,16 +58,14 @@ func (r *RunnerExecutor) WithSpawnTimeout(idle, max time.Duration) *RunnerExecut
 	return r
 }
 
-func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
+func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	r.mu.Lock()
 	r.seq++
 	spawnID := fmt.Sprintf("%s-%s-%d", r.runID, node.ID, r.seq)
 	r.mu.Unlock()
 
-	// PRD §6.1.1: validate input against InputSpec BEFORE execution.
-	// Missing required inputs = fail fast, don't waste an agent call.
 	if err := r.validateInputs(input, node); err != nil {
-		return nil, fmt.Errorf("node %s: input validation: %w", node.ID, err)
+		return AgentResult{}, fmt.Errorf("node %s: input validation: %w", node.ID, err)
 	}
 
 	// Per-node machine selection: pick the best machine for this executor type.
@@ -97,27 +95,27 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		// On timeout, tell the runner to stop the stray session so it doesn't
 		// keep burning tokens/CPU after we've given up on it.
 		_ = r.link.Kill(context.Background(), runnerID, spawnID)
-		return nil, fmt.Errorf("node %s: spawn: %w", node.ID, err)
+		return AgentResult{}, fmt.Errorf("node %s: spawn: %w", node.ID, err)
 	}
 	if !res.OK {
-		return nil, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, res.Error)
+		return AgentResult{}, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, res.Error)
 	}
 
 	out, err := r.link.ReadArtifact(ctx, runnerID, spawnID, "output.json")
 	if err != nil {
-		return nil, fmt.Errorf("node %s: read output.json: %w", node.ID, err)
+		return AgentResult{}, fmt.Errorf("node %s: read output.json: %w", node.ID, err)
 	}
 	// Real agents often write a UTF-8 BOM (EF BB BF) ahead of the JSON — strip
 	// it before validating so the object survives round-trips.
 	out = bytes.TrimPrefix(out, []byte{0xEF, 0xBB, 0xBF})
 	if !json.Valid(out) {
-		return nil, fmt.Errorf("node %s: output.json is not valid JSON", node.ID)
+		return AgentResult{}, fmt.Errorf("node %s: output.json is not valid JSON", node.ID)
 	}
 
 	// PRD §10/§11: validate output against outputSpec.produces BEFORE trusting
 	// the agent's self-claim. Required artifacts must exist and match declared type.
 	if err := r.validateProduces(ctx, node, runnerID, spawnID, out); err != nil {
-		return nil, fmt.Errorf("node %s: output validation: %w", node.ID, err)
+		return AgentResult{}, fmt.Errorf("node %s: output validation: %w", node.ID, err)
 	}
 
 	// PRD F.5 outputValidator ('cmd:<template>'): the agent's self-claim is not
@@ -127,7 +125,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	if v := validatorCmd(node); v != "" {
 		res, err := r.link.RunCmd(ctx, runnerID, spawnID, v, 120000)
 		if err != nil {
-			return nil, fmt.Errorf("node %s: validator: %w", node.ID, err)
+			return AgentResult{}, fmt.Errorf("node %s: validator: %w", node.ID, err)
 		}
 		if res.ExitCode != 0 {
 			detail := strings.TrimSpace(res.Stderr)
@@ -137,11 +135,11 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 			if detail == "" {
 				detail = fmt.Sprintf("exit %d", res.ExitCode)
 			}
-			return nil, fmt.Errorf("node %s: validator failed: %s", node.ID, detail)
+			return AgentResult{}, fmt.Errorf("node %s: validator failed: %s", node.ID, detail)
 		}
 		out, _ = json.Marshal(map[string]any{"result": "passed"})
 	}
-	return out, nil
+	return AgentResult{Output: out, Preview: res.Preview}, nil
 }
 
 // validateProduces reads each required artifact declared in outputSpec.produces

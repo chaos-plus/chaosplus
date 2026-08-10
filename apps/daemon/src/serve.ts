@@ -127,14 +127,22 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
   }
   const done = agent.events.find((ev) => ev.type === "done");
   const err = agent.events.find((ev) => ev.type === "error");
+  // Extract inline preview from agent output (first text/message event).
+  let preview: { type: string; content: string } | undefined;
+  const msgs = agent.events.filter((e) => e.type === "message");
+  if (msgs.length > 0) {
+    const first = (msgs[0] as { text: string }).text.slice(0, 500);
+    preview = { type: "text", content: first };
+  }
+
   transport.publish({
     type: "spawn-done",
     spawnId,
     ok: done?.ok ?? false,
     exitCode: done?.exitCode ?? 1,
-    // 成本要随完成事件上报,控制面才能汇总今日花费(PRD D.1)。
     ...(done && "costUsd" in done && done.costUsd != null ? { costUsd: done.costUsd } : {}),
     ...(done?.ok === false || err ? { error: err && "message" in err ? err.message : "no done event" } : {}),
+    ...(preview ? { preview } : {}),
   });
   sessions.delete(spawnId);
   manager.remove(agentId);

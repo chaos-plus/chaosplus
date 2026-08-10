@@ -168,6 +168,10 @@ type SpawnResult struct {
 	OK       bool
 	ExitCode int
 	Error    string
+	Preview  *struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
 }
 
 // SpawnWaitOption configures activity-based timeout on SpawnAndWait.
@@ -236,6 +240,10 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 				OK       *bool  `json:"ok"`
 				ExitCode int    `json:"exitCode"`
 				Message  string `json:"message"`
+				Preview  *struct {
+					Type    string `json:"type"`
+					Content string `json:"content"`
+				} `json:"preview,omitempty"`
 			}
 			if err := json.Unmarshal(ev.Payload, &p); err != nil {
 				continue
@@ -248,7 +256,7 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 			switch ev.Type {
 			case "spawn-done":
 				ok := p.OK == nil || *p.OK
-				return SpawnResult{OK: ok, ExitCode: p.ExitCode}, nil
+				return SpawnResult{OK: ok, ExitCode: p.ExitCode, Preview: p.Preview}, nil
 			case "spawn-error":
 				return SpawnResult{OK: false, Error: p.Message}, nil
 			}

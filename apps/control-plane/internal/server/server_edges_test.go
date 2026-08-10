@@ -194,8 +194,8 @@ func TestExecuteWorkItemPausedRunLandsInReview(t *testing.T) {
 	defer stop()
 	m := NewRunManager(nc, nil, st, "runner-1")
 	m.baseFactory = func(_ string) workflow.Executor {
-		return &workflow.MockExecutor{RunAgentFn: func(_ context.Context, _ *workflow.Node, _ json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("agent blew up")
+		return &workflow.MockExecutor{RunAgentFn: func(_ context.Context, _ *workflow.Node, _ json.RawMessage) (workflow.AgentResult, error) {
+			return workflow.AgentResult{}, errors.New("agent blew up")
 		}}
 	}
 	if err := m.Start(ctx); err != nil {
@@ -231,12 +231,12 @@ func TestTrackRunProgressProjectsWhileRunning(t *testing.T) {
 	defer stop()
 	m := NewRunManager(nc, nil, st, "runner-1")
 	m.baseFactory = func(_ string) workflow.Executor {
-		return &workflow.MockExecutor{RunAgentFn: func(c context.Context, _ *workflow.Node, _ json.RawMessage) (json.RawMessage, error) {
+		return &workflow.MockExecutor{RunAgentFn: func(c context.Context, _ *workflow.Node, _ json.RawMessage) (workflow.AgentResult, error) {
 			select {
 			case <-time.After(5 * time.Second): // 跨过至少两次 2s 轮询
 			case <-c.Done():
 			}
-			return json.RawMessage(`{"ok":true}`), nil
+			return workflow.AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
 		}}
 	}
 	if err := m.Start(ctx); err != nil {

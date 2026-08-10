@@ -32,25 +32,25 @@ func TestSoftwareDevAgileEndToEnd(t *testing.T) {
 	def := loadExample(t)
 	attempts := map[string]int{}
 	e, err := NewEngine(def, &MockExecutor{
-		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (json.RawMessage, error) {
+		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (AgentResult, error) {
 			switch n.Agent.Role {
 			case "pm":
 				if n.ID == "sprint-plan" {
-					return json.RawMessage(`{"tasks":["fe","be","mobile"]}`), nil
+					return AgentResult{Output: json.RawMessage(`{"tasks":["fe","be","mobile"]}`)}, nil
 				}
-				return json.RawMessage(`{"done":true}`), nil
+				return AgentResult{Output: json.RawMessage(`{"done":true}`)}, nil
 			case "arch":
-				return json.RawMessage(`{"done":true}`), nil
+				return AgentResult{Output: json.RawMessage(`{"done":true}`)}, nil
 			case "coder":
-				return json.RawMessage(`{"ok":true}`), nil
+				return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
 			case "qa":
 				attempts["qa"]++
 				if attempts["qa"] < 2 {
-					return json.RawMessage(`{"result":"failed"}`), nil
+					return AgentResult{Output: json.RawMessage(`{"result":"failed"}`)}, nil
 				}
-				return json.RawMessage(`{"result":"passed"}`), nil
+				return AgentResult{Output: json.RawMessage(`{"result":"passed"}`)}, nil
 			}
-			return json.RawMessage(`{"ok":true}`), nil
+			return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
 		},
 	})
 	if err != nil {

@@ -20,11 +20,15 @@ const (
 
 // Event is one node lifecycle event in run order (PRD event log §15.1).
 type Event struct {
-	Seq    int             `json:"seq"`
-	NodeID string          `json:"nodeId"`
-	Status Status          `json:"status"`
-	Output json.RawMessage `json:"output,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	Seq     int             `json:"seq"`
+	NodeID  string          `json:"nodeId"`
+	Status  Status          `json:"status"`
+	Output  json.RawMessage `json:"output,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Preview *struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	} `json:"preview,omitempty"`
 }
 
 type nodeState struct {

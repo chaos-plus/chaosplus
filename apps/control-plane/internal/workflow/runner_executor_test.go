@@ -118,11 +118,11 @@ func TestRunnerExecutorReadsAgentOutput(t *testing.T) {
 		t.Fatalf("RunAgent: %v", err)
 	}
 	var got map[string]any
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("output not JSON: %s", out)
+	if err := json.Unmarshal(out.Output, &got); err != nil {
+		t.Fatalf("output not JSON: %s", string(out.Output))
 	}
 	if got["summary"] != "done" {
-		t.Fatalf("unexpected output: %s", out)
+		t.Fatalf("unexpected output: %s", string(out.Output))
 	}
 }
 
@@ -143,8 +143,8 @@ func TestRunnerExecutorAppliesOutputValidator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validator pass should succeed: %v", err)
 	}
-	if !strings.Contains(string(out), "passed") && !strings.Contains(string(out), "ok") {
-		t.Fatalf("unexpected validated output: %s", out)
+	if !strings.Contains(string(out.Output), "passed") && !strings.Contains(string(out.Output), "ok") {
+		t.Fatalf("unexpected validated output: %s", string(out.Output))
 	}
 
 	fail := newLink(t, `{"ok":true}`, true, 1)
@@ -214,8 +214,8 @@ func TestRunnerExecutorAcceptsSatisfiedRequiredProduces(t *testing.T) {
 		t.Fatalf("RunAgent should succeed when required artifact exists: %v", err)
 	}
 	var got map[string]any
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("output not JSON: %s", out)
+	if err := json.Unmarshal(out.Output, &got); err != nil {
+		t.Fatalf("output not JSON: %s", string(out.Output))
 	}
 }
 

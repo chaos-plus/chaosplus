@@ -143,7 +143,7 @@ func NewApprovalExecutor(base Executor, broker *ApprovalBroker) *ApprovalExecuto
 	return &ApprovalExecutor{base: base, broker: broker}
 }
 
-func (a *ApprovalExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (json.RawMessage, error) {
+func (a *ApprovalExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	return a.base.RunAgent(ctx, node, input)
 }
 
