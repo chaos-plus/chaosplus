@@ -143,10 +143,17 @@ type RunManager struct {
 	seq         int
 	sub         *nats.Subscription
 	baseFactory func(runID string) workflow.Executor // test seam; nil → RunnerExecutor
+	picker      workflow.MachinePicker               // per-node machine selector (nil = use runnerID)
 }
 
 func NewRunManager(nc *nats.Conn, link workflow.RunnerLink, st *store.Store, runnerID string) *RunManager {
 	return &RunManager{nc: nc, link: link, st: st, runnerID: runnerID, runs: make(map[string]*Run)}
+}
+
+// SetMachinePicker configures per-node machine dispatch. When set, each agent
+// node in a workflow run is dispatched to the best machine for its executor type.
+func (m *RunManager) SetMachinePicker(p workflow.MachinePicker) {
+	m.picker = p
 }
 
 // Start subscribes chaos.run.*.evt and fans out each event to the matching
@@ -284,7 +291,8 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			}
 			runnerID = reg[0]
 		}
-		base = workflow.NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID)
+		base = workflow.NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID).
+			WithMachinePicker(m.picker)
 	}
 	exec := workflow.NewApprovalExecutor(base, broker)
 

@@ -17,13 +17,19 @@ import (
 // deliverable to output.json in the workspace; RunnerExecutor reads it back
 // after spawn-done, so downstream condition/transform nodes see real output.
 //
+// MachinePicker selects a runner for a given executor type. Returns "" if no
+// machine supports the requested executor — the caller should fall back to the
+// default runnerID.
+type MachinePicker func(executorType string) string
+
 // The engine runs synchronously, so at most one SpawnAndWait is in flight and
 // draining the gateway's event stream is safe.
 type RunnerExecutor struct {
 	link      RunnerLink
-	runnerID  string
+	runnerID  string // default runner (fallback when picker returns "" or nil)
 	workspace string // cwd every agent spawns in (workspace root, PRD artifact paths resolve here)
 	runID     string
+	picker    MachinePicker // per-node machine selection (nil = always use runnerID)
 	idle      time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
 	max       time.Duration // per-spawn absolute cap; 0 = none
 	seq       int
@@ -33,6 +39,14 @@ type RunnerExecutor struct {
 // NewRunnerExecutor wires an Executor to one runner link + workspace for a run.
 func NewRunnerExecutor(link RunnerLink, runnerID, workspace, runID string) *RunnerExecutor {
 	return &RunnerExecutor{link: link, runnerID: runnerID, workspace: workspace, runID: runID}
+}
+
+// WithMachinePicker sets a per-node machine selector. When set, each RunAgent
+// call picks a machine based on the node's executor type instead of always
+// using the default runnerID. This enables multi-machine workflow runs.
+func (r *RunnerExecutor) WithMachinePicker(p MachinePicker) *RunnerExecutor {
+	r.picker = p
+	return r
 }
 
 // WithSpawnTimeout sets the per-spawn idle timeout (reset on live activity) and
@@ -50,8 +64,26 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	spawnID := fmt.Sprintf("%s-%s-%d", r.runID, node.ID, r.seq)
 	r.mu.Unlock()
 
+	// PRD §6.1.1: validate input against InputSpec BEFORE execution.
+	// Missing required inputs = fail fast, don't waste an agent call.
+	if err := r.validateInputs(input, node); err != nil {
+		return nil, fmt.Errorf("node %s: input validation: %w", node.ID, err)
+	}
+
+	// Per-node machine selection: pick the best machine for this executor type.
+	runnerID := r.runnerID
+	if r.picker != nil {
+		execType := "mock"
+		if node.Agent != nil && node.Agent.Executor != "" {
+			execType = node.Agent.Executor
+		}
+		if picked := r.picker(execType); picked != "" {
+			runnerID = picked
+		}
+	}
+
 	prompt := r.buildPrompt(node, input)
-	res, err := r.link.SpawnAndWait(ctx, r.runnerID, gateway.Spawn{
+	res, err := r.link.SpawnAndWait(ctx, runnerID, gateway.Spawn{
 		RunID:        r.runID,
 		NodeID:       node.ID,
 		Attempt:      1,
@@ -64,14 +96,14 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	if err != nil {
 		// On timeout, tell the runner to stop the stray session so it doesn't
 		// keep burning tokens/CPU after we've given up on it.
-		_ = r.link.Kill(context.Background(), r.runnerID, spawnID)
+		_ = r.link.Kill(context.Background(), runnerID, spawnID)
 		return nil, fmt.Errorf("node %s: spawn: %w", node.ID, err)
 	}
 	if !res.OK {
 		return nil, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, res.Error)
 	}
 
-	out, err := r.link.ReadArtifact(ctx, r.runnerID, spawnID, "output.json")
+	out, err := r.link.ReadArtifact(ctx, runnerID, spawnID, "output.json")
 	if err != nil {
 		return nil, fmt.Errorf("node %s: read output.json: %w", node.ID, err)
 	}
@@ -84,7 +116,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 
 	// PRD §10/§11: validate output against outputSpec.produces BEFORE trusting
 	// the agent's self-claim. Required artifacts must exist and match declared type.
-	if err := r.validateProduces(ctx, node, spawnID, out); err != nil {
+	if err := r.validateProduces(ctx, node, runnerID, spawnID, out); err != nil {
 		return nil, fmt.Errorf("node %s: output validation: %w", node.ID, err)
 	}
 
@@ -93,7 +125,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	// node. Pass overrides the output with {"result":"passed"} so downstream
 	// condition/loop nodes see the validator's verdict, not the agent's words.
 	if v := validatorCmd(node); v != "" {
-		res, err := r.link.RunCmd(ctx, r.runnerID, spawnID, v, 120000)
+		res, err := r.link.RunCmd(ctx, runnerID, spawnID, v, 120000)
 		if err != nil {
 			return nil, fmt.Errorf("node %s: validator: %w", node.ID, err)
 		}
@@ -115,7 +147,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 // validateProduces reads each required artifact declared in outputSpec.produces
 // and validates it exists and matches its declared type. This is the built-in
 // trust boundary — it runs unconditionally, before any optional cmd: validator.
-func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, spawnID string, main json.RawMessage) error {
+func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runnerID, spawnID string, main json.RawMessage) error {
 	if node.Agent == nil || node.Agent.OutputSpec == nil || len(node.Agent.OutputSpec.Produces) == 0 {
 		return nil
 	}
@@ -133,7 +165,7 @@ func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, spawn
 		if path == "output.json" {
 			body = main
 		} else {
-			b, err := r.link.ReadArtifact(ctx, r.runnerID, spawnID, path)
+			b, err := r.link.ReadArtifact(ctx, runnerID, spawnID, path)
 			if err != nil {
 				return fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
 			}
@@ -161,6 +193,31 @@ func (r *RunnerExecutor) Approve(ctx context.Context, node *Node) (bool, error) 
 	return false, fmt.Errorf("Approve() requires ApprovalExecutor wrapper: do not call RunnerExecutor.Approve() directly")
 }
 
+// validateInputs checks that all required consumed artifacts from InputSpec
+// are present in the scope. Fail-fast before spawning an agent — avoids
+// wasting tokens on a run that can't succeed (PRD §6.1.1 InputSpec/Consumes).
+func (r *RunnerExecutor) validateInputs(input json.RawMessage, node *Node) error {
+	if node.Agent == nil || node.Agent.InputSpec == nil || len(node.Agent.InputSpec.Consumes) == 0 {
+		return nil
+	}
+	var scope map[string]any
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &scope); err != nil {
+			return fmt.Errorf("cannot parse input scope: %w", err)
+		}
+	}
+	for _, c := range node.Agent.InputSpec.Consumes {
+		if !c.Required {
+			continue
+		}
+		// Check input scope contains this artifact
+		if _, ok := scope[c.ID]; !ok {
+			return fmt.Errorf("required input artifact %q (%s) is missing from scope", c.ID, c.Type)
+		}
+	}
+	return nil
+}
+
 var _ Executor = (*RunnerExecutor)(nil)
 
 // validatorCmd extracts the 'cmd:' output-validator template from an agent
@@ -178,11 +235,39 @@ func validatorCmd(node *Node) string {
 
 // buildPrompt tells the agent what to produce and that its deliverable must
 // land in output.json (the read-back contract for the engine's node output).
+// When OutputSpec.Produces is configured, includes the required artifact spec
+// so the agent knows the exact schema and deliverables expected.
 func (r *RunnerExecutor) buildPrompt(node *Node, input json.RawMessage) string {
 	p := "Complete the task below. Your final deliverable MUST be written to the file `output.json` "
 	p += "in the workspace root, as a single JSON object. Do not put anything else in that file.\n\n"
 	if node.Agent.SystemPrompt != "" {
 		p += "Role: " + node.Agent.SystemPrompt + "\n\n"
+	}
+	if node.Agent.OutputSpec != nil && len(node.Agent.OutputSpec.Produces) > 0 {
+		p += "Required deliverables (outputSpec.produces):\n"
+		for _, ps := range node.Agent.OutputSpec.Produces {
+			status := ""
+			if !ps.Required {
+				status = " (optional)"
+			}
+			path := ps.Path
+			if path == "" {
+				path = ps.ID
+			}
+			p += fmt.Sprintf("  - %s: type=%s, path=%s%s\n", ps.ID, ps.Type, path, status)
+		}
+		// Include schema hints from ArtifactSpecs
+		if len(node.Agent.ArtifactSpecs) > 0 {
+			p += "\nArtifact schemas (must conform):\n"
+			for id, as := range node.Agent.ArtifactSpecs {
+				schema := ""
+				if as.SchemaRef != "" {
+					schema = fmt.Sprintf(" (schema: %s)", as.SchemaRef)
+				}
+				p += fmt.Sprintf("  - %s: type=%s%s\n", id, as.Type, schema)
+			}
+		}
+		p += "\n"
 	}
 	if len(input) > 0 {
 		p += "Context (JSON):\n" + string(input) + "\n"

@@ -78,6 +78,17 @@ func main() {
 	}
 	link := &workflow.NatsRunnerLink{G: g}
 	rm := server.NewRunManager(nc, link, st, envOr("CONTROL_RUNNER_ID", ""))
+	// Per-node machine dispatch: match node executor to machine runtimes.
+	rm.SetMachinePicker(func(executorType string) string {
+		for _, id := range hub.RegisteredRunners() {
+			for _, rt := range hub.MachineRuntimes(id) {
+				if rt == executorType {
+					return id
+				}
+			}
+		}
+		return "" // fall back to default runnerID
+	})
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
