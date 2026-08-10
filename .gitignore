@@ -55,3 +55,8 @@ Thumbs.db
 
 /*.png
 /.play*
+
+# JS workspace deps & build
+node_modules/
+apps/admin-ai/**/dist/
+bun.lock
