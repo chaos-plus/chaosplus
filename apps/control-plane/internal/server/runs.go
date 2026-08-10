@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -240,7 +241,13 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	if req.WorkflowJSON != nil {
 		raw = req.WorkflowJSON
 	} else if req.WorkflowFile != "" {
-		b, err := os.ReadFile(req.WorkflowFile)
+		if !filepath.IsLocal(req.WorkflowFile) {
+				return nil, fmt.Errorf("workflowFile must be a local path")
+			}
+			if !filepath.IsLocal(req.WorkflowFile) {
+				return nil, fmt.Errorf("workflowFile must be a local path")
+			}
+			b, err := os.ReadFile(req.WorkflowFile)
 		if err != nil {
 			return nil, fmt.Errorf("read workflow: %w", err)
 		}

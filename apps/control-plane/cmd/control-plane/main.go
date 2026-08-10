@@ -30,7 +30,8 @@ func main() {
 	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")
 
 	url := envOr("CONTROL_NATS_URL", "nats://127.0.0.1:4222")
-	nc, err := nats.Connect(url, nats.Name("chaosplus-control-plane"), nats.Timeout(5*time.Second))
+	nc, err := nats.Connect(url, nats.Name("chaosplus-control-plane"), nats.Timeout(5*time.Second),
+		nats.NoEcho()) // prevent self-receive of published run events
 	if err != nil {
 		log.Fatalf("connect NATS %s: %v", url, err)
 	}
@@ -102,7 +103,10 @@ func main() {
 		rm.LoadFromStore(ctx)
 	}
 
-	chat := server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
+	var chat *server.ChatService
+	if st != nil {
+		chat = server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
+	}
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
 	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}
 	go func() {

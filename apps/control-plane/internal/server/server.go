@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,13 +26,22 @@ var upgrader = websocket.Upgrader{
 var AuthToken string
 
 // authMiddleware wraps h with Bearer token validation. Skipped when AuthToken
-// is empty (desktop profile). WS upgrade routes must handle auth inline because
-// the browser WebSocket API cannot set custom headers.
+// is empty (desktop profile). Machine WebSocket onboarding routes are exempt —
+// they validate their own machine tokens.
+var authExemptPrefixes = []string{"/api/machines/ws", "/api/machines/tokens"}
+
 func authMiddleware(h http.Handler) http.Handler {
 	if AuthToken == "" {
-		return h // desktop/localhost — no auth gate
+		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Machine onboarding carries its own token; control-plane token is not required.
+		for _, prefix := range authExemptPrefixes {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
 		if !validAuth(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="control-plane"`)
 			writeErr(w, 401, "unauthorized")
