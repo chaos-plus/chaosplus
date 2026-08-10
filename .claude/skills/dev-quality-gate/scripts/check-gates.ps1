@@ -183,8 +183,8 @@ function Resolve-Scopes {
     $paths = @($paths | Where-Object { $_ } | Sort-Object -Unique)
     if ($paths.Count -eq 0) { return @{ backend = $true; frontend = $true; docs = $true } }
     return @{
-        backend = [bool]($paths | Where-Object { $_ -match '^(cmd|internal|pkg|deploy)/|^go\.(mod|sum)$|^Dockerfile$|^\.claude/skills/dev-backend/' })
-        frontend = [bool]($paths | Where-Object { $_ -match '^apps/admin/|^\.claude/skills/dev-frontend/' })
+        backend = [bool]($paths | Where-Object { $_ -match '^apps/(server|server-ai)/|^\.claude/skills/dev-backend/' })
+        frontend = [bool]($paths | Where-Object { $_ -match '^apps/admin-ai/|^apps/admin/|^\.claude/skills/dev-frontend/' })
         docs = [bool]($paths | Where-Object { $_ -match '^apps/docs/|^README\.md$|^\.claude/skills/dev-docs/' })
     }
 }
@@ -226,6 +226,13 @@ if ($selected.backend) {
         foreach ($goMod in $goModules) {
             $modRoot = Join-Path $repoRoot $goMod
             Invoke-NativeStep "Go race tests ($goMod)" $modRoot 'go' @('test', '-race', '-covermode=atomic', "./...")
+            $covOut = & go test -cover './...' 2>$null | Select-String 'coverage:'
+            foreach ($line in $covOut) {
+                $m = [regex]::Match($line, '([0-9]+(?:\.[0-9]+)?)%')
+                if ($m.Success -and [double]$m.Groups[1].Value -lt 90) {
+                    $failures.Add("Go coverage ($goMod) is $($m.Groups[1].Value)%, below required 90%.")
+                }
+            }
         }
         $govulncheck = Get-Command govulncheck -ErrorAction SilentlyContinue
         $scannerCommand = if ($govulncheck) { $govulncheck.Source } else { '' }
@@ -248,9 +255,9 @@ if ($selected.backend) {
 }
 
 if ($selected.frontend) {
-    $adminRoot = Join-Path $repoRoot 'apps\admin'
+    $adminRoot = Join-Path $repoRoot 'apps\admin-ai'
     foreach ($file in @('Dockerfile', 'nginx.conf')) {
-        if (-not (Test-Path (Join-Path $adminRoot $file))) { $failures.Add("Frontend deployment file is missing: apps/admin/$file") }
+        if (-not (Test-Path (Join-Path $adminRoot $file))) { $failures.Add("Frontend deployment file is missing: apps/admin-ai/$file") }
     }
     Invoke-NativeStep 'Frontend lint' $adminRoot 'bun' @('run', 'lint')
     Invoke-NativeStep 'Frontend typecheck' $adminRoot 'bun' @('run', 'typecheck')

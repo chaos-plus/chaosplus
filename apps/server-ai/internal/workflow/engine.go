@@ -283,7 +283,17 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 	st := e.states[id]
 	st.status = status
 	e.seq++
-	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: st.attempts}
+	// Attempt = 0-based index of the attempt this event belongs to. running/
+	// completed happen before the failure counter advances; retrying/failed
+	// marks fire after st.attempts++ (scheduleRetry/exhaustion), so back off one.
+	attempt := st.attempts
+	if status == StatusRetrying || status == StatusFailed {
+		attempt = st.attempts - 1
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: attempt}
 	if status == StatusCompleted && len(output) > 0 {
 		ev.Output = output
 	}
