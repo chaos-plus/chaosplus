@@ -92,7 +92,7 @@ authn:
         allowed_attestation_formats: [] # accepted attestation statement formats; empty allows every format
         allowed_aaguid: [] # accepted authenticator AAGUID hex values; empty allows every authenticator
     notification:
-        url: "http://127.0.0.1:19999/hook" # dev mail bridge
+        url: "http://127.0.0.1:8081/api/email/notification" # server-ai email bridge
         authorization: "" # optional Authorization header; prefer authorization_file
         authorization_file: "" # file containing the optional notification Authorization header
         poll_interval: 5s # notification outbox polling interval

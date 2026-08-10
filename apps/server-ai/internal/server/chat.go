@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -233,7 +232,7 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 			writeErr(w, 400, "email and inviteUrl are required")
 			return
 		}
-		if err := sendInviteEmail(body.Email, body.EntityName, body.InviteURL); err != nil {
+		if err := cs.SendInviteEmail(r.Context(), body.Email, body.EntityName, body.InviteURL); err != nil {
 			slog.Error("send invite email", "email", body.Email, "err", err)
 			writeErr(w, 500, "发送邀请邮件失败")
 			return
@@ -372,6 +371,8 @@ func (cs *ChatService) register(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, items)
 	})
+
+	cs.registerEmailRoutes(mux)
 }
 
 // createWorkItem 创建工作项;关联频道时向群聊推送订阅通知。
@@ -839,21 +840,6 @@ func (cs *ChatService) relayRunEvents(ctx context.Context, it *store.WorkItem, r
 		}
 	}
 	return cursor
-}
-
-// sendInviteEmail 用 SMTP(MailHog)给目标邮箱发品牌 HTML 邀请邮件。
-func sendInviteEmail(email, entityName, inviteURL string) error {
-	host := os.Getenv("MAILBRIDGE_SMTP")
-	if host == "" {
-		return errors.New("MAILBRIDGE_SMTP 未配置")
-	}
-	html := `<!doctype html><html lang="zh"><body style="margin:0;background:#f5f3ff;font-family:Inter,sans-serif">
-	<table style="max-width:480px;margin:32px auto;background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(99,102,241,.12)"><tr><td style="padding:28px 32px;background:linear-gradient(135deg,#6366f1,#8b5cf6)"><p style="margin:0;color:#fff;font-size:20px;font-weight:700">chaos.plus</p></td></tr>
-	<tr><td style="padding:32px"><h1 style="margin:0 0 8px;font-size:22px;color:#312e81">你被邀请加入实例</h1>
-	<p style="margin:0 0 20px;font-size:14px;color:#6b7280">` + entityName + ` 邀请你加入,点击按钮开始协作。</p>
-	<a href="` + inviteURL + `" style="display:inline-block;background:#6366f1;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none">加入实例</a></td></tr></table></body></html>`
-	msg := "From: chaosplus@local\r\nTo: " + email + "\r\nSubject: " + "邀请你加入 chaos.plus 实例" + "\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n" + html
-	return smtp.SendMail(host, nil, "chaosplus@local", []string{email}, []byte(msg))
 }
 
 // runArtifacts 列出送审内容:审批节点自己不产出 artifact,要看它的上游节点

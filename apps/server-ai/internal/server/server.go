@@ -28,7 +28,7 @@ var AuthToken string
 // authMiddleware wraps h with Bearer token validation. Skipped when AuthToken
 // is empty (desktop profile). Machine WebSocket onboarding routes are exempt —
 // they validate their own machine tokens.
-var authExemptPrefixes = []string{"/api/machines/ws", "/api/machines/tokens"}
+var authExemptPrefixes = []string{"/api/machines/ws", "/api/machines/tokens", "/api/email/notification"}
 
 func authMiddleware(h http.Handler) http.Handler {
 	if AuthToken == "" {
