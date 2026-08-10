@@ -40,6 +40,13 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 			subs:    make(map[RunSubscriber]struct{}),
 			created: time.UnixMilli(rd.CreatedAt),
 		}
+		// Rehydrated waiting_approval runs have no live DAG to advance (the
+		// engine goroutine is not resumed); showing an unresolvable approval
+		// button is worse than surfacing the run as paused (v1 limitation).
+		if run.status == RunWaitingApproval {
+			run.status = RunPaused
+			_ = m.st.UpdateRunStatus(ctx, rd.ID, string(RunPaused))
+		}
 		// Preserve the original per-run event seqs (they feed idempotency keys):
 		// rewriting them would collide with pre-restart events and silently drop
 		// new ones (review: >1000-event runs truncated). Load well beyond any
