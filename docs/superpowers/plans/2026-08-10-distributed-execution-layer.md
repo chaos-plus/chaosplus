@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expand chaosplus daemon with pluggable non-Agent executors (script/http/cli) + build a visual workflow editor in Web UI. Control-plane scheduling layer is already solid (auth, persistence, NATS gateway, artifact validation).
+**Goal:** Expand chaosplus runner with pluggable non-Agent executors (script/http/cli) + build a visual workflow editor in Web UI. Control-plane scheduling layer is already solid (auth, persistence, NATS gateway, artifact validation).
 
-**Architecture:** Three layers confirmed — Web (React Flow visual editor + monitoring), Server (Go control-plane: schedule/dispatch/persist), Daemon (TS/Bun: pluggable executors over NATS/WS). Executor types: agent (Claude SDK, Codex SDK, Mastra, Gemini CLI), script (shell/python/node), http (REST/GraphQL/gRPC). Node `executor` field in WorkflowDef determines dispatch target.
+**Architecture:** Three layers confirmed — Web (React Flow visual editor + monitoring), Server (Go server-ai: schedule/dispatch/persist), Daemon (TS/Bun: pluggable executors over NATS/WS). Executor types: agent (Claude SDK, Codex SDK, Mastra, Gemini CLI), script (shell/python/node), http (REST/GraphQL/gRPC). Node `executor` field in WorkflowDef determines dispatch target.
 
 **Tech Stack:** React 19 + Vite + shadcn/ui + Tailwind + @xyflow/react (Web), Go 1.26 + chi + NATS (Server), TypeScript + Bun + Mastra + Claude/Codex SDK (Daemon).
 
@@ -24,9 +24,9 @@
 ### Task 1: Script executor backend
 
 **Files:**
-- Create: `apps/daemon/src/backends/script.ts`
-- Modify: `apps/daemon/src/backends/index.ts` (register "script" backend)
-- Test: `apps/daemon/src/backends/script.test.ts`
+- Create: `apps/runner/src/backends/script.ts`
+- Modify: `apps/runner/src/backends/index.ts` (register "script" backend)
+- Test: `apps/runner/src/backends/script.test.ts`
 
 **Interfaces:**
 - Consumes: `AgentTask` from `../types` (uses `prompt` as script body, `cwd` as working dir, `signal` for abort)
@@ -35,7 +35,7 @@
 - [ ] **Step 1: Write the script executor**
 
 ```typescript
-// apps/daemon/src/backends/script.ts
+// apps/runner/src/backends/script.ts
 import { execFile, type ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentTask } from "../types";
 
@@ -90,7 +90,7 @@ export async function* runScript(task: AgentTask): AsyncGenerator<AgentEvent> {
 - [ ] **Step 2: Register in backend registry**
 
 ```typescript
-// apps/daemon/src/backends/index.ts — add:
+// apps/runner/src/backends/index.ts — add:
 import { runScript } from "./script";
 
 export const BACKENDS: Record<string, AgentBackend> = {
@@ -104,14 +104,14 @@ export const BACKENDS: Record<string, AgentBackend> = {
 - [ ] **Step 3: Run tests**
 
 ```bash
-cd apps/daemon && bun test src/backends/script.test.ts
+cd apps/runner && bun test src/backends/script.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/daemon/src/backends/
-git commit -m "feat(daemon): add script executor backend (shell/python/node/bun)"
+git add apps/runner/src/backends/
+git commit -m "feat(runner): add script executor backend (shell/python/node/bun)"
 ```
 
 ---
@@ -119,9 +119,9 @@ git commit -m "feat(daemon): add script executor backend (shell/python/node/bun)
 ### Task 2: HTTP executor backend
 
 **Files:**
-- Create: `apps/daemon/src/backends/http.ts`
-- Modify: `apps/daemon/src/backends/index.ts` (register "http" backend)
-- Test: `apps/daemon/src/backends/http.test.ts`
+- Create: `apps/runner/src/backends/http.ts`
+- Modify: `apps/runner/src/backends/index.ts` (register "http" backend)
+- Test: `apps/runner/src/backends/http.test.ts`
 
 **Interfaces:**
 - Consumes: `AgentTask` — `prompt` as JSON `{ method, url, headers?, body? }`, `signal` for abort
@@ -130,7 +130,7 @@ git commit -m "feat(daemon): add script executor backend (shell/python/node/bun)
 - [ ] **Step 1: Write the HTTP executor**
 
 ```typescript
-// apps/daemon/src/backends/http.ts
+// apps/runner/src/backends/http.ts
 import type { AgentEvent, AgentTask } from "../types";
 
 export async function* runHttp(task: AgentTask): AsyncGenerator<AgentEvent> {
@@ -158,7 +158,7 @@ export async function* runHttp(task: AgentTask): AsyncGenerator<AgentEvent> {
 - [ ] **Step 2: Register**
 
 ```typescript
-// apps/daemon/src/backends/index.ts — add:
+// apps/runner/src/backends/index.ts — add:
 import { runHttp } from "./http";
 // ...
 http: runHttp,
@@ -167,14 +167,14 @@ http: runHttp,
 - [ ] **Step 3: Test**
 
 ```bash
-cd apps/daemon && bun test src/backends/http.test.ts
+cd apps/runner && bun test src/backends/http.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/daemon/src/backends/http.ts apps/daemon/src/backends/index.ts
-git commit -m "feat(daemon): add HTTP executor backend (REST/GraphQL)"
+git add apps/runner/src/backends/http.ts apps/runner/src/backends/index.ts
+git commit -m "feat(runner): add HTTP executor backend (REST/GraphQL)"
 ```
 
 ---
@@ -182,9 +182,9 @@ git commit -m "feat(daemon): add HTTP executor backend (REST/GraphQL)"
 ### Task 3: Mastra executor backend
 
 **Files:**
-- Create: `apps/daemon/src/backends/mastra.ts`
-- Modify: `apps/daemon/src/backends/index.ts` (register "mastra" backend)
-- Test: `apps/daemon/src/backends/mastra.test.ts`
+- Create: `apps/runner/src/backends/mastra.ts`
+- Modify: `apps/runner/src/backends/index.ts` (register "mastra" backend)
+- Test: `apps/runner/src/backends/mastra.test.ts`
 
 **Interfaces:**
 - Consumes: `AgentTask` — uses `prompt`, `systemPrompt`, `model`, `apiKey`
@@ -193,7 +193,7 @@ git commit -m "feat(daemon): add HTTP executor backend (REST/GraphQL)"
 - [ ] **Step 1: Write Mastra backend**
 
 ```typescript
-// apps/daemon/src/backends/mastra.ts
+// apps/runner/src/backends/mastra.ts
 import { Agent } from "@mastra/core/agent";
 import type { AgentEvent, AgentTask } from "../types";
 
@@ -221,25 +221,25 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
 - [ ] **Step 2: Register in BACKENDS**
 
 ```typescript
-// apps/daemon/src/backends/index.ts — add:
+// apps/runner/src/backends/index.ts — add:
 import { runMastra } from "./mastra";
 // ...
 mastra: runMastra,
 ```
 
-- [ ] **Step 3: Auto-detect Mastra on daemon startup**
+- [ ] **Step 3: Auto-detect Mastra on runner startup**
 
 ```typescript
-// apps/daemon/src/serve.ts — in runtimes detection, add:
+// apps/runner/src/serve.ts — in runtimes detection, add:
 "mastra",  // always available (pure API, no binary needed)
 ```
 
 - [ ] **Step 4: Test and commit**
 
 ```bash
-cd apps/daemon && bun test src/backends/mastra.test.ts
-git add apps/daemon/src/backends/mastra.ts apps/daemon/src/backends/index.ts apps/daemon/src/serve.ts
-git commit -m "feat(daemon): add Mastra executor backend (LLM API)"
+cd apps/runner && bun test src/backends/mastra.test.ts
+git add apps/runner/src/backends/mastra.ts apps/runner/src/backends/index.ts apps/runner/src/serve.ts
+git commit -m "feat(runner): add Mastra executor backend (LLM API)"
 ```
 
 ---
@@ -502,7 +502,7 @@ Button flow:
 
 - [ ] **Step 2: Handle "no runner" error**
 
-If all machines are offline, show toast: "没有在线 machine，请先启动 daemon" with a link to the machines page.
+If all machines are offline, show toast: "没有在线 machine，请先启动 runner" with a link to the machines page.
 
 - [ ] **Step 3: Smoke test — create simple workflow (trigger→agent), click run, see run in list**
 

@@ -63,7 +63,7 @@ GET/PUT /api/work-items/:id/progress           → 校准 estimate/查看自动 
 ## 5. 后端规范
 
 - Go:gofmt/goimports、`-race`、表驱动测试、**覆盖率 ≥80%**(work-item/attachment/okr/execute 路径)。
-- daemon(TS):测试覆盖率同后端要求(bun test,补 backends/transport 覆盖率)。
+- runner(TS):测试覆盖率同后端要求(bun test,补 backends/transport 覆盖率)。
 - 无 mock 交付:真实 claude 执行 + 真实验收。
 
 ## 6. 验收(真实,严禁 mock)
@@ -72,7 +72,7 @@ GET/PUT /api/work-items/:id/progress           → 校准 estimate/查看自动 
 2. 任务建子任务、设 estimate → 点「执行」→ 真实 claude 走 DAG → 进度自动更新 → done → 群聊通知。
 3. 上传图片/文件到任务 → 详情/群聊可预览;描述引用附件。
 4. OKR 建目标 + KR → 进度自动汇总。
-5. 后端 `go test -cover` ≥80%;daemon `bun test` 覆盖率达标。
+5. 后端 `go test -cover` ≥80%;runner `bun test` 覆盖率达标。
 
 ## 7. 待评审点
 

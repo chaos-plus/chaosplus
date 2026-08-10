@@ -168,7 +168,7 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 
 | 原始 ADR | v1 实际 | 原因 |
 |----------|---------|------|
-| Runner = Go 静态二进制 (C4) | daemon = TS/Bun | Mastra agent runtime 集成更快；Go 重写无 v1 用户收益 |
+| Runner = Go 静态二进制 (C4) | runner = TS/Bun | Mastra agent runtime 集成更快；Go 重写无 v1 用户收益 |
 | Admin = Next.js (C4/C9) | Vite SPA | 单页管理后台无需 SSR/ISR；shadcn/ui + tailwind 未变 |
 | DB 查询 = sqlc (C9) | goose 迁移 + 手写 SQL | SQLite-only 阶段 sqlc 收益低；Postgres 上线后再切 |
 | API = gRPC + grpc-gateway (C2) | NATS + HTTP/WS | 桌面单机 profile 下 gRPC 是过度设计；NATS 为零配置发现 |
@@ -718,17 +718,17 @@ CREATE TABLE feedback_log ( id TEXT PRIMARY KEY, artifact_id TEXT, execution_id 
 | 消息扇出 | 进程内 | 进程内 / NATS | NATS |
 | 离线 | 全内嵌，自包含可离线 | 可离线 | 在线 |
 
-**桌面壳职责**：监管内嵌 Go 进程（control-plane + runner 二进制）、端口、崩溃、升级；不硬依赖任何 cloud 专有服务（保离线——§29.5 Vibe Kanban/Bloop 教训：local-first 是被市场验证的护城河）。
+**桌面壳职责**：监管内嵌 Go 进程（server-ai + runner 二进制）、端口、崩溃、升级；不硬依赖任何 cloud 专有服务（保离线——§29.5 Vibe Kanban/Bloop 教训：local-first 是被市场验证的护城河）。
 
 ### 17.4 monorepo 结构
 
 ```
 /schema         protobuf/JSON Schema → codegen Go + TS（唯一契约源）
-/control-plane  (Go) API/引擎/调度/reconciler/会话Hub/数字人托管
+/server-ai  (Go) API/引擎/调度/reconciler/会话Hub/数字人托管
 /runner         (Go) ExecutionBackend/ArtifactStore/执行器适配器
 /cli            (Go) 静态二进制（chaosplus）
 /web            (Next.js + ShadCN + tailwindcss) UI/聊天/可视化编辑器[v2+]
-/desktop        (Tauri/Electron) 内嵌 control-plane+runner 二进制 + 起 web
+/desktop        (Tauri/Electron) 内嵌 server-ai+runner 二进制 + 起 web
 ```
 
 ---

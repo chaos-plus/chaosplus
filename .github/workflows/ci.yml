@@ -28,11 +28,11 @@ jobs:
       - name: Build
         run: go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/chaosplus-server
 
-  go-control-plane:
+  go-server-ai:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/control-plane
+        working-directory: apps/server-ai
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +47,7 @@ jobs:
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Build
-        run: go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/control-plane
+        run: go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/server-ai
 
   docker:
     runs-on: ubuntu-latest

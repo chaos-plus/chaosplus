@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node", "bun"],
+    "paths": {
+      "@workspace/ui/*": ["./src/*"]
+    }
+  },
+  "include": ["."],
+  // component-showcase.tsx and component-demo-renderer.tsx have a hard dependency on
+  // components/demos/** (dynamic imports of ~45 demo modules), which is explicitly out of
+  // scope for the P2 UI migration (deferred to P6). They are excluded from typecheck until
+  // demos/** is migrated; excluding them here does not affect apps/web, which does not
+  // import either file.
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/components/showcase/component-showcase.tsx",
+    "src/components/showcase/component-demo-renderer.tsx"
+  ]
+}

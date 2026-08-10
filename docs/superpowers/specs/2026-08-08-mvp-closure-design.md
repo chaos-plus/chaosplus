@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-从控制面 Web UI 发起一个静态 DAG 工作流 run,对真实执行器(engine→NATS→daemon→claude)运行,浏览器实时看到 DAG 节点进度,并在 `human_approval` 节点完成一次真人工审批(通过/拒绝)。达成 PRD J6→J10 的核心闭环。
+从控制面 Web UI 发起一个静态 DAG 工作流 run,对真实执行器(engine→NATS→runner→claude)运行,浏览器实时看到 DAG 节点进度,并在 `human_approval` 节点完成一次真人工审批(通过/拒绝)。达成 PRD J6→J10 的核心闭环。
 
 ## 2. 范围
 
@@ -32,7 +32,7 @@
 - 控制面内部 fan-out = **NATS**(PRD C3:cloud/self-hosted profile 的传输/扇出层)。引擎事件 → `chaos.run.{runID}.evt` → 控制面 server 订阅 → 按 runID 路由 → 推给 WS 客户端。集群:任意实例跑的引擎,任意实例挂的客户端都能收。
 - 新依赖:`gorilla/websocket`(唯一新增;Go stdlib 无 WS)。
 
-> **记录偏差**:PRD C3 称 desktop profile 进程内直连、不引入 NATS 硬依赖。当前实际部署(控制面↔daemon)本就以 NATS 为骨架,且为保留集群能力,本轮 run 事件 fan-out 走 NATS。若日后落纯 desktop 无-NATS profile,WS hub 改为进程内直投即可(改动很小)。
+> **记录偏差**:PRD C3 称 desktop profile 进程内直连、不引入 NATS 硬依赖。当前实际部署(控制面↔runner)本就以 NATS 为骨架,且为保留集群能力,本轮 run 事件 fan-out 走 NATS。若日后落纯 desktop 无-NATS profile,WS hub 改为进程内直投即可(改动很小)。
 
 ## 4. 组件
 
@@ -64,7 +64,7 @@ POST /api/runs/:id/approvals/:nodeID    → {approve, reason?} → 200 / 404 / 4
 - 审批解析:`POST approvals/:node` → broker.Resolve → 引擎继续。
 
 ### 4.4 单页 UI(嵌入 HTML)
-深色风格(与 daemon UI 一致)。左侧 run 列表;右侧发起表单(工作流文件路径 + workspace + context JSON)+ run 详情(节点卡按状态着色:pending/running/completed/failed/skipped/**waiting_approval**);审批卡 = 节点身份 + 上游产物路径/摘要 + 通过/拒绝 + reason 输入。WS 自动跟进,不轮询。
+深色风格(与 runner UI 一致)。左侧 run 列表;右侧发起表单(工作流文件路径 + workspace + context JSON)+ run 详情(节点卡按状态着色:pending/running/completed/failed/skipped/**waiting_approval**);审批卡 = 节点身份 + 上游产物路径/摘要 + 通过/拒绝 + reason 输入。WS 自动跟进,不轮询。
 
 ### 4.5 StateStore 落库(必做)
 - 引擎生命周期事件 + REVIEW_*/RUN_PAUSED 事件映射到既有 `events` 表(§16 结构),`run_id` 按 run 隔离,幂等键防重。复用 `store.Append`。
@@ -99,7 +99,7 @@ POST /api/runs/:id/approvals/:nodeID    → {approve, reason?} → 200 / 404 / 4
 
 - 控制面 = 唯一状态权威(P1):HTTP 处理器全走控制面,客户端不直连 StateStore。
 - 执行恒为静态 DAG:聊天/UI 是作者面,收敛到同一份 WorkflowDef JSON。
-- daemon 的 1v1 聊天 UI(SSE)为既存独立 dev 面,本轮不动,不计入 §9 IM/回灌需求。
+- runner 的 1v1 聊天 UI(SSE)为既存独立 dev 面,本轮不动,不计入 §9 IM/回灌需求。
 
 ## 9. 记录偏差 / defer 清单
 
@@ -115,9 +115,9 @@ POST /api/runs/:id/approvals/:nodeID    → {approve, reason?} → 200 / 404 / 4
 
 ## 10. 关键文件
 
-- `apps/control-plane/internal/workflow/engine.go`(OnEvent 钩子 + waiting_approval 状态)
-- `apps/control-plane/internal/workflow/approval.go`(新:broker + executor)
-- `apps/control-plane/internal/workflow/validate.go`(审批出边规则)
-- `apps/control-plane/internal/server/`(新:HTTP + WS + NATS 扇出 + RunManager + 嵌入 HTML)
-- `apps/control-plane/cmd/control-plane/main.go`(装配 HTTP)
+- `apps/server-ai/internal/workflow/engine.go`(OnEvent 钩子 + waiting_approval 状态)
+- `apps/server-ai/internal/workflow/approval.go`(新:broker + executor)
+- `apps/server-ai/internal/workflow/validate.go`(审批出边规则)
+- `apps/server-ai/internal/server/`(新:HTTP + WS + NATS 扇出 + RunManager + 嵌入 HTML)
+- `apps/server-ai/cmd/server-ai/main.go`(装配 HTTP)
 - 依赖:`gorilla/websocket`
