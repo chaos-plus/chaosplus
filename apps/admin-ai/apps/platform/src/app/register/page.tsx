@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react"
-import { ArrowLeft, Eye, EyeOff, MailCheck, ShieldCheck } from "lucide-react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
+import { ArrowLeft, Eye, EyeOff, RefreshCw, ShieldCheck } from "lucide-react"
 import { Link } from "react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -8,36 +8,81 @@ import { ThemeModeButton } from "../../components/theme-mode-button"
 import { ApiError, iamApi } from "../../lib/iam-api"
 
 export default function RegisterPage() {
+  const formRef = useRef<HTMLFormElement>(null)
   const [busy, setBusy] = useState(false)
-  const [complete, setComplete] = useState(false)
-  const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
+  const [codeSent, setCodeSent] = useState(false)
+  const [captchaId, setCaptchaId] = useState("")
+  const [captchaImage, setCaptchaImage] = useState("")
+  const [captchaCode, setCaptchaCode] = useState("")
   const [verifyMsg, setVerifyMsg] = useState("")
   const [visible, setVisible] = useState(false)
   const [error, setError] = useState("")
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setBusy(true)
-    setError("")
-    const data = new FormData(event.currentTarget)
+  const loadCaptcha = async () => {
+    try {
+      const c = await iamApi.captcha()
+      setCaptchaId(c.captcha_id)
+      setCaptchaImage(c.image_base64)
+      setCaptchaCode("")
+    } catch {
+      setCaptchaImage("")
+    }
+  }
+
+  useEffect(() => {
+    void loadCaptcha()
+  }, [])
+
+  const getCode = async () => {
+    const data = new FormData(formRef.current!)
     const password = String(data.get("password") ?? "")
     if (password !== String(data.get("confirm_password") ?? "")) {
       setError("两次输入的密码不一致")
-      setBusy(false)
       return
     }
+    if (!captchaId || captchaCode.trim().length < 1) {
+      setError("请先输入图形验证码")
+      return
+    }
+    setBusy(true)
+    setError("")
     try {
-      const submittedEmail = String(data.get("email") ?? "").trim()
-      setEmail(submittedEmail)
+      const email = String(data.get("email") ?? "").trim()
       await iamApi.register({
-        email: submittedEmail,
+        email,
         password,
         display_name: String(data.get("display_name") ?? "").trim(),
+        captcha_id: captchaId,
+        captcha_code: captchaCode.trim(),
       })
-      setComplete(true)
+      setCodeSent(true)
+      setVerifyMsg(`验证码已发送至 ${email},请查收`)
     } catch (cause) {
       setError(registrationError(cause))
+    } finally {
+      setBusy(false)
+      void loadCaptcha() // captcha 一次性,每次尝试后刷新
+    }
+  }
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!codeSent) {
+      setError("请先获取验证码")
+      return
+    }
+    if (code.trim().length !== 6) {
+      setVerifyMsg("请输入 6 位验证码")
+      return
+    }
+    setBusy(true)
+    setVerifyMsg("")
+    try {
+      await iamApi.completeEmailVerification("", code.trim())
+      window.location.assign("/login")
+    } catch (cause) {
+      setVerifyMsg(cause instanceof Error ? cause.message : "验证码错误")
     } finally {
       setBusy(false)
     }
@@ -63,101 +108,108 @@ export default function RegisterPage() {
             <p className="text-sm text-muted-foreground">验证邮箱后即可登录</p>
           </header>
 
-          {complete ? (
-            <form
-              className="mt-5 space-y-5"
-              onSubmit={async (e) => {
-                e.preventDefault()
-                if (code.trim().length !== 6) {
-                  setVerifyMsg("请输入 6 位验证码")
-                  return
-                }
-                try {
-                  await iamApi.completeEmailVerification("", code.trim())
-                  setVerifyMsg("")
-                  window.location.assign("/login")
-                } catch (cause) {
-                  setVerifyMsg(cause instanceof Error ? cause.message : "验证码错误")
-                }
-              }}
-            >
-              <div className="space-y-2">
-                <Label htmlFor="registration-email">邮箱</Label>
-                <Input id="registration-email" value={email} readOnly />
+          <form ref={formRef} className="mt-5 space-y-5" onSubmit={submit}>
+            <div className="space-y-2">
+              <Label htmlFor="registration-email">邮箱</Label>
+              <Input
+                id="registration-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                autoFocus
+                required
+                maxLength={320}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="registration-name">显示名称</Label>
+              <Input
+                id="registration-name"
+                name="display_name"
+                autoComplete="name"
+                maxLength={128}
+              />
+            </div>
+            <PasswordField
+              id="registration-password"
+              name="password"
+              label="密码"
+              visible={visible}
+              onVisible={() => setVisible((value) => !value)}
+            />
+            <PasswordField
+              id="registration-confirm"
+              name="confirm_password"
+              label="确认密码"
+              visible={visible}
+            />
+            <div className="space-y-2">
+              <Label htmlFor="register-captcha">图形验证码</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="register-captcha"
+                  value={captchaCode}
+                  onChange={(e) =>
+                    setCaptchaCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 6))
+                  }
+                  autoComplete="off"
+                  placeholder="输入验证码/结果"
+                  disabled={!captchaImage}
+                  className="text-center text-lg tracking-[0.2em]"
+                />
+                <button
+                  type="button"
+                  className="shrink-0 overflow-hidden rounded-md border border-border"
+                  onClick={() => void loadCaptcha()}
+                  title="点击刷新"
+                >
+                  {captchaImage ? (
+                    <img src={captchaImage} alt="图形验证码" className="h-10 w-28 object-cover" />
+                  ) : (
+                    <RefreshCw className="m-auto size-4" />
+                  )}
+                </button>
               </div>
-              <div className="flex items-start gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
-                <MailCheck className="mt-0.5 size-5 shrink-0 text-primary" />
-                <div>
-                  <p className="font-medium">请输入邮箱验证码</p>
-                  <p className="mt-1 text-muted-foreground">
-                    已向 {email} 发送 6 位验证码,输入即可完成注册。
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="verify-code">验证码</Label>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="verify-code">验证码</Label>
+              <div className="flex gap-2">
                 <Input
                   id="verify-code"
+                  name="verify_code"
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  autoFocus
                   placeholder="6 位数字"
-                  className="text-center text-2xl tracking-[0.5em]"
+                  disabled={!codeSent}
+                  className="text-center text-lg tracking-[0.4em]"
                 />
-                {verifyMsg && <p className="text-sm text-destructive">{verifyMsg}</p>}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={busy}
+                  onClick={getCode}
+                >
+                  {codeSent ? "重新获取" : "获取验证码"}
+                </Button>
               </div>
-              <Button type="submit" className="w-full" disabled={code.trim().length !== 6}>
-                验证并注册
-              </Button>
-            </form>
-          ) : (
-            <form className="mt-5 space-y-5" onSubmit={submit}>
-              <div className="space-y-2">
-                <Label htmlFor="registration-email">邮箱</Label>
-                <Input
-                  id="registration-email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  autoFocus
-                  required
-                  maxLength={320}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="registration-name">显示名称</Label>
-                <Input
-                  id="registration-name"
-                  name="display_name"
-                  autoComplete="name"
-                  maxLength={128}
-                />
-              </div>
-              <PasswordField
-                id="registration-password"
-                name="password"
-                label="密码"
-                visible={visible}
-                onVisible={() => setVisible((value) => !value)}
-              />
-              <PasswordField
-                id="registration-confirm"
-                name="confirm_password"
-                label="确认密码"
-                visible={visible}
-              />
+              {verifyMsg && <p className="text-sm text-muted-foreground">{verifyMsg}</p>}
               {error && (
                 <p className="text-sm text-destructive" role="alert">
                   {error}
                 </p>
               )}
-              <Button type="submit" className="w-full" disabled={busy}>
-                {busy ? "正在提交" : "创建账号"}
-              </Button>
-            </form>
-          )}
+            </div>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={busy || !codeSent || code.trim().length !== 6}
+            >
+              {busy ? "正在验证" : "注册"}
+            </Button>
+          </form>
 
           <Button variant="ghost" className="mt-4 w-full" asChild>
             <Link to="/login">
@@ -223,7 +275,9 @@ function PasswordField({
 function registrationError(cause: unknown): string {
   if (!(cause instanceof ApiError)) return "身份服务暂时不可用"
   if (cause.status === 403) return "请从已配置的应用地址发起注册"
-  if (cause.status === 422) return "请输入有效邮箱和至少 8 个字符的密码"
+  if (cause.status === 409) return "该邮箱已被注册,请直接登录"
+  if (cause.status === 422) return "邮箱、密码或图形验证码有误"
+  if (cause.status === 429) return "请求过于频繁,请 60 秒后再试"
   if (cause.status === 503) return "当前未开放自助注册"
   return "身份服务暂时不可用"
 }

@@ -16,6 +16,7 @@ require (
 	github.com/mattermost/xml-roundtrip-validator v0.1.0
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/mitchellh/mapstructure v1.5.0
+	github.com/mojocn/base64Captcha v1.3.8
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/redis/go-redis/v9 v9.21.0
@@ -38,6 +39,7 @@ require (
 	github.com/uptrace/bun/extra/bunotel v1.2.18
 	github.com/yuin/gopher-lua v1.1.2
 	go.opentelemetry.io/otel v1.44.0
+	go.opentelemetry.io/otel/trace v1.44.0
 	golang.org/x/crypto v0.54.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
@@ -56,6 +58,7 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-webauthn/x v0.2.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -87,10 +90,10 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/log v0.20.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/image v0.23.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

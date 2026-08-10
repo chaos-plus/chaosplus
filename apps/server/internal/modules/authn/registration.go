@@ -2,6 +2,7 @@ package authn
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -49,6 +50,9 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 	if len(email) > 320 || len(password) < 8 || len(password) > 1024 || len(displayName) > 128 || err != nil || !strings.EqualFold(parsed.Address, email) {
 		return authnext.ErrInvalidRegistration
 	}
+	if codeSendThrottled(email) {
+		return ErrVerificationCodeThrottled
+	}
 	passwordHash, err := passwordx.Hash(password)
 	if err != nil {
 		return fmt.Errorf("hash registration password: %w", err)
@@ -94,7 +98,7 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 		return err
 	})
 	if errors.Is(err, authnext.ErrRegistrationConflict) {
-		return nil
+		return s.resendRegistrationCode(ctx, email)
 	}
 	if errors.Is(err, authnext.ErrInvalidRegistration) {
 		return err
@@ -103,4 +107,52 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 		return fmt.Errorf("register principal: %w", err)
 	}
 	return nil
+}
+
+// resendRegistrationCode 对已存在但未激活的注册邮箱重新生成并下发一次验证码;
+// 已激活账号静默忽略(可直接登录)。
+func (s *WebService) resendRegistrationCode(ctx context.Context, email string) error {
+	var principal principalRow
+	if err := s.db.NewSelect().Model(&principal).Where("login_name = ?", email).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return authnext.ErrRegistrationConflict
+		}
+		return fmt.Errorf("load pending principal for resend: %w", err)
+	}
+	if !principal.ActivationRequired {
+		return authnext.ErrRegistrationConflict
+	}
+	secret, err := randomToken(32)
+	if err != nil {
+		return fmt.Errorf("generate resend credential: %w", err)
+	}
+	token := emailVerificationTokenPrefix + secret
+	code, err := emailVerificationCode()
+	if err != nil {
+		return fmt.Errorf("generate resend code: %w", err)
+	}
+	now := s.now().UTC()
+	expires := now.Add(s.cfg.EmailVerification.TokenTTL)
+	verificationURL, err := credentialURL(s.cfg.EmailVerification.VerifyURL, token)
+	if err != nil {
+		return err
+	}
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).
+			Set("consumed_at = ?", now.UnixMilli()).
+			Where("principal_id = ? AND consumed_at = 0", principal.ID).Exec(ctx); err != nil {
+			return err
+		}
+		row := emailVerificationRow{
+			TokenHMAC: s.emailVerificationHMAC(token), PrincipalID: principal.ID, Email: email,
+			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(), Code: code,
+		}
+		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
+			return err
+		}
+		return s.enqueueNotification(ctx, tx, notificationPayload{
+			Type: emailVerificationNotification, Recipient: email, VerificationURL: verificationURL, Code: code,
+			OccurredAt: now, ExpiresAt: expires,
+		})
+	})
 }

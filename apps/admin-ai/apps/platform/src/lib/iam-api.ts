@@ -991,10 +991,18 @@ export function createIamApi(
   return {
     capabilities: () =>
       request<AuthnCapabilities>("/authn/capabilities", {}, false),
+    captcha: () =>
+      request<{ captcha_id: string; image_base64: string }>(
+        "/authn/captcha",
+        {},
+        false
+      ),
     register: (body: {
       email: string
       password: string
       display_name?: string
+      captcha_id: string
+      captcha_code: string
     }) =>
       request<{ accepted: boolean }>(
         "/authn/register",

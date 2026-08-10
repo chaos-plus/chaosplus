@@ -56,7 +56,16 @@ type registrationInput struct {
 		Email       string `json:"email" format:"email" maxLength:"320"`
 		Password    string `json:"password" minLength:"8" maxLength:"1024"`
 		DisplayName string `json:"display_name,omitempty" maxLength:"128"`
+		CaptchaID   string `json:"captcha_id" minLength:"1"`
+		CaptchaCode string `json:"captcha_code" minLength:"1"`
 	}
+}
+
+type captchaInput struct{}
+
+type captchaOutput struct {
+	CaptchaID   string `json:"captcha_id"`
+	ImageBase64 string `json:"image_base64"`
 }
 
 type sessionListInput struct {
@@ -266,12 +275,25 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 		return respx.OK(ctx, web.Capabilities()), nil
 	})
 	authz.RegisterPublic(a, huma.Operation{
+		OperationID: "authn-captcha", Method: http.MethodGet, Path: "/authn/captcha",
+		Summary: "Issue a graphic captcha for registration", Tags: []string{"authn"},
+	}, func(ctx context.Context, in *captchaInput) (*respx.Body[captchaOutput], error) {
+		id, b64, err := IssueCaptcha()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("captcha_unavailable")
+		}
+		return respx.OK(ctx, captchaOutput{CaptchaID: id, ImageBase64: b64}), nil
+	})
+	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-register", Method: http.MethodPost, Path: "/authn/register",
 		Summary: "Register a global principal pending email verification", Tags: []string{"authn"}, DefaultStatus: http.StatusAccepted,
-		Errors: []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError},
+		Errors: []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusConflict, http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *registrationInput) (*respx.Body[map[string]bool], error) {
 		if err := web.ValidateLoginOrigin(in.Origin); err != nil {
 			return nil, huma.Error403Forbidden("registration_request_rejected")
+		}
+		if !VerifyCaptcha(in.Body.CaptchaID, in.Body.CaptchaCode) {
+			return nil, huma.Error422UnprocessableEntity("captcha_invalid")
 		}
 		if err := web.Register(ctx, in.Body.Email, in.Body.Password, in.Body.DisplayName); err != nil {
 			switch {
@@ -279,6 +301,10 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 				return nil, huma.Error422UnprocessableEntity("invalid_registration")
 			case errors.Is(err, authnext.ErrRegistrationDisabled):
 				return nil, huma.Error503ServiceUnavailable("registration_unavailable")
+			case errors.Is(err, authnext.ErrRegistrationConflict):
+				return nil, huma.Error409Conflict("registration_conflict")
+			case errors.Is(err, ErrVerificationCodeThrottled):
+				return nil, huma.Error429TooManyRequests("verification_code_throttled")
 			default:
 				return nil, huma.Error500InternalServerError("authentication_unavailable")
 			}
