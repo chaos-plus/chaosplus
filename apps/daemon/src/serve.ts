@@ -147,6 +147,9 @@ async function main(): Promise<void> {
     detectBinary(["claude"], "CLAUDE_BINARY") ? "claude" : "",
     detectBinary(["codex"], "CODEX_BINARY") ? "codex" : "",
     "mock",
+    "mastra",  // always available (pure API, no binary)
+    "script", // always available (shell)
+    "http",   // always available (fetch)
   ].filter(Boolean);
   await transport.register({
     runtime: "bun",

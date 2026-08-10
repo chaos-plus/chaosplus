@@ -1,6 +1,6 @@
 /** Common types for the daemon's agent runtimes. */
 
-export type ExecutorType = "claude" | "codex" | "mock" | (string & {});
+export type ExecutorType = "claude" | "codex" | "mock" | "mastra" | "script" | "http" | (string & {});
 
 export type AgentKind = "executor" | "digital_human";
 export type SessionStatus = "idle" | "running" | "completed" | "failed" | "stopped";
