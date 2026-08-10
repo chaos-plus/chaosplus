@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
+	"github.com/chaos-plus/chaosplus/pkg/utils"
 )
 
 func main() {
@@ -105,7 +107,7 @@ func main() {
 
 	var chat *server.ChatService
 	if st != nil {
-		chat = server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))
+		chat = server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", defaultWorkspaceRoot()))
 	}
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
 	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}
@@ -127,4 +129,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return fmt.Sprint(def)
+}
+
+// defaultWorkspaceRoot returns the CHAT_WORKSPACE_ROOT default:
+// $XDG_CONFIG_HOME/<binary>/channels on Linux,
+// ~/Library/Application Support/<binary>/channels on macOS,
+// %AppData%/<binary>/channels on Windows.
+func defaultWorkspaceRoot() string {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), utils.GetExecutableName(), "channels")
+	}
+	return filepath.Join(d, utils.GetExecutableName(), "channels")
 }

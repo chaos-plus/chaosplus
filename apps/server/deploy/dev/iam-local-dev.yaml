@@ -153,7 +153,7 @@ bootstrap:
     lock_timeout: 30s # maximum wait for the deployment advisory lock
     database:
         type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
-        dsn: "C:/tmp/chaosplus-iam.db" # dsn
+        dsn: "./chaosplus-iam.db" # dsn
         dsn_file: "" # file containing the DSN; mutually exclusive with dsn
         writable: true # writable
         readable: true # readable
@@ -171,7 +171,7 @@ bootstrap:
 database:
     dbkey: # example entry — rename to your key
         type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
-        dsn: "C:/tmp/chaosplus-iam.db" # dsn
+        dsn: "./chaosplus-iam.db" # dsn
         dsn_file: "" # file containing the DSN; mutually exclusive with dsn
         writable: true # writable
         readable: true # readable

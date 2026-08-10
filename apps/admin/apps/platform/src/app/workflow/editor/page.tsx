@@ -191,7 +191,7 @@ export default function EditorPage() {
     setBusy(true);
     try {
       const def = toDef();
-      const r = await controlApi.launchRun(def, workspace.trim() || "/tmp/chaos-workspace");
+      const r = await controlApi.launchRun(def, workspace.trim());
       navigate(`/workflow/runs/${r.runId}`);
     } catch (e) {
       alert(`启动失败: ${(e as Error).message}`);

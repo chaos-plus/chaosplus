@@ -262,11 +262,10 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	if err := def.Validate(); err != nil {
 		return nil, fmt.Errorf("validate workflow: %w", err)
 	}
-	if req.Workspace == "" {
-		return nil, fmt.Errorf("workspace is required")
-	}
-
 	run := m.newRun(&def)
+	if req.Workspace == "" {
+		req.Workspace = filepath.Join(os.TempDir(), "run-"+run.ID)
+	}
 	// Persist the run definition so it survives restarts (PRD §15.1).
 	if m.st != nil {
 		defJSON, _ := json.Marshal(&def)
