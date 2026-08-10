@@ -15,7 +15,7 @@ export const STATUS_COLOR: Record<string, string> = {
 interface DefNode { id: string; type?: string }
 interface DefEdge { from: string; to: string; condition?: string }
 
-function FlowNode({ data }: NodeProps) {
+export function FlowNode({ data }: NodeProps) {
   const d = data as { label: string; status: string }
   return (
     <>

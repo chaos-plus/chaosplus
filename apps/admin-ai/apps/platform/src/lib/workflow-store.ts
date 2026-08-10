@@ -1,4 +1,3 @@
-import { controlApi } from "./control-api";
 
 export interface SavedWorkflow {
   id: string;

@@ -4,7 +4,6 @@ import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent } from "@workspace/ui/components/card";
 import { Badge } from "@workspace/ui/components/badge";
 import { deleteWorkflow, loadWorkflows, type SavedWorkflow } from "../../../lib/workflow-store";
-import { controlApi } from "../../../lib/control-api";
 
 export default function WorkflowListPage() {
   const navigate = useNavigate();

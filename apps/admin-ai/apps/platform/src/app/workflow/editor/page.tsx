@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import {
   ReactFlow,
@@ -18,7 +18,7 @@ import { Input } from "@workspace/ui/components/input";
 import { Badge } from "@workspace/ui/components/badge";
 import { NodeLibrary, templateByType } from "../../../components/workflow-editor/node-library";
 import { PropertyPanel } from "../../../components/workflow-editor/property-panel";
-import { FlowNode, STATUS_COLOR } from "../../../components/workflow-canvas";
+import { FlowNode } from "../../../components/workflow-canvas";
 import { loadWorkflows, saveWorkflow, type SavedWorkflow } from "../../../lib/workflow-store";
 import { controlApi } from "../../../lib/control-api";
 
