@@ -264,9 +264,6 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		if !filepath.IsLocal(req.WorkflowFile) {
 			return nil, fmt.Errorf("workflowFile must be a local path")
 		}
-		if !filepath.IsLocal(req.WorkflowFile) {
-			return nil, fmt.Errorf("workflowFile must be a local path")
-		}
 		b, err := os.ReadFile(req.WorkflowFile)
 		if err != nil {
 			return nil, fmt.Errorf("read workflow: %w", err)
@@ -472,7 +469,7 @@ func (m *RunManager) persistNodeExecution(run *Run, ev RunEvent) {
 	}
 	completedAt := int64(0)
 	switch ev.Status {
-	case workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusSkipped, workflow.StatusRetrying:
+	case workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusSkipped:
 		completedAt = time.Now().UnixMilli()
 	}
 	if err := m.st.UpsertNodeExecution(context.Background(), store.NodeExecution{
