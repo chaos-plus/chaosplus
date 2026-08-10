@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"gopkg.in/yaml.v3"
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/machine"
@@ -26,7 +27,35 @@ import (
 	"github.com/chaos-plus/chaosplus/pkg/utils"
 )
 
+// smtpLocalConfig mirrors the smtp: block in .local/config.yaml (local dev).
+// server-ai's mail bridge reads SMTP from env; when the local config provides
+// it, seed the env vars so delivery is driven from the yaml.
+type smtpLocalConfig struct {
+	Addr string `yaml:"addr"`
+	From string `yaml:"from"`
+}
+
+func loadSMTPFromLocalConfig() {
+	data, err := os.ReadFile(".local/config.yaml")
+	if err != nil {
+		return // no local config → rely on SMTP_HOST/SMTP_FROM env
+	}
+	var cfg struct {
+		SMTP *smtpLocalConfig `yaml:"smtp"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil || cfg.SMTP == nil || cfg.SMTP.Addr == "" {
+		return
+	}
+	if os.Getenv("SMTP_HOST") == "" {
+		os.Setenv("SMTP_HOST", cfg.SMTP.Addr)
+	}
+	if os.Getenv("SMTP_FROM") == "" && cfg.SMTP.From != "" {
+		os.Setenv("SMTP_FROM", cfg.SMTP.From)
+	}
+}
+
 func main() {
+	loadSMTPFromLocalConfig()
 	// Auth: read API token from env (NOT argv — /proc/<pid>/cmdline is world-readable).
 	// Empty = desktop/localhost mode with no auth gate.
 	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")

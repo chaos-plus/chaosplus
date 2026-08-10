@@ -37,6 +37,15 @@ type emailVerificationRow struct {
 	Code string `bun:"code,notnull,default:''"`
 }
 
+// emailVerificationCode 生成 6 位数字邮箱验证码(一次性、短时效)。
+func emailVerificationCode() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(b[:])%1000000), nil
+}
+
 func (s *WebService) configureEmailVerification() error {
 	if !s.cfg.EmailVerification.Enabled {
 		return nil
@@ -88,10 +97,14 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 			return fmt.Errorf("generate email verification credential: %w", err)
 		}
 		token := emailVerificationTokenPrefix + secret
+		code, err := emailVerificationCode()
+		if err != nil {
+			return fmt.Errorf("generate email verification code: %w", err)
+		}
 
 		row := emailVerificationRow{
 			TokenHMAC: s.emailVerificationHMAC(token), PrincipalID: principal.ID, Email: principal.Email,
-			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(),
+			CreatedAt: now.UnixMilli(), ExpiresAt: expires.UnixMilli(), Code: code,
 		}
 		verificationURL, err := credentialURL(s.cfg.EmailVerification.VerifyURL, token)
 		if err != nil {
@@ -105,7 +118,7 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 			return err
 		}
 		if err := s.enqueueNotification(ctx, tx, notificationPayload{
-			Type: emailVerificationNotification, Recipient: principal.Email, VerificationURL: verificationURL,
+			Type: emailVerificationNotification, Recipient: principal.Email, VerificationURL: verificationURL, Code: code,
 			OccurredAt: now, ExpiresAt: expires,
 		}); err != nil {
 			return err
