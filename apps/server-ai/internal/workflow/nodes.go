@@ -279,6 +279,7 @@ func (e *Engine) execLoop(ctx context.Context, id string) error {
 			bs.approved = false
 			bs.attempts = 0
 			bs.err = ""
+			bs.retryAt = 0
 		}
 		if err := e.runBody(ctx, body); err != nil {
 			return err

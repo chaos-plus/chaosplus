@@ -46,6 +46,7 @@ type nodeState struct {
 	active   []int  // indices of active out-edges (condition routing)
 	approved bool   // human_approval outcome
 	attempts int
+	retryAt  int64 // unix ms when this node's retry backoff elapses; 0 = none
 	err      string
 }
 
@@ -145,6 +146,24 @@ func (e *Engine) Run(ctx context.Context, contextJSON json.RawMessage) ([]Event,
 			progressed = true
 		}
 		if !progressed {
+			// Nothing could progress now. If a node is parked in retry backoff,
+			// wait until the earliest retryAt (without blocking other branches —
+			// they already had their chance this pass), then reschedule it.
+			if wait := e.nextRetryAt(); wait > 0 {
+				if !waitUntil(ctx, wait) {
+					// Run cancelled while a node is parked in backoff: it never
+					// got to retry, so surface it as failed and let the run reach
+					// a terminal state (matches the prior inline-wait semantics).
+					for _, st := range e.states {
+						if st.status == StatusPending && st.retryAt > time.Now().UnixMilli() {
+							st.retryAt = 0
+							e.mark(st.node.ID, StatusFailed, nil, "run cancelled during retry backoff")
+						}
+					}
+					continue
+				}
+				continue
+			}
 			break
 		}
 	}
@@ -180,6 +199,9 @@ func (e *Engine) ready(id string) bool {
 	st := e.states[id]
 	if st.status != StatusPending {
 		return false
+	}
+	if st.retryAt > time.Now().UnixMilli() {
+		return false // in backoff; not ready until retryAt elapses
 	}
 	if st.node.Type == NodeJoin {
 		return e.allInTerminal(id)
@@ -369,16 +391,41 @@ func (e *Engine) scheduleRetry(ctx context.Context, st *nodeState, err error) bo
 	}
 	e.mark(st.node.ID, StatusRetrying, nil, err.Error())
 	if i := st.attempts - 1; i < len(spec.BackoffSeconds) && spec.BackoffSeconds[i] > 0 {
-		timer := time.NewTimer(time.Duration(spec.BackoffSeconds[i]) * time.Second)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			return false // run cancelled during backoff → leave node failed
-		}
+		// Defer the wait (M6): the node is parked with a retryAt timestamp and the
+		// scheduler keeps processing other ready branches; it sleeps only when no
+		// node can progress, so backoff no longer stalls parallel fork branches.
+		st.retryAt = time.Now().UnixMilli() + int64(spec.BackoffSeconds[i])*1000
 	}
 	st.status = StatusPending
 	return true
+}
+
+// nextRetryAt returns the earliest future retryAt across pending nodes, or 0.
+func (e *Engine) nextRetryAt() int64 {
+	now := time.Now().UnixMilli()
+	var earliest int64
+	for _, st := range e.states {
+		if st.status == StatusPending && st.retryAt > now {
+			if earliest == 0 || st.retryAt < earliest {
+				earliest = st.retryAt
+			}
+		}
+	}
+	return earliest
+}
+
+// waitUntil sleeps until the given unix-ms deadline, or ctx cancellation.
+func waitUntil(ctx context.Context, deadlineMS int64) bool {
+	d := time.Duration(deadlineMS-time.Now().UnixMilli()) * time.Millisecond
+	if d < 0 {
+		d = 0
+	}
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func terminal(s Status) bool {
