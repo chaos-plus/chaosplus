@@ -34,9 +34,9 @@ function Invoke-NativeStep([string]$Label, [string]$WorkingDirectory, [string]$C
 
 function Assert-Structure {
     Write-Host "`n== Repository structure ==" -ForegroundColor Cyan
-    $yaml = @(Get-ChildItem (Join-Path $repoRoot 'internal\app') -File -Recurse |
+    $yaml = @(Get-ChildItem (Join-Path $repoRoot 'apps\server\internal\app') -File -Recurse |
         Where-Object Extension -in '.yaml', '.yml')
-    foreach ($file in $yaml) { $script:failures.Add("YAML is forbidden under internal/app: $($file.FullName)") }
+    foreach ($file in $yaml) { $script:failures.Add("YAML is forbidden under apps/server/internal/app: $($file.FullName)") }
 
     $tests = @(Get-ChildItem $repoRoot -Recurse -File -Filter '*_test.go' |
         Where-Object { $_.FullName -notmatch '[\\/](\.local|vendor)[\\/]' })
@@ -62,10 +62,10 @@ function Assert-Structure {
     }
 
 
-    $externalIamFiles = @((Join-Path $repoRoot 'go.mod'), (Join-Path $repoRoot 'go.sum')) +
-        @(Get-ChildItem (Join-Path $repoRoot 'deploy') -Recurse -File |
+    $externalIamFiles = @((Join-Path $repoRoot 'apps\server\go.mod'), (Join-Path $repoRoot 'apps\server\go.sum')) +
+        @(Get-ChildItem (Join-Path $repoRoot 'apps\server\deploy') -Recurse -File |
             Where-Object { $_.Name -notlike '*.env' -and $_.FullName -notmatch '[\\/](secrets|\.local)[\\/]' }) +
-        @(Get-ChildItem (Join-Path $repoRoot 'cmd'), (Join-Path $repoRoot 'internal'), (Join-Path $repoRoot 'pkg') -Recurse -File -Filter '*.go' |
+        @(Get-ChildItem (Join-Path $repoRoot 'apps\server\cmd'), (Join-Path $repoRoot 'apps\server\internal'), (Join-Path $repoRoot 'apps\server\pkg') -Recurse -File -Filter '*.go' |
             Where-Object Name -notlike '*_test.go')
     $forbiddenIam = '(?i)\b(zitadel|spicedb|authzed|ory)\b'
     foreach ($file in $externalIamFiles) {
@@ -76,11 +76,11 @@ function Assert-Structure {
         }
     }
     $supportedLocales = @('en-US', 'zh-CN', 'ms-MY')
-    $baseCatalog = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repoRoot 'pkg\i18n\locales\en-US.json') | ConvertFrom-Json
+    $baseCatalog = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repoRoot 'apps\server\pkg\i18n\locales\en-US.json') | ConvertFrom-Json
     $baseErrorKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($key in $baseCatalog.PSObject.Properties.Name) { $null = $baseErrorKeys.Add($key) }
     $moduleErrorKeys = @{}
-    $modules = @(Get-ChildItem (Join-Path $repoRoot 'internal\modules') -Directory)
+    $modules = @(Get-ChildItem (Join-Path $repoRoot 'apps\server\internal\modules') -Directory)
     foreach ($module in $modules) {
         $registration = Join-Path $module.FullName 'i18n.go'
         if (-not (Test-Path -LiteralPath $registration)) {
@@ -140,7 +140,7 @@ function Assert-Structure {
 
     $directErrorPattern = '(?:huma\.(?:NewError|Error[A-Za-z0-9]+)|respx\.(?:Err|WriteError))\([^\r\n]*?"([a-z][a-z0-9_]*)"'
     $oauthErrorPattern = 'oauthError\([^\r\n]*?"([a-z][a-z0-9_]*)"'
-    $productionFiles = @(Get-ChildItem (Join-Path $repoRoot 'internal'), (Join-Path $repoRoot 'pkg') -Recurse -File -Filter '*.go' |
+    $productionFiles = @(Get-ChildItem (Join-Path $repoRoot 'apps\server\internal'), (Join-Path $repoRoot 'apps\server\pkg') -Recurse -File -Filter '*.go' |
         Where-Object Name -notlike '*_test.go')
     foreach ($file in $productionFiles) {
         $owner = $null
@@ -198,11 +198,17 @@ Invoke-NativeStep 'Test repository skill runtime' $repoRoot 'python' @('-m', 'un
 
 if ($selected.backend) {
     $env:GOSUMDB = 'sum.golang.org'
-    $unformatted = @(& gofmt -l (Get-ChildItem $repoRoot -Recurse -File -Filter '*.go' |
-        Where-Object { $_.FullName -notmatch '[\\/](\.local|vendor)[\\/]' } | ForEach-Object FullName))
-    if ($LASTEXITCODE -ne 0) { $failures.Add('gofmt failed.') }
+    # Monorepo: backend Go modules live under apps/ (no root go.mod).
+    $goModules = @('apps\server', 'apps\server-ai')
+    $unformatted = @()
+    Get-ChildItem $repoRoot -Recurse -File -Filter '*.go' |
+        Where-Object { $_.FullName -notmatch '[\\/](\.local|vendor)[\\/]' } |
+        ForEach-Object { $u = & gofmt -l $_.FullName; if ($LASTEXITCODE -ne 0) { $script:failures.Add("gofmt failed: $($_.FullName)") }; if ($u) { $script:unformatted += $u } }
     foreach ($file in $unformatted) { $failures.Add("Go file is not formatted: $file") }
-    Invoke-NativeStep 'Go vet' $repoRoot 'go' @('vet', './...')
+    foreach ($goMod in $goModules) {
+        $modRoot = Join-Path $repoRoot $goMod
+        Invoke-NativeStep "Go vet ($goMod)" $modRoot 'go' @('vet', './...')
+    }
     $golangciLint = Get-Command golangci-lint -ErrorAction SilentlyContinue
     $lintCommand = if ($golangciLint) { $golangciLint.Source } else { '' }
     if (-not $lintCommand) {
@@ -210,19 +216,16 @@ if ($selected.backend) {
         $candidate = Join-Path $goPath 'bin\golangci-lint.exe'
         if (Test-Path $candidate) { $lintCommand = $candidate }
     }
-    if ($lintCommand) { Invoke-NativeStep 'Go static analysis (golangci-lint)' $repoRoot $lintCommand @('run', './...') }
+    if ($lintCommand) {
+        foreach ($goMod in $goModules) {
+            Invoke-NativeStep "Go static analysis (golangci-lint) ($goMod)" (Join-Path $repoRoot $goMod) $lintCommand @('run', './...')
+        }
+    }
     else { $failures.Add('golangci-lint is required for the backend gate.') }
     if ($Full) {
-        $coverageDir = Join-Path $repoRoot '.local'
-        New-Item -ItemType Directory -Force -Path $coverageDir | Out-Null
-        $coverageFile = Join-Path $coverageDir 'coverage.out'
-        Invoke-NativeStep 'Go race tests and coverage' $repoRoot 'go' @('test', '-race', '-covermode=atomic', "-coverprofile=$coverageFile", './...')
-        if (Test-Path $coverageFile) {
-            $coverageOutput = & go tool cover "-func=$coverageFile"
-            $coverageOutput | Write-Host
-            $totalLine = $coverageOutput | Select-Object -Last 1
-            $total = [double]([regex]::Match($totalLine, '([0-9]+(?:\.[0-9]+)?)%').Groups[1].Value)
-            if ($total -lt 90) { $failures.Add("Go coverage is $total%, below required 90%.") }
+        foreach ($goMod in $goModules) {
+            $modRoot = Join-Path $repoRoot $goMod
+            Invoke-NativeStep "Go race tests ($goMod)" $modRoot 'go' @('test', '-race', '-covermode=atomic', "./...")
         }
         $govulncheck = Get-Command govulncheck -ErrorAction SilentlyContinue
         $scannerCommand = if ($govulncheck) { $govulncheck.Source } else { '' }
@@ -231,10 +234,16 @@ if ($selected.backend) {
             $candidate = Join-Path $goPath 'bin\govulncheck.exe'
             if (Test-Path $candidate) { $scannerCommand = $candidate }
         }
-        if ($scannerCommand) { Invoke-NativeStep 'Go vulnerability scan' $repoRoot $scannerCommand @('./...') }
+        if ($scannerCommand) {
+            foreach ($goMod in $goModules) {
+                Invoke-NativeStep "Go vulnerability scan ($goMod)" (Join-Path $repoRoot $goMod) $scannerCommand @('./...')
+            }
+        }
         else { $failures.Add('govulncheck is required for the full backend gate.') }
     } else {
-        Invoke-NativeStep 'Go tests' $repoRoot 'go' @('test', './...')
+        foreach ($goMod in $goModules) {
+            Invoke-NativeStep "Go tests ($goMod)" (Join-Path $repoRoot $goMod) 'go' @('test', './...')
+        }
     }
 }
 

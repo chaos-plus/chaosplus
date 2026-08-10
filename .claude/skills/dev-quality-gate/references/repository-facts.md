@@ -6,7 +6,7 @@ This file is generated from repository manifests and source trees. Do not edit i
 
 - Go module: `github.com/chaos-plus/chaosplus`
 - Go version: `1.26.5`
-- Go package directories: 53
+- Go package directories: 54
 - Feature modules: audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
 - IAM SQL dialects: mysql, postgres, sqlite
 - HTTP framework: Huma v2 on chi
@@ -19,7 +19,7 @@ This file is generated from repository manifests and source trees. Do not edit i
 - Workspace: `chaosplus-admin`
 - Package manager: `bun@1.3.12`
 - Workspaces: apps/*, packages/*
-- Application: `apps/admin/apps/platform` (React, Vite, TypeScript)
+- Application: `apps/admin-ai/apps/platform` (React, Vite, TypeScript)
 - Shared UI: `apps/admin/packages/ui`
 - App test command: `bun test src`
 
