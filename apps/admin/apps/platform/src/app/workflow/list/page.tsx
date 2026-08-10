@@ -53,7 +53,7 @@ export default function WorkflowListPage() {
               <div className="flex items-center gap-2">
                 <span className="font-medium">{wf.name}</span>
                 {wf.version && <Badge variant="outline">v{wf.version}</Badge>}
-                <Badge variant="secondary">{(wf.def as { nodes?: unknown[] }).nodes?.length ?? 0} 节点</Badge>
+                <Badge variant="secondary">{((wf.def as { nodes?: unknown[] } | null)?.nodes?.length) ?? 0} 节点</Badge>
                 <span className="text-muted-foreground text-xs">{wf.updatedAt?.slice(0, 16)?.replace("T", " ") ?? ""}</span>
                 <div className="ml-auto flex gap-1">
                   <Button size="sm" variant="outline" onClick={() => navigate(`/workflow/editor?id=${wf.id}`)}>编辑</Button>

@@ -57,6 +57,7 @@ export default function EditorPage() {
   const wfId = params.get("id");
 
   const [name, setName] = useState("Untitled");
+  const [currentId, setCurrentId] = useState(wfId ?? ""); // pinned after first save
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -65,16 +66,28 @@ export default function EditorPage() {
 
   // Load existing from server or start fresh
   useEffect(() => {
+    let cancelled = false;
     if (wfId) {
       loadWorkflows().then((list: SavedWorkflow[]) => {
+        if (cancelled) return;
         const saved = list.find((w: SavedWorkflow) => w.id === wfId);
-        if (saved) {
+        if (saved?.def) {
           setName(saved.name);
-          const def = saved.def as { nodes?: Array<{ id: string; type?: string; [k: string]: unknown }>; edges?: Array<{ from: string; to: string; condition?: string }> };
-          const imported = canvasFromDef(def);
-          setNodes(imported.nodes);
-          setEdges(imported.edges);
+          try {
+            const def = saved.def as { nodes?: Array<{ id: string; type?: string }>; edges?: Array<{ from: string; to: string; condition?: string }> };
+            const imported = canvasFromDef(def);
+            setNodes(imported.nodes);
+            setEdges(imported.edges);
+          } catch {
+            const { nodes: n, edges: e } = emptyCanvas();
+            setNodes(n); setEdges(e);
+          }
         } else {
+          const { nodes: n, edges: e } = emptyCanvas();
+          setNodes(n); setEdges(e);
+        }
+      }).catch(() => {
+        if (!cancelled) {
           const { nodes: n, edges: e } = emptyCanvas();
           setNodes(n); setEdges(e);
         }
@@ -83,6 +96,7 @@ export default function EditorPage() {
       const { nodes: n, edges: e } = emptyCanvas();
       setNodes(n); setEdges(e);
     }
+    return () => { cancelled = true; };
   }, [wfId]);
 
   const onConnect = useCallback((conn: Connection) => setEdges((eds) => addEdge(conn, eds)), [setEdges]);
@@ -91,8 +105,12 @@ export default function EditorPage() {
     event.preventDefault();
     const type = event.dataTransfer.getData("application/reactflow-type");
     if (!type) return;
-    const pos = { x: event.clientX - 320, y: event.clientY - 120 };
-    const id = `${type}-${Date.now()}`;
+    // ponytail: approximate screen-to-flow position using the drop target's bounding rect.
+    const rect = (event.target as HTMLElement).closest(".react-flow")?.getBoundingClientRect();
+    const pos = rect
+      ? { x: event.clientX - rect.left - 120, y: event.clientY - rect.top - 20 }
+      : { x: 100, y: 100 };
+    const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newNode: Node = applyDefaults(
       { id, type: "flow", position: pos, data: { label: `${id} · ${type}`, status: "pending", type } },
       type,
@@ -118,28 +136,55 @@ export default function EditorPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedNode]);
 
-  // Serialize canvas → WorkflowDef JSON
+  // Internal keys: not serialized into WorkflowDef
+  const INTERNAL = new Set(["label", "status", "type", "defaults"]);
+
+  // Serialize canvas → WorkflowDef JSON. Merges node template defaults
+  // with any property-panel edits (which write to top-level data keys).
   const toDef = useCallback(() => {
     const defNodes = nodes.map((n) => {
       const data = n.data as Record<string, unknown>;
+      const defs = (data.defaults as Record<string, unknown>) ?? {};
       const d: Record<string, unknown> = { id: n.id, type: data.type };
-      const defs = data.defaults as Record<string, unknown> | undefined;
-      if (defs) Object.assign(d, defs);
-      // Merge any overrides from property panel edits
-      if (data.onError) d.onError = data.onError;
-      if (data.name) d.name = data.name;
+      // Start with template defaults
+      Object.assign(d, defs);
+      // Overlay all property-panel edits (top-level keys except internals)
+      for (const [k, v] of Object.entries(data)) {
+        if (INTERNAL.has(k) || v === undefined) continue;
+        if (typeof v === "object" && v !== null && k in (defs as object)) {
+          d[k] = { ...((defs as Record<string, unknown>)[k] as Record<string, unknown> ?? {}), ...(v as Record<string, unknown>) };
+        } else {
+          d[k] = v;
+        }
+      }
       return d;
     });
     const defEdges = edges.map((e) => ({ from: e.source, to: e.target, condition: (e.label as string) || "success" }));
-    return { id: wfId ?? `wf-${Date.now()}`, version: "1", name, nodes: defNodes, edges: defEdges };
-  }, [nodes, edges, name, wfId]);
+    return { id: currentId || wfId || "", version: "1", name, nodes: defNodes, edges: defEdges };
+  }, [nodes, edges, name, currentId, wfId]);
 
-  // Save to server
+  // Save to server. Pins the workflow id after first save.
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
   const save = useCallback(async () => {
-    const id = wfId ?? `wf-${Date.now()}`;
-    const def = toDef() as unknown;
-    await saveWorkflow({ id, name, def, updatedAt: new Date().toISOString() } as SavedWorkflow);
-  }, [toDef, name, wfId]);
+    setSaving(true);
+    setSaveErr("");
+    try {
+      const def = toDef();
+      const id = currentId || wfId || `wf-${Date.now()}`;
+      await saveWorkflow({ id, name, def: def as unknown, updatedAt: new Date().toISOString() } as SavedWorkflow);
+      if (!currentId && !wfId) {
+        setCurrentId(id);
+        const params = new URLSearchParams(window.location.search);
+        params.set("id", id);
+        window.history.replaceState(null, "", `?${params.toString()}`);
+      }
+    } catch (e) {
+      setSaveErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [toDef, name, currentId, wfId]);
 
   // Launch run
   const run_ = useCallback(async () => {
@@ -163,7 +208,8 @@ export default function EditorPage() {
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card">
         <Input className="w-48 h-8 text-sm" value={name} onChange={(e) => setName(e.target.value)} placeholder="工作流名称" />
-        <Button size="sm" variant="outline" onClick={save}>保存</Button>
+        <Button size="sm" variant="outline" onClick={save} disabled={saving}>{saving ? "保存中..." : saveErr ? `错误: ${saveErr}` : "保存"}</Button>
+        {saveErr && <span className="text-xs text-destructive">{saveErr}</span>}
         <Button size="sm" variant="outline" onClick={() => {
           const json = JSON.stringify(toDef(), null, 2);
           void navigator.clipboard.writeText(json);

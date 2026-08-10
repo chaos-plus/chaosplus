@@ -26,7 +26,6 @@ export function PropertyPanel({ node, onChange }: Props) {
       <div className="text-xs font-semibold text-muted-foreground uppercase">{nodeType}</div>
 
       {/* Common fields */}
-      <Field label="ID" value={node.id} onChange={(v) => onChange(node.id, { ...data, id: v })} />
       <Field label="Name" value={(data.name as string) ?? ""} onChange={(v) => onChange(node.id, { ...data, name: v })} />
 
       {/* Type-specific fields */}
@@ -42,17 +41,16 @@ export function PropertyPanel({ node, onChange }: Props) {
       {nodeType === "transform" && (
         <>
           <ExprField label="Transform JSON Logic" data={data} key_="transform" onChange={(d) => onChange(node.id, { ...data, ...d })} />
-          <Field label="Output Artifact" value={(data.output as string) ?? ""} onChange={(v) => onChange(node.id, { ...data, output: v })} />
         </>
       )}
       {nodeType === "loop" && (
         <>
-          <Field label="Body Entry Node" value={(data.bodyEntry as string) ?? ""} onChange={(v) => onChange(node.id, { ...data, bodyEntry: v })} />
-          <Field label="Max Iterations" value={String((data.maxIterations as number) ?? 10)} onChange={(v) => onChange(node.id, { ...data, maxIterations: Number(v) })} />
+          <Field label="Body Entry Node" value={(data.loop as Record<string,unknown>)?.bodyEntry as string ?? ""} onChange={(v) => onChange(node.id, { ...data, loop: { ...(data.loop as Record<string,unknown> ?? {}), bodyEntry: v } })} />
+          <Field label="Max Iterations" value={String((data.loop as Record<string,unknown>)?.maxIterations as number ?? 10)} onChange={(v) => onChange(node.id, { ...data, loop: { ...(data.loop as Record<string,unknown> ?? {}), maxIterations: Number(v) } })} />
         </>
       )}
       {nodeType === "trigger" && (
-        <SelectField label="Source" value={(data.source as string) ?? "manual"} options={["manual", "schedule", "webhook"]} onChange={(v) => onChange(node.id, { ...data, source: v })} />
+        <SelectField label="Source" value={(data.trigger as Record<string,unknown>)?.source as string ?? "manual"} options={["manual", "schedule", "webhook"]} onChange={(v) => onChange(node.id, { ...data, trigger: { ...(data.trigger as Record<string,unknown> ?? {}), source: v } })} />
       )}
 
       {/* onError for agent/script/http nodes */}
@@ -93,17 +91,19 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 
 function ExprField({ label, data, key_, onChange }: { label: string; data: Record<string, unknown>; key_: string; onChange: (d: Record<string, unknown>) => void }) {
   const obj = (data[key_] as Record<string, unknown>) ?? {};
-  const text = JSON.stringify(obj, null, 2);
+  // Uncontrolled: commit only on blur so intermediate (invalid) keystrokes
+  // don't revert the textarea to the previous valid JSON.
+  const handleBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+    try { onChange({ [key_]: JSON.parse(e.target.value) }); } catch { /* keep previous value */ }
+  };
   return (
     <div>
       <label className="block text-xs text-muted-foreground mb-1">{label}</label>
       <textarea
         className="w-full rounded border border-border bg-background px-2 py-1 text-xs font-mono"
         rows={4}
-        value={text}
-        onChange={(e) => {
-          try { onChange({ [key_]: JSON.parse(e.target.value) }); } catch { /* invalid — don't update */ }
-        }}
+        defaultValue={JSON.stringify(obj, null, 2)}
+        onBlur={handleBlur}
       />
     </div>
   );
