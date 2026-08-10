@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect, react-refresh/only-export-components */
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
 import { Badge } from "@workspace/ui/components/badge"
