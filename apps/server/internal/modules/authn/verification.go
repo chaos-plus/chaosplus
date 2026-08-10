@@ -126,6 +126,22 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 	return nil
 }
 
+
+// maxCodeAttempts bounds 6-digit email-verification-code guesses (M2).
+const maxCodeAttempts = 5
+
+func (s *WebService) codeAttempt(code string) int {
+	if v, ok := s.codeAttempts.Load(code); ok {
+		return v.(int)
+	}
+	return 0
+}
+
+func (s *WebService) recordCodeAttempt(code string) {
+	v := s.codeAttempt(code) + 1
+	s.codeAttempts.Store(code, v)
+}
+
 // CompleteEmailVerification 支持链接 token 或 6 位验证码两种方式激活。
 func (s *WebService) CompleteEmailVerification(ctx context.Context, token, code string) error {
 	if !s.EmailVerificationEnabled() {
@@ -154,13 +170,19 @@ func (s *WebService) CompleteEmailVerification(ctx context.Context, token, code 
 		if len(code) != 6 {
 			return authnext.ErrInvalidEmailVerification
 		}
+		// M2 (round-3 review): brute-force cap — 5 failed attempts lock the code.
+		if s.codeAttempt(code) >= maxCodeAttempts {
+			return authnext.ErrInvalidEmailVerification
+		}
 		if err := s.db.NewSelect().Model(&verification).
 			Where("code = ? AND consumed_at = 0 AND expires_at > ?", code, now).Scan(ctx); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
+				s.recordCodeAttempt(code)
 				return authnext.ErrInvalidEmailVerification
 			}
 			return fmt.Errorf("load email verification credential: %w", err)
 		}
+		s.codeAttempts.Delete(code) // 成功即清零
 	default:
 		return authnext.ErrInvalidEmailVerification
 	}

@@ -108,6 +108,8 @@ type WebService struct {
 	notificationMu            sync.Mutex
 	notificationCancel        context.CancelFunc
 	notificationDone          chan struct{}
+	// codeAttempts 限制 6 位邮箱验证码的暴力破解(M2):每个 code 最多 5 次失败。
+	codeAttempts sync.Map // code -> int
 }
 
 type ClaimContext struct {
