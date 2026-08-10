@@ -165,6 +165,67 @@ func (e *Engine) execFork(st *nodeState) error {
 	return nil
 }
 
+// execGroup runs an inline subgraph (GroupSpec) as a nested DAG on the same
+// executor. The group entry gets the current scope; the last completed node's
+// output becomes the group output. Groups nest arbitrarily.
+func (e *Engine) execGroup(ctx context.Context, st *nodeState) error {
+	g := st.node.Group
+	if g == nil || len(g.Nodes) == 0 {
+		return fmt.Errorf("workflow %s: group %q has no nodes", e.def.ID, st.node.ID)
+	}
+	subDef := &WorkflowDef{
+		ID: fmt.Sprintf("%s.%s", e.def.ID, st.node.ID),
+		Nodes: g.Nodes, Edges: g.Edges,
+	}
+	// Map external scope into subgraph context.
+	subCtx := make(map[string]any)
+	for k, v := range e.scope {
+		subCtx[k] = v
+	}
+	for extKey, intKey := range g.InputMapping {
+		if v, ok := e.scope[extKey]; ok {
+			subCtx[intKey] = v
+		}
+	}
+	ctxJSON, _ := json.Marshal(subCtx)
+
+	subEngine, err := NewEngine(subDef, e.exec)
+	if err != nil {
+		return fmt.Errorf("workflow %s: group %q: %w", e.def.ID, st.node.ID, err)
+	}
+	subEngine.OnEvent = e.OnEvent
+	result, err := subEngine.Run(ctx, ctxJSON)
+	if err != nil {
+		return err
+	}
+	// Last completed node's output = group output.
+	var lastOutput json.RawMessage
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Status == StatusCompleted && len(result[i].Output) > 0 {
+			lastOutput = result[i].Output
+			break
+		}
+	}
+	if lastOutput == nil {
+		lastOutput, _ = json.Marshal(map[string]any{"ok": true})
+	}
+	// outputMapping: internalKey → externalScopeKey
+	if len(lastOutput) > 0 {
+		var outMap map[string]any
+		if json.Unmarshal(lastOutput, &outMap) == nil {
+			for intKey, extKey := range g.OutputMapping {
+				if v, ok := outMap[intKey]; ok {
+					e.scope[extKey] = v
+				}
+			}
+		}
+	}
+	st.output = lastOutput
+	e.updateScope(st)
+	e.mark(st.node.ID, StatusCompleted, lastOutput, "")
+	return nil
+}
+
 // execJoin implements AND semantics: any failed upstream (after retry) fails
 // the join (PRD §7.3).
 func (e *Engine) execJoin(id string) error {

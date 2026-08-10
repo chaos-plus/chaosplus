@@ -9,6 +9,7 @@ export interface NodeTemplate {
 
 export const DEV_NODES: NodeTemplate[] = [
   { type: "agent",           label: "Agent",         icon: "\u{1F9E0}", defaults: { agent: { id: "", role: "", executor: "claude", systemPrompt: "" } } },
+  { type: "group",           label: "Group/Subgraph",icon: "\u{1F4E6}", defaults: { group: { entry: "", nodes: [], edges: [] } } },
   { type: "condition",       label: "Condition",     icon: "\u{1F500}", defaults: { condition: { expr: {} } } },
   { type: "transform",       label: "Transform",     icon: "⚡",     defaults: { transform: { expr: {}, output: "" } } },
   { type: "loop",            label: "Loop",          icon: "\u{1F504}", defaults: { loop: { bodyEntry: "", condition: {}, maxIterations: 10 } } },

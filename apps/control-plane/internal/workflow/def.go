@@ -23,6 +23,7 @@ const (
 	NodeTrigger       NodeType = "trigger"
 	NodeLoop          NodeType = "loop"
 	NodeSubworkflow   NodeType = "subworkflow"
+	NodeGroup         NodeType = "group"
 )
 
 // EdgeCondition is a predefined (non-eval) edge selector (PRD §7.3).
@@ -60,6 +61,7 @@ type Node struct {
 	Loop          *LoopSpec          `json:"loop,omitempty"`
 	Subworkflow   *SubworkflowSpec   `json:"subworkflow,omitempty"`
 	FanOut        *FanOutSpec        `json:"fanOut,omitempty"`
+	Group         *GroupSpec         `json:"group,omitempty"`
 }
 
 // Edge links two nodes; Condition defaults to "success" when empty.
@@ -93,6 +95,17 @@ type LoopSpec struct {
 	BodyEntry     string          `json:"bodyEntry"`
 	Condition     json.RawMessage `json:"condition"` // JSON Logic over body outputs
 	MaxIterations int             `json:"maxIterations"`
+}
+
+// GroupSpec is an inline subgraph — a container of nodes and edges that executes
+// as one logical unit. Groups can be collapsed/expanded in the editor (n8n/ComfyUI
+// pattern). The engine runs the group's internal DAG with input/output mapping.
+type GroupSpec struct {
+	Entry         string            `json:"entry"`    // first node to execute
+	Nodes         []Node            `json:"nodes"`    // subgraph nodes
+	Edges         []Edge            `json:"edges"`    // subgraph edges
+	InputMapping  map[string]string `json:"inputMapping,omitempty"`  // external → internal scope
+	OutputMapping map[string]string `json:"outputMapping,omitempty"` // internal → external scope
 }
 
 // SubworkflowSpec references another WorkflowDef (reserved, PRD §7.2).

@@ -234,6 +234,8 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 		err = e.execJoin(id)
 	case NodeLoop:
 		err = e.execLoop(ctx, id)
+	case NodeGroup:
+		err = e.execGroup(ctx, st)
 	case NodeSubworkflow:
 		err = fmt.Errorf("workflow %s: subworkflow node %q not implemented in v1", e.def.ID, id)
 	default:

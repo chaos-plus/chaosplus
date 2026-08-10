@@ -138,6 +138,15 @@ func validateNodeFields(wfID, id string, n *Node) error {
 		if n.Loop == nil || n.Loop.BodyEntry == "" || len(n.Loop.Condition) == 0 || n.Loop.MaxIterations <= 0 {
 			return fmt.Errorf("workflow %s: node %q (loop) missing loop spec", wfID, id)
 		}
+	case NodeGroup:
+		if n.Group == nil || len(n.Group.Nodes) == 0 {
+			return fmt.Errorf("workflow %s: node %q (group) missing group spec (nodes)", wfID, id)
+		}
+		// Validate the subgraph recursively.
+		sub := &WorkflowDef{ID: fmt.Sprintf("%s.%s", wfID, id), Nodes: n.Group.Nodes, Edges: n.Group.Edges}
+		if err := sub.Validate(); err != nil {
+			return fmt.Errorf("workflow %s: group %q: %w", wfID, id, err)
+		}
 	case NodeJoin, NodeSubworkflow:
 		// join is edge-defined; subworkflow is reserved for v1 (schema accepts,
 		// scheduler rejects at run time).
