@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 )
 
 type groupRow struct {

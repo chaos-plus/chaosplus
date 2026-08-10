@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 )
 
 type departmentRow struct {
@@ -297,7 +297,6 @@ func departmentFromRow(row departmentRow, depth int) Department {
 		CreatedAt: unixTime(row.CreatedAt), UpdatedAt: unixTime(row.UpdatedAt),
 	}
 }
-
 
 func isSiblingNameViolation(err error) bool {
 	message := strings.ToLower(err.Error())

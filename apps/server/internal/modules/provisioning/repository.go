@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 )
 
 type directoryRow struct {
@@ -481,7 +481,6 @@ func externalKey(externalID, resourceID string) string {
 	digest := sha256.Sum256([]byte(externalID))
 	return "ext:" + hex.EncodeToString(digest[:])
 }
-
 
 func isDirectoryNameViolation(err error) bool {
 	message := strings.ToLower(err.Error())

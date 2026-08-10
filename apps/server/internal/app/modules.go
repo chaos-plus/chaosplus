@@ -94,7 +94,7 @@ func (app *App) buildModules() []any {
 					}
 					return changed, err
 				},
-				RemoveGroupMembership: guardGroupPositionRemove(administratorGuard, dialect, iam.RemoveGroupMembership),
+				RemoveGroupMembership:    guardGroupPositionRemove(administratorGuard, dialect, iam.RemoveGroupMembership),
 				RemovePositionMembership: guardGroupPositionRemove(administratorGuard, dialect, iam.RemovePositionMembership),
 				RemoveEntityRoleBinding:  guardEntityRoleRemove(administratorGuard, dialect, iam.RemoveEntityRoleBinding),
 			}, nextID))

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	"github.com/uptrace/bun"
-	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 )
 
 const (

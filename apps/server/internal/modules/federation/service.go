@@ -113,9 +113,9 @@ type Service struct {
 	// SAML SP-initiated login state: cached upstream IdP metadata keyed by
 	// provider ID, plus the lazily generated SP signing key for AuthnRequests.
 	samlIDPCache sync.Map // providerID -> *saml.EntityDescriptor
-	spMu    sync.Mutex
-	spKey   *rsa.PrivateKey
-	spCert  *x509.Certificate
+	spMu         sync.Mutex
+	spKey        *rsa.PrivateKey
+	spCert       *x509.Certificate
 }
 
 // ParseEncryptionKey decodes the federation encryption key from the accepted

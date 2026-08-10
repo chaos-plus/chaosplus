@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/danielgtaylor/huma/v2"
 	healthapi "github.com/chaos-plus/chaosplus/internal/infra/health/api"
+	"github.com/danielgtaylor/huma/v2"
 )
 
 // Module exposes liveness and readiness endpoints. It implements RESTRegistrar.

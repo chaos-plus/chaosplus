@@ -50,7 +50,7 @@ type Service struct {
 	// ponytail: per-resource mutex serializes push/deprovision to prevent
 	// remote state drift; a distributed lock (DB advisory) replaces this
 	// when multi-process deployment is needed.
-	pushMu sync.Mutex
+	pushMu    sync.Mutex
 	pushLocks map[string]*sync.Mutex
 }
 

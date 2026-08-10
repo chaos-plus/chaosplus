@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 )
 
 type roleRow struct {
@@ -351,4 +351,3 @@ func roleFromRow(row roleRow) Role {
 		CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC(),
 	}
 }
-

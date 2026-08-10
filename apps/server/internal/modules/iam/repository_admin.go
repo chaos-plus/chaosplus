@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uptrace/bun"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/uptrace/bun"
 )
 
 type tenantMemberRow struct {

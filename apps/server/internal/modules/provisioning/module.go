@@ -19,9 +19,9 @@ type Module struct {
 	declarationOnly bool
 	cfg             Config
 	// sync management
-	syncCancel  context.CancelFunc
-	syncDone    chan struct{}
-	syncMu      sync.Mutex
+	syncCancel context.CancelFunc
+	syncDone   chan struct{}
+	syncMu     sync.Mutex
 }
 
 func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, nextID IDGenerator, identities IdentityProvisioner, groups GroupProvisioner, cfg Config, key []byte) *Module {
