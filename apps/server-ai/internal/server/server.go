@@ -469,6 +469,13 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 	})
 	// Auth gate first, then entity/actor context injection.
 	return authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// M6 (round-3 review): in hardened mode the client-supplied X-Actor header
+		// is untrusted (identity must come from the session/token), so requests
+		// carrying it are rejected instead of honoring a self-declared actor.
+		if os.Getenv("CONTROL_AUTH_HARDENED") == "1" && r.Header.Get("X-Actor") != "" {
+			writeErr(w, 401, "unauthorized: X-Actor is untrusted when CONTROL_AUTH_HARDENED=1")
+			return
+		}
 		ctx := r.Context()
 		if e := r.Header.Get("X-Entity"); e != "" {
 			ctx = store.WithEntity(ctx, e)
