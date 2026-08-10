@@ -240,6 +240,15 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 		err = fmt.Errorf("workflow %s: node %q unknown type %q", e.def.ID, id, st.node.Type)
 	}
 	if err != nil {
+		// n8n-style onError: "continue" passes a stub output downstream
+		// instead of failing the run. Node output = {"error":..., "nodeId":..., "continued":true}.
+		if st.node.OnError == "continue" {
+			out, _ := json.Marshal(map[string]any{"error": err.Error(), "nodeId": id, "continued": true})
+			st.output = out
+			e.updateScope(st)
+			e.mark(id, StatusCompleted, out, "")
+			return nil
+		}
 		st.status = StatusFailed
 		st.err = err.Error()
 		e.mark(id, StatusFailed, nil, err.Error())

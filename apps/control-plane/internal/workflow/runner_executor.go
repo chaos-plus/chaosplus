@@ -82,6 +82,12 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		return nil, fmt.Errorf("node %s: output.json is not valid JSON", node.ID)
 	}
 
+	// PRD §10/§11: validate output against outputSpec.produces BEFORE trusting
+	// the agent's self-claim. Required artifacts must exist and match declared type.
+	if err := r.validateProduces(ctx, node, spawnID, out); err != nil {
+		return nil, fmt.Errorf("node %s: output validation: %w", node.ID, err)
+	}
+
 	// PRD F.5 outputValidator ('cmd:<template>'): the agent's self-claim is not
 	// trusted — run the real validator in the workspace; non-zero exit fails the
 	// node. Pass overrides the output with {"result":"passed"} so downstream
@@ -106,10 +112,53 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	return out, nil
 }
 
+// validateProduces reads each required artifact declared in outputSpec.produces
+// and validates it exists and matches its declared type. This is the built-in
+// trust boundary — it runs unconditionally, before any optional cmd: validator.
+func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, spawnID string, main json.RawMessage) error {
+	if node.Agent == nil || node.Agent.OutputSpec == nil || len(node.Agent.OutputSpec.Produces) == 0 {
+		return nil
+	}
+	for _, p := range node.Agent.OutputSpec.Produces {
+		if !p.Required {
+			continue
+		}
+		path := p.Path
+		if path == "" {
+			path = p.ID
+		}
+		// output.json is already read, validated, and held in main — re-read
+		// would be wasteful.
+		var body []byte
+		if path == "output.json" {
+			body = main
+		} else {
+			b, err := r.link.ReadArtifact(ctx, r.runnerID, spawnID, path)
+			if err != nil {
+				return fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
+			}
+			body = b
+		}
+		if len(body) == 0 {
+			return fmt.Errorf("required artifact %q (%s) is empty", p.ID, path)
+		}
+		switch p.Type {
+		case "json", "object", "array":
+			if !json.Valid(body) {
+				return fmt.Errorf("required artifact %q (%s) declared as %s but is not valid JSON", p.ID, path, p.Type)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *RunnerExecutor) Approve(ctx context.Context, node *Node) (bool, error) {
 	_ = ctx
 	_ = node
-	return true, nil // V1-M1: no web UI yet; approval is wired in V1-M2
+	// RunnerExecutor must be wrapped by ApprovalExecutor for human-approval
+	// support. If this is reached, the caller bypassed the approval broker,
+	// which silently approves every gate — a dangerous accidental config.
+	return false, fmt.Errorf("Approve() requires ApprovalExecutor wrapper: do not call RunnerExecutor.Approve() directly")
 }
 
 var _ Executor = (*RunnerExecutor)(nil)

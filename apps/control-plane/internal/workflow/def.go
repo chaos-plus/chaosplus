@@ -51,6 +51,7 @@ type Node struct {
 	ID            string             `json:"id"`
 	Type          NodeType           `json:"type"`
 	Name          string             `json:"name,omitempty"`
+	OnError       string             `json:"onError,omitempty"` // "stop" (default) | "continue" — n8n pattern
 	Agent         *ExecutorAgentSpec `json:"agent,omitempty"`
 	HumanApproval *HumanApprovalSpec `json:"humanApproval,omitempty"`
 	Condition     *ConditionSpec     `json:"condition,omitempty"`

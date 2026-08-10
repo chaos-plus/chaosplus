@@ -164,6 +164,15 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 
 **决策：引擎（控制面 + runner）+ CLI 用 Go；编排放弃 TS 代码 DSL，改为 JSON/YAML + 可视化[v2+] + AI 生成[v2+]；前端 UI 为 Next.js + ShadCN + tailwindcss。**
 
+**v1 实现偏离（2026-08-10）：** 以下为 v1 已交付的实测选择，与原始 ADR 有意偏离——桌面单机 profile 下简化实现优先级高于跨机分布式的预设计：
+
+| 原始 ADR | v1 实际 | 原因 |
+|----------|---------|------|
+| Runner = Go 静态二进制 (C4) | daemon = TS/Bun | Mastra agent runtime 集成更快；Go 重写无 v1 用户收益 |
+| Admin = Next.js (C4/C9) | Vite SPA | 单页管理后台无需 SSR/ISR；shadcn/ui + tailwind 未变 |
+| DB 查询 = sqlc (C9) | goose 迁移 + 手写 SQL | SQLite-only 阶段 sqlc 收益低；Postgres 上线后再切 |
+| API = gRPC + grpc-gateway (C2) | NATS + HTTP/WS | 桌面单机 profile 下 gRPC 是过度设计；NATS 为零配置发现 |
+
 | 因素 | 判断 |
 |------|------|
 | 难点已变为分布式协调正确性 + 跨机部署 | Go 主场；Temporal/Argo/Cadence 同类选择 |

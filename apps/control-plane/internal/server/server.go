@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -17,6 +18,43 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true }, // local dev single-user
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+}
+
+// AuthToken is the pre-shared API token, read from env at startup (NOT argv —
+// argv is world-readable via /proc). Empty = auth disabled (desktop/localhost).
+var AuthToken string
+
+// authMiddleware wraps h with Bearer token validation. Skipped when AuthToken
+// is empty (desktop profile). WS upgrade routes must handle auth inline because
+// the browser WebSocket API cannot set custom headers.
+func authMiddleware(h http.Handler) http.Handler {
+	if AuthToken == "" {
+		return h // desktop/localhost — no auth gate
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validAuth(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="control-plane"`)
+			writeErr(w, 401, "unauthorized")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// validAuth checks the Authorization header (Bearer) or ?token query param.
+func validAuth(r *http.Request) bool {
+	if b := r.Header.Get("Authorization"); b != "" {
+		const prefix = "Bearer "
+		if len(b) > len(prefix) && subtle.ConstantTimeCompare([]byte(b[len(prefix):]), []byte(AuthToken)) == 1 {
+			return true
+		}
+	}
+	// Fallback for WebSocket (browser can't set Authorization header on
+	// upgrade requests — token passes via query string).
+	if t := r.URL.Query().Get("token"); t != "" {
+		return subtle.ConstantTimeCompare([]byte(t), []byte(AuthToken)) == 1
+	}
+	return false
 }
 
 // NewHandler wires all control-plane HTTP routes.
@@ -313,8 +351,8 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
-	// 实体隔离:把调用方的 X-Entity(instance)注入 context,store 据此过滤/落库。
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Auth gate first, then entity/actor context injection.
+	return authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if e := r.Header.Get("X-Entity"); e != "" {
 			ctx = store.WithEntity(ctx, e)
@@ -323,7 +361,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			ctx = store.WithOwner(ctx, o)
 		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
-	})
+	}))
 }
 
 // handleWS upgrades to WebSocket, replays buffered events, then streams live.

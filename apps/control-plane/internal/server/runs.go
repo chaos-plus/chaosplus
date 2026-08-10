@@ -249,6 +249,13 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	}
 
 	run := m.newRun(&def)
+	// Persist the run definition so it survives restarts (PRD §15.1).
+	if m.st != nil {
+		defJSON, _ := json.Marshal(&def)
+		_ = m.st.SaveRunDefinition(context.Background(), store.RunDef{
+			ID: run.ID, DefJSON: string(defJSON), Status: string(RunRunning),
+		})
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	run.mu.Lock()
 	run.cancel = cancel
@@ -292,6 +299,9 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		eng.OnEvent = func(ev workflow.Event) {
 			if ev.Status == workflow.StatusWaitingApproval {
 				run.setStatus(RunWaitingApproval)
+				if m.st != nil {
+					_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunWaitingApproval))
+				}
 			}
 			m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
@@ -299,7 +309,12 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			})
 		}
 		_, err := eng.Run(runCtx, req.Context)
-		run.setStatus(m.finalStatus(run, err))
+		final := m.finalStatus(run, err)
+		run.setStatus(final)
+		// Persist terminal status so restart doesn't show stale "running".
+		if m.st != nil {
+			_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(final))
+		}
 	}()
 	return run, nil
 }

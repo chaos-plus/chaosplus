@@ -25,6 +25,10 @@ import (
 )
 
 func main() {
+	// Auth: read API token from env (NOT argv — /proc/<pid>/cmdline is world-readable).
+	// Empty = desktop/localhost mode with no auth gate.
+	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")
+
 	url := envOr("CONTROL_NATS_URL", "nats://127.0.0.1:4222")
 	nc, err := nats.Connect(url, nats.Name("chaosplus-control-plane"), nats.Timeout(5*time.Second))
 	if err != nil {
@@ -81,6 +85,10 @@ func main() {
 		slog.Warn("reconcile stale work items", "err", err)
 	} else if n > 0 {
 		slog.Info("reconciled work items stuck in_progress from a previous process", "count", n)
+	}
+	// Rehydrate runs from store so UI shows history across restarts (§15.1).
+	if st != nil {
+		rm.LoadFromStore(ctx)
 	}
 
 	chat := server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", "C:/tmp/chaos-channels"))

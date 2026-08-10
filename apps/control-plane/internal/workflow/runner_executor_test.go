@@ -63,8 +63,14 @@ func execRunner(t *testing.T, nc *nats.Conn, runnerID, artifact string, spawnOK 
 				_ = nc.Publish(evtSubj, e)
 			}()
 		case "read-file":
-			resp, _ := json.Marshal(map[string]any{"ok": true, "data": map[string]any{"content": artifact}})
-			_ = m.Respond(resp)
+			// Only serve content for output.json; other paths get an error
+			// so missing-artifact tests work correctly.
+			if cmd.Path == "output.json" {
+				resp, _ := json.Marshal(map[string]any{"ok": true, "data": map[string]any{"content": artifact}})
+				_ = m.Respond(resp)
+			} else {
+				_ = m.Respond([]byte(`{"ok":false,"data":{"error":"file not found"}}`))
+			}
 		case "run-cmd":
 			resp, _ := json.Marshal(map[string]any{"ok": true, "data": map[string]any{"exitCode": cmdExit, "stdout": "out", "stderr": ""}})
 			_ = m.Respond(resp)
@@ -163,12 +169,76 @@ func TestValidatorCmdParsing(t *testing.T) {
 	}
 }
 
-func TestRunnerExecutorApproveIsPermissiveInM1(t *testing.T) {
+func TestRunnerExecutorApproveRequiresApprovalExecutor(t *testing.T) {
 	link := newLink(t, `{"ok":true}`, true, 0)
 	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1")
 	ok, err := ex.Approve(context.Background(), agentNode(""))
-	if err != nil || !ok {
-		t.Fatalf("Approve = (%v,%v), want (true,nil)", ok, err)
+	if err == nil || ok {
+		t.Fatalf("Approve without ApprovalExecutor must error, got (%v,%v)", ok, err)
+	}
+}
+
+// ── outputSpec.produces validation ──
+
+func withProduces(node *Node, produces ...ProduceSpec) *Node {
+	if node.Agent.OutputSpec == nil {
+		node.Agent.OutputSpec = &OutputSpec{}
+	}
+	node.Agent.OutputSpec.Produces = produces
+	return node
+}
+
+func TestRunnerExecutorRejectsMissingRequiredArtifact(t *testing.T) {
+	link := newLink(t, `{"ok":true}`, true, 0)
+	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
+
+	// output.json has no "report" field, but agent claims it produced report.json
+	node := withProduces(agentNode(""), ProduceSpec{ID: "report", Path: "report.json", Type: "json", Required: true})
+	_, err := ex.RunAgent(context.Background(), node, nil)
+	if err == nil {
+		t.Fatal("missing required artifact must fail the node")
+	}
+	if !strings.Contains(err.Error(), "report") {
+		t.Fatalf("error should mention artifact id, got: %v", err)
+	}
+}
+
+func TestRunnerExecutorAcceptsSatisfiedRequiredProduces(t *testing.T) {
+	// output.json IS the required artifact — validateProduces should accept it
+	link := newLink(t, `{"ok":true,"summary":"done"}`, true, 0)
+	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
+
+	node := withProduces(agentNode(""), ProduceSpec{ID: "main", Path: "output.json", Type: "json", Required: true})
+	out, err := ex.RunAgent(context.Background(), node, nil)
+	if err != nil {
+		t.Fatalf("RunAgent should succeed when required artifact exists: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output not JSON: %s", out)
+	}
+}
+
+func TestRunnerExecutorSkipsNonRequiredProduces(t *testing.T) {
+	link := newLink(t, `{"ok":true}`, true, 0)
+	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
+
+	// non-required artifact missing → no error
+	node := withProduces(agentNode(""), ProduceSpec{ID: "log", Path: "debug.log", Type: "text", Required: false})
+	if _, err := ex.RunAgent(context.Background(), node, nil); err != nil {
+		t.Fatalf("non-required artifact should be skipped: %v", err)
+	}
+}
+
+func TestRunnerExecutorRejectsInvalidJSONTypeArtifact(t *testing.T) {
+	link := newLink(t, "not json at all", true, 0)
+	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
+
+	// output.json content is "not json at all" which is invalid JSON
+	node := withProduces(agentNode(""), ProduceSpec{ID: "main", Path: "output.json", Type: "json", Required: true})
+	_, err := ex.RunAgent(context.Background(), node, nil)
+	if err == nil {
+		t.Fatal("invalid JSON artifact must fail")
 	}
 }
 

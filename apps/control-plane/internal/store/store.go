@@ -77,6 +77,54 @@ func (s *Store) ListEvents(ctx context.Context, runID string, sinceSeq int64, li
 	return out, nil
 }
 
+// RunDef is a persisted workflow run (PRD §16 workflow_runs table).
+type RunDef struct {
+	bun.BaseModel `bun:"table:workflow_runs"`
+	ID            string `bun:"id,pk"`
+	DefJSON       string `bun:"def_json,notnull"`
+	Status        string `bun:"status,notnull,default:'running'"`
+	CreatedAt     int64  `bun:"created_at,notnull"`
+	UpdatedAt     int64  `bun:"updated_at,notnull"`
+}
+
+// SaveRunDefinition upserts a workflow run (INSERT OR REPLACE).
+func (s *Store) SaveRunDefinition(ctx context.Context, rd RunDef) error {
+	rd.UpdatedAt = time.Now().UnixMilli()
+	if rd.CreatedAt == 0 {
+		rd.CreatedAt = rd.UpdatedAt
+	}
+	if rd.Status == "" {
+		rd.Status = "running"
+	}
+	_, err := s.db.NewInsert().Model(&rd).On("CONFLICT (id) DO UPDATE").
+		Set("status = EXCLUDED.status").
+		Set("updated_at = EXCLUDED.updated_at").
+		Exec(ctx)
+	return err
+}
+
+// LoadActiveRunDefinitions returns runs that are not terminal.
+func (s *Store) LoadActiveRunDefinitions(ctx context.Context) ([]RunDef, error) {
+	var out []RunDef
+	if err := s.db.NewSelect().Model(&out).
+		Where("status NOT IN ('completed','failed')").
+		Order("created_at DESC").
+		Scan(ctx); err != nil {
+		return nil, fmt.Errorf("store load active run definitions: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateRunStatus sets a run's status.
+func (s *Store) UpdateRunStatus(ctx context.Context, runID, status string) error {
+	_, err := s.db.NewUpdate().Model((*RunDef)(nil)).
+		Set("status = ?", status).
+		Set("updated_at = ?", time.Now().UnixMilli()).
+		Where("id = ?", runID).
+		Exec(ctx)
+	return err
+}
+
 // Close closes the underlying database.
 func (s *Store) Close() error {
 	return s.db.Close()
