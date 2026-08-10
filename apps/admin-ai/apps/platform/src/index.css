@@ -1,7 +1,7 @@
 @import "@workspace/ui/globals.css";
 
 /*
- * ui-ux-pro-max design system — Modern Dark Cinema (see design-system/chaosplus/MASTER.md).
+ * ui-ux-pro-max design system — Modern Dark Cinema (canonical spec: .rules/3.DESIGN.md).
  * Platform-scoped: these tokens only ship in the platform bundle, not apps/sys.
  * Dark-mode primary developer console: slate-900 surfaces, a single green
  * run/success accent, red reserved for terminal failure.
