@@ -1,0 +1,27 @@
+> Discover all available pages from the documentation index: https://mastra.ai/llms.txt
+
+# Workflow\.branch()
+
+The `.branch()` method creates conditional branches between workflow steps, allowing for different paths to be taken based on the result of a previous step.
+
+## Usage example
+
+```typescript
+workflow.branch([
+  [async ({ context }) => true, step1],
+  [async ({ context }) => false, step2],
+])
+```
+
+## Parameters
+
+**steps** (`[() => boolean, Step]`): An array of tuples, each containing a condition function and a step to execute if the condition is true
+
+## Returns
+
+**workflow** (`NewWorkflow`): The workflow instance for method chaining
+
+## Related
+
+- [Conditional Branching Logic](https://mastra.ai/docs/workflows/control-flow)
+- [Control Flow](https://mastra.ai/docs/workflows/control-flow)

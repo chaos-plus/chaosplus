@@ -1,0 +1,34 @@
+> Discover all available pages from the documentation index: https://mastra.ai/llms.txt
+
+# Agent.getDefaultOptions()
+
+Agents can be configured with default options for memory usage and output format. Iteration steps can also be configured. The `.getDefaultOptions()` method returns these defaults, resolving them if they're functions. These options apply to all `stream()` and `generate()` calls unless overridden and are useful for inspecting an agent’s unknown defaults.
+
+## Usage example
+
+```typescript
+await agent.getDefaultOptions()
+```
+
+## Parameters
+
+**options** (`{ requestContext?: RequestContext }`): Optional configuration object containing request context. (Default: `{}`)
+
+**options.requestContext** (`RequestContext`): Request Context for dependency injection and contextual information.
+
+## Returns
+
+**defaultOptions** (`AgentExecutionOptions<Output> | Promise<AgentExecutionOptions<Output>>`): The default streaming options configured for the agent, either as a direct object or a promise that resolves to the options.
+
+## Extended usage example
+
+```typescript
+await agent.getDefaultOptions({
+  requestContext: new RequestContext(),
+})
+```
+
+## Related
+
+- [Streaming with agents](https://mastra.ai/guides/concepts/streaming)
+- [Request Context](https://mastra.ai/docs/server/request-context)

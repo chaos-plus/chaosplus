@@ -1,0 +1,24 @@
+> Discover all available pages from the documentation index: https://mastra.ai/llms.txt
+
+# Mastra.listVectors()
+
+The `.listVectors()` method is used to retrieve all vector stores that have been configured in the Mastra instance.
+
+## Usage example
+
+```typescript
+mastra.listVectors()
+```
+
+## Parameters
+
+This method doesn't accept any parameters.
+
+## Returns
+
+**vectors** (`TVectors`): A record of all configured vector stores, where keys are vector store names and values are vector store instances.
+
+## Related
+
+- [Vector stores overview](https://mastra.ai/guides/rag/vector-databases)
+- [RAG overview](https://mastra.ai/guides/rag/overview)

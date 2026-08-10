@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 从控制面 Web UI 发起静态 DAG run、WS 实时看节点进度、在 human_approval 节点完成一次真人工审批(engine→NATS→daemon→真实 claude)。
+**Goal:** 从控制面 Web UI 发起静态 DAG run、WS 实时看节点进度、在 human_approval 节点完成一次真人工审批(engine→NATS→runner→真实 claude)。
 
 **Architecture:** 控制面新增 stdlib HTTP 服务 + gorilla/websocket。引擎 `mark()` 加 `OnEvent` 钩子吐实时事件;`ApprovalBroker`+`ApprovalExecutor` 让审批真阻塞、由 HTTP 解析。事件经 NATS `chaos.run.{runID}.evt` fan-out 回 WS 客户端,并必写 StateStore events 表。单页 HTML 嵌入控制面。
 
-**Tech Stack:** Go(控制面)、`gorilla/websocket`(唯一新依赖)、`github.com/nats-io/nats.go`(既有)、`github.com/nats-io/nats-server/v2`(测试既有)、bun(daemon 不变)。
+**Tech Stack:** Go(控制面)、`gorilla/websocket`(唯一新依赖)、`github.com/nats-io/nats.go`(既有)、`github.com/nats-io/nats-server/v2`(测试既有)、bun(runner 不变)。
 
 ## Global Constraints
 
 - 不引入除 `gorilla/websocket` 外的任何新依赖。
 - 引擎调度/readiness 逻辑零改动——只加钩子与状态,不动 §7.3 语义。
 - 事件必写既有 `events` 表(store.Event),幂等键防重。
-- daemon 的 SSE 1v1 聊天 UI 不动。
+- runner 的 SSE 1v1 聊天 UI 不动。
 - Go 代码 gofmt + goimports;测试 table-driven + `-race`。
 - 提交信息 conventional commits,无 Co-Authored-By(全局禁用归属)。
 
@@ -21,9 +21,9 @@
 **先做一次依赖与基线检查(任何 Task 之前):**
 
 - [ ] **Step 0: 确认基线绿**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./...`(工作目录 apps/control-plane)
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./...`(工作目录 apps/server-ai)
   Expected: 全部通过(engine 84.7% cov 基线)。
-  Run: `cd apps/daemon && bun test && bun run typecheck`
+  Run: `cd apps/runner && bun test && bun run typecheck`
   Expected: 9 pass;tsc 无输出。
 
 ---
@@ -31,9 +31,9 @@
 ### Task 1: 引擎事件钩子 + waiting_approval 状态
 
 **Files:**
-- Modify: `apps/control-plane/internal/workflow/engine.go`
-- Modify: `apps/control-plane/internal/workflow/nodes.go`
-- Test: `apps/control-plane/internal/workflow/engine_test.go`(追加)
+- Modify: `apps/server-ai/internal/workflow/engine.go`
+- Modify: `apps/server-ai/internal/workflow/nodes.go`
+- Test: `apps/server-ai/internal/workflow/engine_test.go`(追加)
 
 **Interfaces:**
 - Produces: `Engine.OnEvent func(Event)`(字段,mark() 内调用,可 nil);`workflow.StatusWaitingApproval Status = "waiting_approval"`;`execApproval` 先 `mark(id, StatusWaitingApproval, nil, "")` 再委托 `exec.Approve`。
@@ -105,15 +105,15 @@ func (e *Engine) execApproval(ctx context.Context, st *nodeState) error {
   Expected: 全绿(既有测试不受 waiting_approval 非终态影响)。
 
 - [ ] **Step 6: Commit**
-  Run: `git add apps/control-plane/internal/workflow/engine.go apps/control-plane/internal/workflow/nodes.go apps/control-plane/internal/workflow/engine_test.go && git commit -m "feat(workflow): live OnEvent hook + waiting_approval status"`
+  Run: `git add apps/server-ai/internal/workflow/engine.go apps/server-ai/internal/workflow/nodes.go apps/server-ai/internal/workflow/engine_test.go && git commit -m "feat(workflow): live OnEvent hook + waiting_approval status"`
 
 ---
 
 ### Task 2: validate 规则 —— human_approval 出边必须 approved/rejected
 
 **Files:**
-- Modify: `apps/control-plane/internal/workflow/validate.go`
-- Test: `apps/control-plane/internal/workflow/validate_test.go`(若已存在则追加)
+- Modify: `apps/server-ai/internal/workflow/validate.go`
+- Test: `apps/server-ai/internal/workflow/validate_test.go`(若已存在则追加)
 
 **Interfaces:**
 - Consumes: `workflow.NodeType`、`EdgeCondition`(EdgeApproved/EdgeRejected)
@@ -194,15 +194,15 @@ func testApprovalDef() *WorkflowDef {
   Expected: software-dev-agile.json / e2e-real.json 的审批边均为 approved。
 
 - [ ] **Step 6: Commit**
-  Run: `git add apps/control-plane/internal/workflow/validate.go apps/control-plane/internal/workflow/validate_test.go && git commit -m "feat(workflow): validate human_approval out-edges are approved/rejected"`
+  Run: `git add apps/server-ai/internal/workflow/validate.go apps/server-ai/internal/workflow/validate_test.go && git commit -m "feat(workflow): validate human_approval out-edges are approved/rejected"`
 
 ---
 
 ### Task 3: ApprovalBroker + ApprovalExecutor
 
 **Files:**
-- Create: `apps/control-plane/internal/workflow/approval.go`
-- Test: `apps/control-plane/internal/workflow/approval_test.go`
+- Create: `apps/server-ai/internal/workflow/approval.go`
+- Test: `apps/server-ai/internal/workflow/approval_test.go`
 
 **Interfaces:**
 - Produces:
@@ -389,15 +389,15 @@ var _ Executor = (*ApprovalExecutor)(nil)
   Expected: PASS。
 
 - [ ] **Step 5: Commit**
-  Run: `git add apps/control-plane/internal/workflow/approval.go apps/control-plane/internal/workflow/approval_test.go && git commit -m "feat(workflow): ApprovalBroker + blocking ApprovalExecutor"`
+  Run: `git add apps/server-ai/internal/workflow/approval.go apps/server-ai/internal/workflow/approval_test.go && git commit -m "feat(workflow): ApprovalBroker + blocking ApprovalExecutor"`
 
 ---
 
 ### Task 4: RunManager —— run 注册表 + NATS 扇出 + StateStore 落库
 
 **Files:**
-- Create: `apps/control-plane/internal/server/runs.go`
-- Test: `apps/control-plane/internal/server/runs_test.go`
+- Create: `apps/server-ai/internal/server/runs.go`
+- Test: `apps/server-ai/internal/server/runs_test.go`
 
 **Interfaces:**
 - Consumes: `workflow`(Engine/NewEngine/NewApprovalExecutor/ApprovalBroker/NewRunnerExecutor/MockExecutor/WorkflowDef/Event/Status)、`gateway.Gateway`、`store.Store`、`nats.Conn`。
@@ -430,8 +430,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
 
 func startTestNATS(t *testing.T) *nats.Conn {
@@ -522,13 +522,13 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 > 第一个测试需要 RunManager 能跑完带审批的 DAG:baseFactory 返回 MockExecutor,外层由 ApprovalExecutor 包装(在 Launch 内),agent 秒回、审批由 broker 阻塞。`RunWaitingApproval` 由 RunManager 在收到 waiting_approval 事件时置位。
 
 - [ ] **Step 2: 运行确认失败**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestRunManager -v`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestRunManager -v`
   Expected: 编译失败(runs.go 不存在)。
 
 - [ ] **Step 3: 实现** —— runs.go
 
 ```go
-// Package server is the control-plane's HTTP + WebSocket + run-orchestration
+// Package server is the server-ai's HTTP + WebSocket + run-orchestration
 // surface (PRD §3/C2/C3): REST commands, WS realtime, NATS fan-out, StateStore
 // event log. Browser never touches the store (P1).
 package server
@@ -544,9 +544,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/store"
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
 
 const runSubjectPrefix = "chaos.run."
@@ -774,7 +774,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			reg := m.g.RegisteredRunners()
 			if len(reg) == 0 {
 				cancel()
-				return nil, fmt.Errorf("no runner registered; set runnerId or start a daemon")
+				return nil, fmt.Errorf("no runner registered; set runnerId or start a runner")
 			}
 			runnerID = reg[0]
 		}
@@ -894,22 +894,22 @@ func storeTypeFor(ev RunEvent) string {
 > 注意:`m.emit` 发布 NATS + 本地 `run.publish` 会各自把事件送一遍(本地即时 + NATS 订阅回调再送达一次,重复无害,UI 按 seq 幂等)。若实现时想避免双送,可去掉 `run.publish` 依赖 NATS 回调 —— 但本地直投保证同进程 WS 及时;二选一或都留均可,测试不依赖去重。
 
 - [ ] **Step 4: 运行确认通过**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestRunManager -v`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestRunManager -v`
   Expected: 2 个测试全 PASS。
   Run: `go test -race ./internal/server/ -run TestRunManager`
   Expected: PASS(无数据竞争)。
 
 - [ ] **Step 5: Commit**
-  Run: `git add apps/control-plane/internal/server/runs.go apps/control-plane/internal/server/runs_test.go && git commit -m "feat(server): RunManager — NATS fan-out + StateStore + broker-backed approval"`
+  Run: `git add apps/server-ai/internal/server/runs.go apps/server-ai/internal/server/runs_test.go && git commit -m "feat(server): RunManager — NATS fan-out + StateStore + broker-backed approval"`
 
 ---
 
 ### Task 5: HTTP + WebSocket 服务
 
 **Files:**
-- Modify(依赖): `apps/control-plane/go.mod` / `go.sum` —— 加 `github.com/gorilla/websocket`
-- Create: `apps/control-plane/internal/server/server.go`
-- Test: `apps/control-plane/internal/server/server_test.go`
+- Modify(依赖): `apps/server-ai/go.mod` / `go.sum` —— 加 `github.com/gorilla/websocket`
+- Create: `apps/server-ai/internal/server/server.go`
+- Test: `apps/server-ai/internal/server/server_test.go`
 
 **Interfaces:**
 - Consumes: Task 4 的 `RunManager`/`Run`/`RunEvent`/`LaunchRequest`;`nats.Conn`、`gateway.Gateway`。
@@ -918,7 +918,7 @@ func storeTypeFor(ev RunEvent) string {
   - 端口由 main 从 `CONTROL_HTTP_PORT`(默认 8081)读取,不在此包。
 
 - [ ] **Step 1: 加依赖**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go get github.com/gorilla/websocket@latest`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go get github.com/gorilla/websocket@latest`
   Expected: go.mod/go.sum 更新。
 
 - [ ] **Step 2: 写失败测试** —— server_test.go
@@ -938,8 +938,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/gateway"
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/workflow"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
 
 func TestHTTPLaunchAndWS(t *testing.T) {
@@ -1028,7 +1028,7 @@ func TestHTTPErrors(t *testing.T) {
 ```
 
 - [ ] **Step 3: 运行确认失败**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/ -run 'TestHTTP' -v`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/ -run 'TestHTTP' -v`
   Expected: 编译失败(NewHandler 不存在)。
 
 - [ ] **Step 4: 实现** —— server.go
@@ -1050,7 +1050,7 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-// NewHandler wires all control-plane HTTP routes.
+// NewHandler wires all server-ai HTTP routes.
 func NewHandler(m *RunManager) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -1154,21 +1154,21 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 > 注意:Task 4 的 `Run` 需要导出 `status()`(getter)与 `created` 字段(server.go 用 `run.status()` 与 `run.created`)。Task 4 实现里已含 `status()` getter;`created` 为公开字段。
 
 - [ ] **Step 5: 运行确认通过**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/ -run 'TestHTTP' -v`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/ -run 'TestHTTP' -v`
   Expected: PASS。
   Run: `go test -race ./internal/server/`
   Expected: PASS。
 
 - [ ] **Step 6: Commit**
-  Run: `git add apps/control-plane/go.mod apps/control-plane/go.sum apps/control-plane/internal/server/server.go apps/control-plane/internal/server/server_test.go && git commit -m "feat(server): HTTP + WebSocket run surface"`
+  Run: `git add apps/server-ai/go.mod apps/server-ai/go.sum apps/server-ai/internal/server/server.go apps/server-ai/internal/server/server_test.go && git commit -m "feat(server): HTTP + WebSocket run surface"`
 
 ---
 
 ### Task 6: 嵌入单页 UI
 
 **Files:**
-- Create: `apps/control-plane/internal/server/ui.go`(含 `//go:embed ui.html`)
-- Create: `apps/control-plane/internal/server/ui.html`
+- Create: `apps/server-ai/internal/server/ui.go`(含 `//go:embed ui.html`)
+- Create: `apps/server-ai/internal/server/ui.html`
 - Test: 并入 Task 5 的 `TestHTTPErrors`(`GET /` 断言已覆盖);另加 ui_test.go 冒烟。
 
 **Interfaces:**
@@ -1208,10 +1208,10 @@ func TestUIServesPage(t *testing.T) {
 ```
 
 - [ ] **Step 2: 运行确认失败**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestUIServesPage -v`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/ -run TestUIServesPage -v`
   Expected: FAIL(ui.go 不存在)。
 
-- [ ] **Step 3: 实现** —— ui.html(完整单页;深色,与 daemon UI 风格一致;JS 内 `decide` 调审批 REST)
+- [ ] **Step 3: 实现** —— ui.html(完整单页;深色,与 runner UI 风格一致;JS 内 `decide` 调审批 REST)
 
 ```html
 <!doctype html>
@@ -1300,22 +1300,22 @@ var uiHTML string
 ```
 
 - [ ] **Step 5: 运行确认通过**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go test ./internal/server/`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go test ./internal/server/`
   Expected: 全 PASS(含 Task 5/6 的 GET / 断言,`chaos.plus`/`approve`/`WebSocket` 均出现)。
 
 - [ ] **Step 6: Commit**
-  Run: `git add apps/control-plane/internal/server/ui.go apps/control-plane/internal/server/ui.html && git commit -m "feat(server): embedded single-page run UI"`
+  Run: `git add apps/server-ai/internal/server/ui.go apps/server-ai/internal/server/ui.html && git commit -m "feat(server): embedded single-page run UI"`
 
 ---
 
-### Task 7: 装配到 cmd/control-plane/main.go + 冒烟
+### Task 7: 装配到 cmd/server-ai/main.go + 冒烟
 
 **Files:**
-- Modify: `apps/control-plane/cmd/control-plane/main.go`
+- Modify: `apps/server-ai/cmd/server-ai/main.go`
 
 **Interfaces:**
 - Consumes: `server.NewRunManager`、`server.NewHandler`;`gateway.Gateway`;`store.Store`;`nats.Conn`。
-- Produces: 可运行 `control-plane` 二进制,暴露 `CONTROL_HTTP_PORT`(默认 8081)。
+- Produces: 可运行 `server-ai` 二进制,暴露 `CONTROL_HTTP_PORT`(默认 8081)。
 
 - [ ] **Step 1: 实现** —— main.go 在 gateway 启动后追加(复用既有 `st` 变量,可为 nil)
 
@@ -1323,7 +1323,7 @@ var uiHTML string
 import (
 	"net/http"
 
-	"github.com/chaos-plus/chaosplus/apps/control-plane/internal/server"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/server"
 )
 
 	// HTTP + WS surface (run orchestration / realtime / approvals).
@@ -1334,7 +1334,7 @@ import (
 	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
 	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm)}
 	go func() {
-		log.Printf("control-plane HTTP listening on %s", httpAddr)
+		log.Printf("server-ai HTTP listening on %s", httpAddr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("http server: %v", err)
 		}
@@ -1345,17 +1345,17 @@ import (
 > 注:`st` 在 main.go 中是在 `if dsn := os.Getenv("CONTROL_DB_DSN"); dsn != "" { ... }` 块内声明的局部变量。实现时需把 `st` 提升到块外作用域(nil 缺省),使 HTTP 装配能引用。`CONTROL_RUNNER_ID` 缺省为空 → RunManager.Launch 内用首个注册 runner 兜底。
 
 - [ ] **Step 2: 编译**
-  Run: `cd apps/control-plane && GOSUMDB=sum.golang.org go build ./...`
+  Run: `cd apps/server-ai && GOSUMDB=sum.golang.org go build ./...`
   Expected: 编译通过。
 
-- [ ] **Step 3: 手动冒烟(需 NATS + daemon + 真实 claude;可选但推荐)**
-  - daemon:`cd apps/daemon && RUNNER_ID=e2e-local DAEMON_NATS_URL=nats://127.0.0.1:4222 CLAUDE_BINARY=C:\Users\Feather\.local\bin\claude.exe bun run src/serve.ts`
-  - 控制面:`cd apps/control-plane && CONTROL_DB_DSN=C:\tmp\control-plane.db GOSUMDB=sum.golang.org go run ./cmd/control-plane`(NATS 本地 4222)
+- [ ] **Step 3: 手动冒烟(需 NATS + runner + 真实 claude;可选但推荐)**
+  - runner:`cd apps/runner && RUNNER_ID=e2e-local RUNNER_NATS_URL=nats://127.0.0.1:4222 CLAUDE_BINARY=C:\Users\Feather\.local\bin\claude.exe bun run src/serve.ts`
+  - 控制面:`cd apps/server-ai && CONTROL_DB_DSN=C:\tmp\server-ai.db GOSUMDB=sum.golang.org go run ./cmd/server-ai`(NATS 本地 4222)
   - 浏览器 `http://127.0.0.1:8081` → 发起 `examples/e2e-real.json`(或含审批的 agile),workspace 填临时目录 → 节点实时变绿 → 审批节点高亮 → 点通过 → 跑完。
   - 确认:WS 实时更新、StateStore events 表有 `chaos.run.*` 事件、审批通过后 DAG 继续。
 
 - [ ] **Step 4: Commit**
-  Run: `git add apps/control-plane/cmd/control-plane/main.go && git commit -m "feat(control-plane): wire HTTP + run manager into main"`
+  Run: `git add apps/server-ai/cmd/server-ai/main.go && git commit -m "feat(server-ai): wire HTTP + run manager into main"`
 
 ---
 

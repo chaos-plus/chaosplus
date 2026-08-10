@@ -1,0 +1,23 @@
+> Discover all available pages from the documentation index: https://mastra.ai/llms.txt
+
+# Workflow\.parallel()
+
+The `.parallel()` method executes multiple steps in parallel.
+
+## Usage example
+
+```typescript
+workflow.parallel([step1, step2])
+```
+
+## Parameters
+
+**steps** (`Step[]`): The step instances to execute in parallel
+
+## Returns
+
+**workflow** (`Workflow`): The workflow instance for method chaining
+
+## Related
+
+- [Simultaneous steps with parallel](https://mastra.ai/docs/workflows/control-flow)
