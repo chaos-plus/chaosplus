@@ -4,6 +4,13 @@ import (
 	"fmt"
 )
 
+// Graph bounds (M5): a workflow beyond these is rejected at validation so a
+// hostile/large def cannot stall the scheduler or bloat agent prompts.
+const (
+	maxWorkflowNodes = 500
+	maxWorkflowEdges = 2000
+)
+
 // maxBackoffSeconds caps a single retry backoff so a typo cannot stall the
 // synchronous scheduler for an unreasonable time (it remains cancellable).
 const maxBackoffSeconds = 3600
@@ -36,6 +43,11 @@ func (d *WorkflowDef) Validate() error {
 	}
 	if len(nodes) == 0 {
 		return fmt.Errorf("workflow %s: no nodes", d.ID)
+	}
+	// M5 (round-3 review): bound the graph so a huge def cannot drive the
+	// O(n²)-ish scheduler or giant agent prompts.
+	if len(nodes) > maxWorkflowNodes || len(d.Edges) > maxWorkflowEdges {
+		return fmt.Errorf("workflow %s: too many nodes/edges (max %d nodes, %d edges)", d.ID, maxWorkflowNodes, maxWorkflowEdges)
 	}
 
 	for _, e := range d.Edges {

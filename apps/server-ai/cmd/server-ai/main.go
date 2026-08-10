@@ -30,6 +30,12 @@ func main() {
 	// Auth: read API token from env (NOT argv — /proc/<pid>/cmdline is world-readable).
 	// Empty = desktop/localhost mode with no auth gate.
 	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")
+	// M4 (round-3 review): auth defaults to fail-open (desktop near no-op); on a
+	// shared/networked host that forgets CONTROL_API_TOKEN this silently exposes
+	// the API — warn loudly so it is not deployed open by accident.
+	if server.AuthToken == "" {
+		log.Println("WARNING: CONTROL_API_TOKEN is empty — state-changing API is unauthenticated (desktop near-no-op only)")
+	}
 
 	url := envOr("CONTROL_NATS_URL", "nats://127.0.0.1:4222")
 	nc, err := nats.Connect(url, nats.Name("chaosplus-server-ai"), nats.Timeout(5*time.Second),

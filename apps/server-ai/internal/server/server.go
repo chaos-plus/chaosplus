@@ -65,12 +65,20 @@ func validAuth(r *http.Request) bool {
 			return true
 		}
 	}
-	// Fallback for WebSocket (browser can't set Authorization header on
-	// upgrade requests — token passes via query string).
-	if t := r.URL.Query().Get("token"); t != "" {
-		return subtle.ConstantTimeCompare([]byte(t), []byte(AuthToken)) == 1
+	// M3 (round-3 review): accept ?token only on WebSocket upgrade routes
+	// (browsers can't set Authorization on an upgrade request); elsewhere a
+	// query-string credential would leak in logs/history/Referer.
+	if isWSPath(r.URL.Path) {
+		if t := r.URL.Query().Get("token"); t != "" {
+			return subtle.ConstantTimeCompare([]byte(t), []byte(AuthToken)) == 1
+		}
 	}
 	return false
+}
+
+// isWSPath reports whether a path is a WebSocket upgrade route.
+func isWSPath(p string) bool {
+	return strings.HasSuffix(p, "/events") || p == "/api/machines/ws"
 }
 
 // NewHandler wires all server-ai HTTP routes.
