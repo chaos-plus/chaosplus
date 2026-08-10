@@ -120,32 +120,35 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
   const agent = manager.get(agentId);
   if (!agent) return;
   try {
-    await agent.run(prompt);
-  } catch (e) {
-    transport.publish({ type: "spawn-error", spawnId, message: (e as Error).message });
-    return;
-  }
-  const done = agent.events.find((ev) => ev.type === "done");
-  const err = agent.events.find((ev) => ev.type === "error");
-  // Extract inline preview from agent output (first text/message event).
-  let preview: { type: string; content: string } | undefined;
-  const msgs = agent.events.filter((e) => e.type === "message");
-  if (msgs.length > 0) {
-    const first = (msgs[0] as { text: string }).text.slice(0, 500);
-    preview = { type: "text", content: first };
-  }
+    try {
+      await agent.run(prompt);
+    } catch (e) {
+      transport.publish({ type: "spawn-error", spawnId, message: (e as Error).message });
+      return;
+    }
+    const done = agent.events.find((ev) => ev.type === "done");
+    const err = agent.events.find((ev) => ev.type === "error");
+    let preview: { type: string; content: string } | undefined;
+    const msgs = agent.events.filter((e) => e.type === "message");
+    if (msgs.length > 0) {
+      const first = (msgs[0] as { text: string }).text.slice(0, 500);
+      preview = { type: "text", content: first };
+    }
 
-  transport.publish({
-    type: "spawn-done",
-    spawnId,
-    ok: done?.ok ?? false,
-    exitCode: done?.exitCode ?? 1,
-    ...(done && "costUsd" in done && done.costUsd != null ? { costUsd: done.costUsd } : {}),
-    ...(done?.ok === false || err ? { error: err && "message" in err ? err.message : "no done event" } : {}),
-    ...(preview ? { preview } : {}),
-  });
-  sessions.delete(spawnId);
-  manager.remove(agentId);
+    transport.publish({
+      type: "spawn-done",
+      spawnId,
+      ok: done?.ok ?? false,
+      exitCode: done?.exitCode ?? 1,
+      ...(done && "costUsd" in done && done.costUsd != null ? { costUsd: done.costUsd } : {}),
+      ...(done?.ok === false || err ? { error: err && "message" in err ? err.message : "no done event" } : {}),
+      ...(preview ? { preview } : {}),
+    });
+  } finally {
+    sessions.delete(spawnId);
+    spawnCwd.delete(spawnId);
+    manager.remove(agentId);
+  }
 }
 
 async function main(): Promise<void> {
@@ -185,11 +188,18 @@ async function main(): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
-/** Run a validator command template in a workspace, killing it on timeout. */
+/** Run a validator command template in a workspace, killing it on timeout.
+ * Timeout or maxBuffer overflow → exitCode = 1 (not 0), so the validator
+ * correctly fails the node instead of silently passing. */
 function runCmd(cmd: string, cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolvePromise, reject) => {
-    const proc = execFile(cmd, { cwd, shell: true, windowsHide: true }, (err, stdout, stderr) => {
-      const code = err && typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 0;
+  return new Promise((resolvePromise, _reject) => {
+    const proc = execFile(cmd, { cwd, shell: true, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      let code = 0;
+      if (err) {
+        code = typeof (err as { code?: unknown }).code === "number"
+          ? (err as { code: number }).code
+          : 1; // killed, maxBuffer overflow, or spawn failure → non-zero
+      }
       resolvePromise({ stdout, stderr, exitCode: code });
     });
     const killer = setTimeout(() => proc.kill(), timeoutMs);

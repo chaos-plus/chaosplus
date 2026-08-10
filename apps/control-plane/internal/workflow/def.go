@@ -101,11 +101,12 @@ type LoopSpec struct {
 // as one logical unit. Groups can be collapsed/expanded in the editor (n8n/ComfyUI
 // pattern). The engine runs the group's internal DAG with input/output mapping.
 type GroupSpec struct {
-	Entry         string            `json:"entry"`    // first node to execute
-	Nodes         []Node            `json:"nodes"`    // subgraph nodes
-	Edges         []Edge            `json:"edges"`    // subgraph edges
-	InputMapping  map[string]string `json:"inputMapping,omitempty"`  // external → internal scope
-	OutputMapping map[string]string `json:"outputMapping,omitempty"` // internal → external scope
+	Entry         string            `json:"entry"`
+	Nodes         []Node            `json:"nodes"`
+	Edges         []Edge            `json:"edges"`
+	Depth         int               `json:"-"`                              // internal nesting counter (0 = top-level group)
+	InputMapping  map[string]string `json:"inputMapping,omitempty"`
+	OutputMapping map[string]string `json:"outputMapping,omitempty"`
 }
 
 // SubworkflowSpec references another WorkflowDef (reserved, PRD §7.2).

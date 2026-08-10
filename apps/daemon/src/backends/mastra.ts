@@ -12,6 +12,12 @@ import type { AgentEvent, AgentTask } from "../types";
 export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
   yield { type: "session", status: "running" };
 
+  // Wire abort signal so kill/stop actually cancels the in-flight LLM call
+  // instead of only marking the session stopped while the API call continues.
+  const abortController = new AbortController();
+  const onAbort = () => abortController.abort();
+  task.signal?.addEventListener("abort", onAbort, { once: true });
+
   try {
     const agent = new Agent({
       name: "executor",
@@ -21,6 +27,7 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
 
     const result = await agent.generate(task.prompt, {
       maxSteps: task.maxTurns ?? 25,
+      abortSignal: abortController.signal,
     });
 
     // Stream result text as message events
@@ -50,7 +57,13 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
 
     yield { type: "done", ok: true, exitCode: 0, costUsd };
   } catch (e) {
-    yield { type: "error", message: (e as Error).message };
+    if ((e as Error).name === "AbortError") {
+      yield { type: "error", message: "aborted" };
+    } else {
+      yield { type: "error", message: (e as Error).message };
+    }
     yield { type: "done", ok: false, exitCode: 1, costUsd: 0 };
+  } finally {
+    task.signal?.removeEventListener("abort", onAbort);
   }
 }

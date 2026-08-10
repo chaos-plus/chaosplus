@@ -142,7 +142,16 @@ func validateNodeFields(wfID, id string, n *Node) error {
 		if n.Group == nil || len(n.Group.Nodes) == 0 {
 			return fmt.Errorf("workflow %s: node %q (group) missing group spec (nodes)", wfID, id)
 		}
-		// Validate the subgraph recursively.
+		// Guard against stack overflow on deeply nested groups.
+		if n.Group.Depth > 8 {
+			return fmt.Errorf("workflow %s: group %q exceeds max nesting depth (8)", wfID, id)
+		}
+		// Validate the subgraph recursively, incrementing depth.
+		for i := range n.Group.Nodes {
+			if n.Group.Nodes[i].Group != nil {
+				n.Group.Nodes[i].Group.Depth = n.Group.Depth + 1
+			}
+		}
 		sub := &WorkflowDef{ID: fmt.Sprintf("%s.%s", wfID, id), Nodes: n.Group.Nodes, Edges: n.Group.Edges}
 		if err := sub.Validate(); err != nil {
 			return fmt.Errorf("workflow %s: group %q: %w", wfID, id, err)

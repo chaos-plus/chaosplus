@@ -35,6 +35,10 @@ type nodeState struct {
 	node     *Node
 	status   Status
 	output   json.RawMessage
+	preview  *struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
 	branch   string // condition result
 	active   []int  // indices of active out-edges (condition routing)
 	approved bool   // human_approval outcome
@@ -264,11 +268,15 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 
 // mark updates a node's status and appends a lifecycle event.
 func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr string) {
-	e.states[id].status = status
+	st := e.states[id]
+	st.status = status
 	e.seq++
 	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr}
 	if status == StatusCompleted && len(output) > 0 {
 		ev.Output = output
+	}
+	if st.preview != nil {
+		ev.Preview = st.preview
 	}
 	e.events = append(e.events, ev)
 	if e.OnEvent != nil {

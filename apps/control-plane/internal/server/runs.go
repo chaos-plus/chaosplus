@@ -318,6 +318,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
 				Status: ev.Status, Output: ev.Output, Error: ev.Error,
+				Preview: ev.Preview,
 			})
 		}
 		_, err := eng.Run(runCtx, req.Context)

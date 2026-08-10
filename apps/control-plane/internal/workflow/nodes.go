@@ -52,6 +52,7 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 		return err
 	}
 	st.output = result.Output
+	st.preview = result.Preview
 	e.updateScope(st)
 	e.mark(st.node.ID, StatusCompleted, result.Output, "")
 	return nil
@@ -197,6 +198,13 @@ func (e *Engine) execGroup(ctx context.Context, st *nodeState) error {
 	result, err := subEngine.Run(ctx, ctxJSON)
 	if err != nil {
 		return err
+	}
+	// Propagate inner failures: if any subgraph node failed, the group fails.
+	for _, ev := range result {
+		if ev.Status == StatusFailed {
+			return fmt.Errorf("workflow %s: group %q: node %q failed: %s",
+				e.def.ID, st.node.ID, ev.NodeID, ev.Error)
+		}
 	}
 	// Last completed node's output = group output.
 	var lastOutput json.RawMessage

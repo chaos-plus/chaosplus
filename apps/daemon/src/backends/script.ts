@@ -1,16 +1,21 @@
 import { execFile, type ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentTask } from "../types";
 
-/** Resolve shebang to an interpreter + args for the script body. */
-function interpreter(script: string): { cmd: string; args: string[] } {
+/** Resolve shebang to an interpreter + args for the script body.
+ *  Returns an optional `stdin` string to pipe into the child process. */
+function interpreter(script: string): { cmd: string; args: string[]; stdin?: string } {
   const firstLine = script.split("\n")[0]?.trim();
   if (firstLine?.startsWith("#!")) {
     const parts = firstLine.slice(2).split(/\s+/);
     return { cmd: parts[0], args: [...parts.slice(1), "-c", script] };
   }
-  if (/\bimport\b.*\bfrom\b/.test(script) || /\basync\b/.test(script))
-    return { cmd: "bun", args: ["run", "-"] };
-  if (/\brequire\s*\(/.test(script) || /\bconsole\.log\b/.test(script))
+  // Only check the body (after shebang) for ESM patterns to avoid
+  // false-positives on #!/bin/sh scripts containing "async"/"import".
+  const rest = script.split("\n").slice(firstLine?.startsWith("#!") ? 1 : 0).join("\n");
+  if (/^\s*import\b.*\bfrom\b/m.test(rest) || /^\s*export\b/m.test(rest)) {
+    return { cmd: "bun", args: ["run", "-"], stdin: script };
+  }
+  if (/\brequire\s*\(/.test(rest) || /\bconsole\.log\b/.test(rest))
     return { cmd: "node", args: ["-e", script] };
   return { cmd: "bash", args: ["-c", script] };
 }
@@ -23,11 +28,11 @@ function interpreter(script: string): { cmd: string; args: string[] } {
 export async function* runScript(task: AgentTask): AsyncGenerator<AgentEvent> {
   yield { type: "session", status: "running" };
 
-  const { cmd, args } = interpreter(task.prompt);
+  const { cmd, args, stdin } = interpreter(task.prompt);
   const env = { ...process.env, ...task.env };
 
   try {
-    const { stdout, stderr, exitCode } = await runWithAbort(cmd, args, {
+    const { stdout, stderr, exitCode } = await runWithAbort(cmd, args, stdin, {
       cwd: task.cwd,
       env,
       signal: task.signal,
@@ -39,8 +44,12 @@ export async function* runScript(task: AgentTask): AsyncGenerator<AgentEvent> {
         if (t) yield { type: "message", text: t };
       }
     }
-    if (stderr.trim() && !stdout.trim()) {
-      yield { type: "message", text: stderr.trim() };
+    if (stderr.trim()) {
+      // Always emit stderr — don't gate on stdout emptiness
+      for (const line of stderr.trim().split("\n")) {
+        const t = line.trim();
+        if (t) yield { type: "message", text: t };
+      }
     }
     yield { type: "done", ok: exitCode === 0, exitCode, costUsd: 0 };
   } catch (e) {
@@ -50,18 +59,24 @@ export async function* runScript(task: AgentTask): AsyncGenerator<AgentEvent> {
 }
 
 function runWithAbort(
-  cmd: string, args: string[], opts: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
+  cmd: string, args: string[], stdin: string | undefined,
+  opts: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve, reject) => {
-    // execFile with shell:true: cmd is the shell program, args are shell arguments.
-    // When interpreter returns e.g. { cmd: "bash", args: ["-c", script] },
-    // this runs: bash -c '<script>'
+  return new Promise((resolve) => {
     const proc: ChildProcess = execFile(cmd, args, {
       cwd: opts.cwd, env: opts.env, maxBuffer: 10 * 1024 * 1024,
     }, (err, stdout, stderr) => {
-      const code = err && "code" in (err as object) ? (err as { code: number }).code : 0;
+      const code = err && "code" in (err as object)
+        ? (err as { code: number }).code
+        : (err ? 1 : 0); // killed/maxBuffer → non-zero
       resolve({ stdout, stderr, exitCode: typeof code === "number" ? code : 1 });
     });
+
+    // Feed script body to stdin when interpreter requires it (bun run -).
+    if (stdin && proc.stdin) {
+      proc.stdin.write(stdin);
+      proc.stdin.end();
+    }
 
     const onAbort = () => { proc.kill("SIGTERM"); };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
