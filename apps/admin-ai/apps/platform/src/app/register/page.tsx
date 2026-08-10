@@ -10,6 +10,7 @@ import { ApiError, iamApi } from "../../lib/iam-api"
 export default function RegisterPage() {
   const [busy, setBusy] = useState(false)
   const [complete, setComplete] = useState(false)
+  const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
   const [verifyMsg, setVerifyMsg] = useState("")
   const [visible, setVisible] = useState(false)
@@ -27,8 +28,10 @@ export default function RegisterPage() {
       return
     }
     try {
+      const submittedEmail = String(data.get("email") ?? "").trim()
+      setEmail(submittedEmail)
       await iamApi.register({
-        email: String(data.get("email") ?? "").trim(),
+        email: submittedEmail,
         password,
         display_name: String(data.get("display_name") ?? "").trim(),
       })
@@ -61,52 +64,54 @@ export default function RegisterPage() {
           </header>
 
           {complete ? (
-            <div className="mt-5 space-y-4">
+            <form
+              className="mt-5 space-y-5"
+              onSubmit={async (e) => {
+                e.preventDefault()
+                if (code.trim().length !== 6) {
+                  setVerifyMsg("请输入 6 位验证码")
+                  return
+                }
+                try {
+                  await iamApi.completeEmailVerification("", code.trim())
+                  setVerifyMsg("")
+                  window.location.assign("/login")
+                } catch (cause) {
+                  setVerifyMsg(cause instanceof Error ? cause.message : "验证码错误")
+                }
+              }}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="registration-email">邮箱</Label>
+                <Input id="registration-email" value={email} readOnly />
+              </div>
               <div className="flex items-start gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
                 <MailCheck className="mt-0.5 size-5 shrink-0 text-primary" />
                 <div>
                   <p className="font-medium">请输入邮箱验证码</p>
                   <p className="mt-1 text-muted-foreground">
-                    我们已向你的邮箱发送 6 位验证码,输入即可完成注册。
+                    已向 {email} 发送 6 位验证码,输入即可完成注册。
                   </p>
                 </div>
               </div>
-              <form
-                className="space-y-4"
-                onSubmit={async (e) => {
-                  e.preventDefault()
-                  if (code.trim().length !== 6) {
-                    setVerifyMsg("请输入 6 位验证码")
-                    return
-                  }
-                  try {
-                    await iamApi.completeEmailVerification("", code.trim())
-                    setVerifyMsg("")
-                    window.location.assign("/login")
-                  } catch (cause) {
-                    setVerifyMsg(cause instanceof Error ? cause.message : "验证码错误")
-                  }
-                }}
-              >
-                <div className="space-y-2">
-                  <Label htmlFor="verify-code">验证码</Label>
-                  <Input
-                    id="verify-code"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    autoFocus
-                    placeholder="6 位数字"
-                    className="text-center text-2xl tracking-[0.5em]"
-                  />
-                  {verifyMsg && <p className="text-sm text-destructive">{verifyMsg}</p>}
-                </div>
-                <Button type="submit" className="w-full" disabled={code.trim().length !== 6}>
-                  验证并注册
-                </Button>
-              </form>
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="verify-code">验证码</Label>
+                <Input
+                  id="verify-code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder="6 位数字"
+                  className="text-center text-2xl tracking-[0.5em]"
+                />
+                {verifyMsg && <p className="text-sm text-destructive">{verifyMsg}</p>}
+              </div>
+              <Button type="submit" className="w-full" disabled={code.trim().length !== 6}>
+                验证并注册
+              </Button>
+            </form>
           ) : (
             <form className="mt-5 space-y-5" onSubmit={submit}>
               <div className="space-y-2">
