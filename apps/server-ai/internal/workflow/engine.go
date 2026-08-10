@@ -27,6 +27,7 @@ type Event struct {
 	Status  Status          `json:"status"`
 	Output  json.RawMessage `json:"output,omitempty"`
 	Error   string          `json:"error,omitempty"`
+	Attempt int             `json:"attempt,omitempty"`
 	Preview *struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
@@ -282,7 +283,7 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 	st := e.states[id]
 	st.status = status
 	e.seq++
-	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr}
+	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: st.attempts}
 	if status == StatusCompleted && len(output) > 0 {
 		ev.Output = output
 	}

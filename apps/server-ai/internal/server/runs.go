@@ -52,6 +52,7 @@ type RunEvent struct {
 	RunStatus RunStatus       `json:"runStatus,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
 	Error     string          `json:"error,omitempty"`
+	Attempt   int             `json:"attempt,omitempty"`
 	Review    *ReviewInfo     `json:"review,omitempty"`
 	Preview   *struct {
 		Type    string `json:"type"`
@@ -344,7 +345,7 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
 				Status: ev.Status, Output: ev.Output, Error: ev.Error,
-				Preview: ev.Preview,
+				Attempt: ev.Attempt, Preview: ev.Preview,
 			})
 		}
 		_, err := eng.Run(runCtx, req.Context)
@@ -473,7 +474,7 @@ func (m *RunManager) persistNodeExecution(run *Run, ev RunEvent) {
 		completedAt = time.Now().UnixMilli()
 	}
 	if err := m.st.UpsertNodeExecution(context.Background(), store.NodeExecution{
-		RunID: run.ID, NodeID: ev.NodeID, Attempt: 1,
+		RunID: run.ID, NodeID: ev.NodeID, Attempt: ev.Attempt + 1, // 1-based attempt (review: retries no longer collapse to one row)
 		Status: string(ev.Status), Error: ev.Error, CompletedAt: completedAt,
 	}); err != nil {
 		slog.Warn("persist node execution", "run", run.ID, "node", ev.NodeID, "err", err)

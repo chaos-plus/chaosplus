@@ -40,15 +40,22 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 			subs:    make(map[RunSubscriber]struct{}),
 			created: time.UnixMilli(rd.CreatedAt),
 		}
-		events, _ := m.st.ListEvents(ctx, rd.ID, 0, 1000)
-		for i, evt := range events {
+		// Preserve the original per-run event seqs (they feed idempotency keys):
+		// rewriting them would collide with pre-restart events and silently drop
+		// new ones (review: >1000-event runs truncated). Load well beyond any
+		// realistic run size rather than a fixed 1000 cap.
+		events, _ := m.st.ListEvents(ctx, rd.ID, 0, 100000)
+		maxSeq := 0
+		for _, evt := range events {
 			var re RunEvent
 			if json.Unmarshal([]byte(evt.PayloadJSON), &re) == nil {
-				re.Seq = i + 1
+				if re.Seq > maxSeq {
+					maxSeq = re.Seq
+				}
 				run.events = append(run.events, re)
 			}
 		}
-		run.seq = len(run.events)
+		run.seq = maxSeq
 		m.runs[rd.ID] = run
 		slog.Info("rehydrated run", "run", rd.ID, "status", rd.Status, "events", len(run.events))
 	}
