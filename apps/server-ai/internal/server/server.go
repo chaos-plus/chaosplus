@@ -448,6 +448,11 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 				return
 			}
 		}
+		// M7 (round-3 review): reason is persisted; cap it like the feedback fields.
+		if len(body.Reason) > workflow.MaxFeedbackFieldLen {
+			writeErr(w, 400, "reason too long")
+			return
+		}
 		if err := m.Approve(id, node, body.Approve, body.Reason, body.Feedback); err != nil {
 			writeErr(w, 409, err.Error())
 			return

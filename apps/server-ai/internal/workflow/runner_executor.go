@@ -99,7 +99,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		return AgentResult{}, fmt.Errorf("node %s: spawn: %w", node.ID, err)
 	}
 	if !res.OK {
-		return AgentResult{}, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, res.Error)
+		return AgentResult{}, fmt.Errorf("node %s: agent failed (exit %d): %s", node.ID, res.ExitCode, sanitizeErrText(res.Error, r.workspace))
 	}
 
 	out, err := r.link.ReadArtifact(ctx, runnerID, spawnID, "output.json")
@@ -136,7 +136,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 			if detail == "" {
 				detail = fmt.Sprintf("exit %d", res.ExitCode)
 			}
-			return AgentResult{}, fmt.Errorf("node %s: validator failed: %s", node.ID, detail)
+			return AgentResult{}, fmt.Errorf("node %s: validator failed: %s", node.ID, sanitizeErrText(detail, r.workspace))
 		}
 		out, _ = json.Marshal(map[string]any{"result": "passed"})
 	}
@@ -282,7 +282,24 @@ func (r *RunnerExecutor) buildPrompt(node *Node, input json.RawMessage) string {
 		}
 	}
 	if len(input) > 0 {
-		p += "Context (JSON):\n" + string(input) + "\n"
+		// M1 (round-3 review): don't re-emit the reserved feedback/error keys in
+		// the unframed context dump — they are already in the delimited DATA
+		// blocks above, and dumping them here without the "not instructions"
+		// framing would undermine the delimiter.
+		ctx := input
+		if scope != nil {
+			cp := make(map[string]json.RawMessage, len(scope))
+			for k, v := range scope {
+				if k == "rejection_feedback" || k == "last_error" {
+					continue
+				}
+				cp[k] = v
+			}
+			if b, err := json.Marshal(cp); err == nil {
+				ctx = b
+			}
+		}
+		p += "Context (JSON):\n" + string(ctx) + "\n"
 	}
 	return p
 }

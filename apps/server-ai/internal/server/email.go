@@ -4,7 +4,9 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -118,6 +120,16 @@ func (cs *ChatService) registerEmailRoutes(mux *http.ServeMux) {
 	er := &emailRenderer{st: cs.st}
 
 	mux.HandleFunc("POST /api/email/notification", func(w http.ResponseWriter, req *http.Request) {
+		// H1 (round-3 review): the webhook is auth-exempt but must carry a shared
+		// secret — otherwise anyone who can reach the port relays branded mail.
+		if secret := os.Getenv("CONTROL_EMAIL_WEBHOOK_SECRET"); secret != "" {
+			got := strings.TrimSpace(req.Header.Get("X-Webhook-Secret"))
+			if subtle.ConstantTimeCompare([]byte(got), []byte(secret)) != 1 {
+				w.WriteHeader(401)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+				return
+			}
+		}
 		body, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
 		var n notificationPayload
 		if err := json.Unmarshal(body, &n); err != nil {
@@ -163,7 +175,9 @@ func (cs *ChatService) registerEmailRoutes(mux *http.ServeMux) {
 func renderTemplate(tmpl string, data map[string]string) string {
 	s := tmpl
 	for k, v := range data {
-		s = strings.ReplaceAll(s, "{{."+k+"}}", v)
+		// H1 (round-3 review): template values are client-supplied — escape HTML
+		// so attacker-controlled code/recovery URLs cannot inject markup/JS.
+		s = strings.ReplaceAll(s, "{{."+k+"}}", html.EscapeString(v))
 	}
 	return s
 }

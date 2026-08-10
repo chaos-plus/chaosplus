@@ -7,9 +7,9 @@ import (
 	"sync"
 )
 
-// maxFeedbackFieldLen caps free-text feedback fields so a malicious or sloppy
+// MaxFeedbackFieldLen caps free-text feedback fields so a malicious or sloppy
 // approver cannot bloat the injected prompt or the persisted event log (L4).
-const maxFeedbackFieldLen = 4000
+const MaxFeedbackFieldLen = 4000
 
 // FeedbackCategory enumerates the structured-feedback categories a rejection
 // must carry (PRD §13 / D.5).
@@ -43,11 +43,11 @@ func (f *Feedback) Validate() error {
 	if f.Detail == "" {
 		return fmt.Errorf("feedback.detail is required")
 	}
-	if len(f.Detail) > maxFeedbackFieldLen {
-		return fmt.Errorf("feedback.detail too long (max %d bytes)", maxFeedbackFieldLen)
+	if len(f.Detail) > MaxFeedbackFieldLen {
+		return fmt.Errorf("feedback.detail too long (max %d bytes)", MaxFeedbackFieldLen)
 	}
-	if len(f.Location) > maxFeedbackFieldLen || len(f.Expected) > maxFeedbackFieldLen {
-		return fmt.Errorf("feedback.location/expected too long (max %d bytes)", maxFeedbackFieldLen)
+	if len(f.Location) > MaxFeedbackFieldLen || len(f.Expected) > MaxFeedbackFieldLen {
+		return fmt.Errorf("feedback.location/expected too long (max %d bytes)", MaxFeedbackFieldLen)
 	}
 	return nil
 }
