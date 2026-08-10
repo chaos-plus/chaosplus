@@ -19,7 +19,7 @@ import { Badge } from "@workspace/ui/components/badge";
 import { NodeLibrary, templateByType } from "../../../components/workflow-editor/node-library";
 import { PropertyPanel } from "../../../components/workflow-editor/property-panel";
 import { FlowNode, STATUS_COLOR } from "../../../components/workflow-canvas";
-import { loadWorkflows, saveWorkflow, getWorkflow, type SavedWorkflow } from "../../../lib/workflow-store";
+import { loadWorkflows, saveWorkflow, type SavedWorkflow } from "../../../lib/workflow-store";
 import { controlApi } from "../../../lib/control-api";
 
 const nodeTypes = { flow: FlowNode };
@@ -63,22 +63,26 @@ export default function EditorPage() {
   const [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Load existing or start fresh
+  // Load existing from server or start fresh
   useEffect(() => {
     if (wfId) {
-      const saved = getWorkflow(wfId);
-      if (saved) {
-        setName(saved.name);
-        const def = saved.def as { nodes?: Array<{ id: string; type?: string; [k: string]: unknown }>; edges?: Array<{ from: string; to: string; condition?: string }> };
-        const imported = canvasFromDef(def);
-        setNodes(imported.nodes);
-        setEdges(imported.edges);
-        return;
-      }
+      loadWorkflows().then((list: SavedWorkflow[]) => {
+        const saved = list.find((w: SavedWorkflow) => w.id === wfId);
+        if (saved) {
+          setName(saved.name);
+          const def = saved.def as { nodes?: Array<{ id: string; type?: string; [k: string]: unknown }>; edges?: Array<{ from: string; to: string; condition?: string }> };
+          const imported = canvasFromDef(def);
+          setNodes(imported.nodes);
+          setEdges(imported.edges);
+        } else {
+          const { nodes: n, edges: e } = emptyCanvas();
+          setNodes(n); setEdges(e);
+        }
+      });
+    } else {
+      const { nodes: n, edges: e } = emptyCanvas();
+      setNodes(n); setEdges(e);
     }
-    const { nodes: n, edges: e } = emptyCanvas();
-    setNodes(n);
-    setEdges(e);
   }, [wfId]);
 
   const onConnect = useCallback((conn: Connection) => setEdges((eds) => addEdge(conn, eds)), [setEdges]);
@@ -130,10 +134,11 @@ export default function EditorPage() {
     return { id: wfId ?? `wf-${Date.now()}`, version: "1", name, nodes: defNodes, edges: defEdges };
   }, [nodes, edges, name, wfId]);
 
-  // Save to localStorage
-  const save = useCallback(() => {
+  // Save to server
+  const save = useCallback(async () => {
+    const id = wfId ?? `wf-${Date.now()}`;
     const def = toDef() as unknown;
-    saveWorkflow({ id: wfId ?? `wf-${Date.now()}`, name, def, updatedAt: new Date().toISOString() } as SavedWorkflow);
+    await saveWorkflow({ id, name, def, updatedAt: new Date().toISOString() } as SavedWorkflow);
   }, [toDef, name, wfId]);
 
   // Launch run

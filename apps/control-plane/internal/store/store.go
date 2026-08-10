@@ -125,6 +125,66 @@ func (s *Store) UpdateRunStatus(ctx context.Context, runID, status string) error
 	return err
 }
 
+// WorkflowDefModel is a persisted workflow definition (PRD §16 workflows table).
+type WorkflowDefModel struct {
+	bun.BaseModel `bun:"table:workflows"`
+	ID            string `bun:"id,pk" json:"id"`
+	Version       string `bun:"version,pk" json:"version"`
+	Name          string `bun:"name,notnull" json:"name"`
+	DefJSON       string `bun:"def_json,notnull" json:"-"`
+	DefRaw        any    `bun:"-" json:"def,omitempty"`
+	InstanceID    string `bun:"instance_id,notnull" json:"instanceId"`
+	OwnerID       string `bun:"owner_id,notnull" json:"ownerId"`
+	CreatedAt     int64  `bun:"created_at,notnull" json:"createdAt"`
+	UpdatedAt     int64  `bun:"updated_at,notnull" json:"updatedAt"`
+}
+
+// SaveWorkflow upserts a workflow definition.
+func (s *Store) SaveWorkflow(ctx context.Context, m WorkflowDefModel) error {
+	now := time.Now().UnixMilli()
+	if m.CreatedAt == 0 {
+		m.CreatedAt = now
+	}
+	m.UpdatedAt = now
+	if m.Version == "" {
+		m.Version = "1"
+	}
+	_, err := s.db.NewInsert().Model(&m).On("CONFLICT (id, version) DO UPDATE").
+		Set("name = EXCLUDED.name").
+		Set("def_json = EXCLUDED.def_json").
+		Set("updated_at = EXCLUDED.updated_at").
+		Exec(ctx)
+	return err
+}
+
+// ListWorkflows returns all workflows (newest version first).
+func (s *Store) ListWorkflows(ctx context.Context, instanceID string) ([]WorkflowDefModel, error) {
+	var out []WorkflowDefModel
+	q := s.db.NewSelect().Model(&out).Order("updated_at DESC")
+	if instanceID != "" {
+		q = q.Where("instance_id = ?", instanceID)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, fmt.Errorf("store list workflows: %w", err)
+	}
+	return out, nil
+}
+
+// GetWorkflow fetches one workflow by id+version.
+func (s *Store) GetWorkflow(ctx context.Context, id, version string) (*WorkflowDefModel, error) {
+	m := &WorkflowDefModel{}
+	if err := s.db.NewSelect().Model(m).Where("id = ? AND version = ?", id, version).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("store get workflow %s@%s: %w", id, version, err)
+	}
+	return m, nil
+}
+
+// DeleteWorkflow removes all versions of a workflow.
+func (s *Store) DeleteWorkflow(ctx context.Context, id string) error {
+	_, err := s.db.NewDelete().Model((*WorkflowDefModel)(nil)).Where("id = ?", id).Exec(ctx)
+	return err
+}
+
 // Close closes the underlying database.
 func (s *Store) Close() error {
 	return s.db.Close()

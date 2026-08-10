@@ -74,6 +74,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **When in doubt, follow `.rules/`.** If a task, PRD, skill, or even this file says something different from `.rules/<file>.md`, use `.rules/` as the source of truth. Record the discrepancy in `MEMORY.md` so it can be resolved explicitly.
 
+**Skills auto-sync with `.rules/`.** Every skill under `.claude/skills/` MUST reference the relevant `.rules/` file(s) as its canonical spec, not duplicate rules inline. When you implement a feature or fix, check whether the outcome changes a `.rules/` constraint — if it does, update the `.rules/` file first, then note the change in `MEMORY.md`. Skills that load their rules from `.rules/` at runtime stay current automatically; skills with hardcoded copies rot. Prefer the reference pattern: `See .rules/3.ARCH.md §"分布式执行器调度"` over copying those rules into the skill body.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

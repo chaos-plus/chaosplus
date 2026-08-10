@@ -243,6 +243,69 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		})
 	})
 	// PRD D.1 仪表盘:活跃 run 状态分布 / runner 健康 / 待审批队列 / 今日成本。
+	// ── workflow definitions CRUD (PRD §16 workflows table) ──
+	mux.HandleFunc("GET /api/workflows", func(w http.ResponseWriter, r *http.Request) {
+		if chat == nil || chat.st == nil {
+			writeJSON(w, 200, []any{})
+			return
+		}
+		instanceID := r.Header.Get("X-Entity")
+		list, err := chat.st.ListWorkflows(r.Context(), instanceID)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		// Populate def from def_json so the client sees the workflow JSON.
+		for i := range list {
+			if list[i].DefJSON != "" {
+				var def any
+				if json.Unmarshal([]byte(list[i].DefJSON), &def) == nil {
+					list[i].DefRaw = def
+				}
+			}
+		}
+		writeJSON(w, 200, list)
+	})
+	mux.HandleFunc("POST /api/workflows", func(w http.ResponseWriter, r *http.Request) {
+		if chat == nil || chat.st == nil {
+			writeErr(w, 503, "store not available")
+			return
+		}
+		var body struct {
+			ID      string          `json:"id"`
+			Version string          `json:"version"`
+			Name    string          `json:"name"`
+			Def     json.RawMessage `json:"def"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, 400, "bad request: "+err.Error())
+			return
+		}
+		defJSON := string(body.Def)
+		if defJSON == "" || defJSON == "null" {
+			defJSON = "{}"
+		}
+		if err := chat.st.SaveWorkflow(r.Context(), store.WorkflowDefModel{
+			ID: body.ID, Version: body.Version, Name: body.Name,
+			DefJSON: defJSON, InstanceID: r.Header.Get("X-Entity"), OwnerID: r.Header.Get("X-Actor"),
+		}); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 201, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("DELETE /api/workflows/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if chat == nil || chat.st == nil {
+			writeErr(w, 503, "store not available")
+			return
+		}
+		if err := chat.st.DeleteWorkflow(r.Context(), r.PathValue("id")); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+
 	mux.HandleFunc("GET /api/stats/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		type pending struct {
 			RunID  string `json:"runId"`

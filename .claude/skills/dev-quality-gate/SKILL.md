@@ -7,6 +7,8 @@ description: Route Dev repository work to the correct domain skill and enforce r
 
 Act as the repository-wide router and final acceptance gate. Domain skills guide implementation; this skill determines which ones apply and refuses unsupported quality claims.
 
+**Canonical rules:** `.rules/3.ARCH.md` (architecture, cloud persistence, multi-machine dispatch), `.rules/3.API.md` (REST conventions, auth), `.rules/3.TEST.md` (test methodology), `.rules/4.PRD_TEMPLATE.md` (spec format). All domain skills SHOULD reference these instead of duplicating. When a decision changes a rule, update `.rules/` → note in `MEMORY.md` → skills pick it up automatically.
+
 ## Refresh Context First
 
 Run:
