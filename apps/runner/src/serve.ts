@@ -146,8 +146,12 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
     });
   } finally {
     sessions.delete(spawnId);
-    spawnCwd.delete(spawnId);
     manager.remove(agentId);
+    // Keep the spawn's cwd for a grace period: the control-plane reads
+    // artifacts (read-file) immediately after spawn-done, which races with
+    // synchronous cleanup here. spawnIds are unique, so the timer only ever
+    // removes this spawn's own entry.
+    setTimeout(() => spawnCwd.delete(spawnId), 60_000);
   }
 }
 
