@@ -164,7 +164,7 @@ export default function RegisterPage() {
                   title="点击刷新"
                 >
                   {captchaImage ? (
-                    <img src={captchaImage} alt="图形验证码" className="h-10 w-28 object-cover" />
+                    <img src={captchaImage} alt="图形验证码" className="h-10 w-28 object-contain" />
                   ) : (
                     <RefreshCw className="m-auto size-4" />
                   )}
