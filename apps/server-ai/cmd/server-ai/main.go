@@ -74,6 +74,16 @@ func main() {
 	}
 	defer nc.Close()
 
+	// The machine hub gets its own connection WITHOUT NoEcho: it must publish
+	// register/event messages that the gateway (on the NoEcho conn) subscribes
+	// to — a NoEcho conn cannot receive messages it published itself, so sharing
+	// `nc` would silently make the gateway never see runner registrations.
+	ncBridge, err := nats.Connect(url, nats.Name("chaosplus-server-ai-bridge"), nats.Timeout(5*time.Second))
+	if err != nil {
+		log.Fatalf("connect NATS bridge %s: %v", url, err)
+	}
+	defer ncBridge.Close()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -111,7 +121,7 @@ func main() {
 
 	// Machine hub = NATS↔WS bridge for daemons; engine reaches daemons via the
 	// NATS gateway (any instance), never through the bridge directly.
-	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
+	hub := machine.NewHub(ncBridge, machine.NewTokenStore(), st)
 	// 重启后回灌 DB 里的长期 token hash,daemon 才能用旧 token 重连。
 	if err := hub.LoadTokens(ctx); err != nil {
 		log.Fatalf("load machine tokens: %v", err)
