@@ -992,17 +992,23 @@ export function createIamApi(
     capabilities: () =>
       request<AuthnCapabilities>("/authn/capabilities", {}, false),
     captcha: () =>
-      request<{ captcha_id: string; image_base64: string }>(
-        "/authn/captcha",
-        {},
-        false
-      ),
+      request<{
+        type: "text" | "slide" | "click"
+        captcha_id: string
+        image_base64?: string
+        master_image?: string
+        tile_image?: string
+        thumb_image?: string
+        width?: number
+        height?: number
+      }>("/authn/captcha", {}, false),
     register: (body: {
       email: string
       password: string
       display_name?: string
+      captcha_type: string
       captcha_id: string
-      captcha_code: string
+      captcha_answer: string
     }) =>
       request<{ accepted: boolean }>(
         "/authn/register",

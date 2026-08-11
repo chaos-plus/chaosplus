@@ -2,7 +2,6 @@ package authn
 
 import (
 	"errors"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -18,21 +17,6 @@ var captchaDrivers = []base64Captcha.Driver{
 }
 
 var imageCaptcha = base64Captcha.NewCaptcha(captchaDrivers[0], base64Captcha.DefaultMemStore)
-
-// IssueCaptcha 随机选择一种验证方式生成图形验证码,返回 captchaID 与 base64 PNG(data URL)。
-func IssueCaptcha() (id, b64 string, err error) {
-	c := base64Captcha.NewCaptcha(captchaDrivers[rand.Intn(len(captchaDrivers))], base64Captcha.DefaultMemStore)
-	id, b64, _, err = c.Generate()
-	return
-}
-
-// VerifyCaptcha 校验图形验证码(一次性,校验后即作废)。
-func VerifyCaptcha(id, code string) bool {
-	if id == "" || code == "" {
-		return false
-	}
-	return imageCaptcha.Verify(id, code, true)
-}
 
 // ErrVerificationCodeThrottled: 验证码发送频次超限(60s 内一次)。
 var ErrVerificationCodeThrottled = errors.New("verification code send throttled")

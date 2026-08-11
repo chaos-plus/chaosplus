@@ -30,10 +30,10 @@ func TestVerifyCaptchaRejectsWrongOrEmpty(t *testing.T) {
 	if wrong == answer {
 		t.Skip("unlucky random match")
 	}
-	if VerifyCaptcha(id, wrong) {
+	if VerifyCaptcha("text", id, wrong) {
 		t.Fatal("wrong answer must not verify")
 	}
-	if VerifyCaptcha("", "1234") || VerifyCaptcha(id, "") {
+	if VerifyCaptcha("text", "", "1234") || VerifyCaptcha("text", id, "") {
 		t.Fatal("empty id/code must not verify")
 	}
 }

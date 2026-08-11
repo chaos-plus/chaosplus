@@ -37,6 +37,7 @@ require (
 	github.com/uptrace/bun/driver/pgdriver v1.2.18
 	github.com/uptrace/bun/driver/sqliteshim v1.2.18
 	github.com/uptrace/bun/extra/bunotel v1.2.18
+	github.com/wenlng/go-captcha/v2 v2.0.5
 	github.com/yuin/gopher-lua v1.1.2
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
