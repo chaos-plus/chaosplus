@@ -25,11 +25,12 @@ var Actions = []authz.Action{
 type workflowEntityInput struct{}
 type runIDInput struct {
 	workflowEntityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type runApprovalInput struct {
-	runIDInput
-	Node string `path:"node" minLength:"1" maxLength:"255"`
+	workflowEntityInput
+	ID   guid.ParamID `path:"id"`
+	Node string       `path:"node" minLength:"1" maxLength:"255"`
 	Body struct {
 		Approve  bool      `json:"approve"`
 		Reason   string    `json:"reason" maxLength:"8192"`
@@ -42,7 +43,7 @@ type launchRunInput struct {
 }
 type workflowIDInput struct {
 	workflowEntityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type createWorkflowInput struct {
 	workflowEntityInput
@@ -119,10 +120,10 @@ func (m *Module) listRuns(ctx context.Context, _ *workflowEntityInput) (*workflo
 }
 
 func (m *Module) getRun(ctx context.Context, input *runIDInput) (*workflowBody[runDetail], error) {
-	if run, ok := m.manager.GetFor(input.ID, authn.EntityIDFromContext(ctx)); ok {
+	if run, ok := m.manager.GetFor(guid.ID(input.ID), authn.EntityIDFromContext(ctx)); ok {
 		return &workflowBody[runDetail]{Body: runDetail{ID: run.ID, Status: run.Status(), Def: run.Def}}, nil
 	}
-	stored, err := m.repository.GetRunDef(ctx, input.ID)
+	stored, err := m.repository.GetRunDef(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, workflowAPIError(err)
 	}
@@ -143,17 +144,17 @@ func (m *Module) cancelRun(ctx context.Context, input *runIDInput) (*workflowBod
 	return m.controlRun(ctx, input, m.manager.Cancel)
 }
 func (m *Module) controlRun(ctx context.Context, input *runIDInput, action func(guid.ID) error) (*workflowBody[workflowOK], error) {
-	if _, ok := m.manager.GetFor(input.ID, authn.EntityIDFromContext(ctx)); !ok {
+	if _, ok := m.manager.GetFor(guid.ID(input.ID), authn.EntityIDFromContext(ctx)); !ok {
 		return nil, huma.Error404NotFound("workflow.run_not_found")
 	}
-	if err := action(input.ID); err != nil {
+	if err := action(guid.ID(input.ID)); err != nil {
 		return nil, huma.Error409Conflict("workflow.run_state_conflict")
 	}
 	return &workflowBody[workflowOK]{Body: workflowOK{OK: true}}, nil
 }
 
 func (m *Module) approveRun(ctx context.Context, input *runApprovalInput) (*workflowBody[workflowOK], error) {
-	if _, ok := m.manager.GetFor(input.ID, authn.EntityIDFromContext(ctx)); !ok {
+	if _, ok := m.manager.GetFor(guid.ID(input.ID), authn.EntityIDFromContext(ctx)); !ok {
 		return nil, huma.Error404NotFound("workflow.run_not_found")
 	}
 	if !input.Body.Approve {
@@ -161,7 +162,7 @@ func (m *Module) approveRun(ctx context.Context, input *runApprovalInput) (*work
 			return nil, huma.Error422UnprocessableEntity("workflow.feedback_invalid")
 		}
 	}
-	if err := m.manager.Approve(input.ID, input.Node, input.Body.Approve, input.Body.Reason, input.Body.Feedback); err != nil {
+	if err := m.manager.Approve(guid.ID(input.ID), input.Node, input.Body.Approve, input.Body.Reason, input.Body.Feedback); err != nil {
 		return nil, huma.Error409Conflict("workflow.approval_conflict")
 	}
 	return &workflowBody[workflowOK]{Body: workflowOK{OK: true}}, nil
@@ -199,10 +200,10 @@ func (m *Module) createWorkflow(ctx context.Context, input *createWorkflowInput)
 }
 
 func (m *Module) deleteWorkflow(ctx context.Context, input *workflowIDInput) (*workflowBody[workflowOK], error) {
-	if _, err := m.repository.GetWorkflow(ctx, input.ID); err != nil {
+	if _, err := m.repository.GetWorkflow(ctx, guid.ID(input.ID)); err != nil {
 		return nil, workflowAPIError(err)
 	}
-	if err := m.repository.DeleteWorkflow(ctx, input.ID); err != nil {
+	if err := m.repository.DeleteWorkflow(ctx, guid.ID(input.ID)); err != nil {
 		return nil, workflowAPIError(err)
 	}
 	return &workflowBody[workflowOK]{Body: workflowOK{OK: true}}, nil

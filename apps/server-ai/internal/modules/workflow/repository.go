@@ -73,9 +73,24 @@ func (r *BunRepository) ListEvents(ctx context.Context, runID guid.ID, sinceSeq 
 	if err != nil {
 		return nil, err
 	}
+	return r.listEvents(ctx, runID, sinceSeq, limit, claims.TenantID, claims.EntityID)
+}
+
+// ListAllEvents returns a run's events without tenant/entity claims. Used by
+// crash recovery, which rehydrates the control plane's own runs at startup
+// before any request context exists.
+func (r *BunRepository) ListAllEvents(ctx context.Context, runID guid.ID, sinceSeq int64, limit int) ([]EventRecord, error) {
+	return r.listEvents(ctx, runID, sinceSeq, limit)
+}
+
+func (r *BunRepository) listEvents(ctx context.Context, runID guid.ID, sinceSeq int64, limit int, scope ...guid.ID) ([]EventRecord, error) {
 	items := make([]EventRecord, 0)
-	query := r.db.NewSelect().Model(&items).
-		Where("tenant_id = ? AND entity_id = ? AND run_id = ?", claims.TenantID, claims.EntityID, runID)
+	query := r.db.NewSelect().Model(&items)
+	if len(scope) == 2 {
+		query = query.Where("tenant_id = ? AND entity_id = ? AND run_id = ?", scope[0], scope[1], runID)
+	} else {
+		query = query.Where("run_id = ?", runID)
+	}
 	if sinceSeq > 0 {
 		query = query.Where("seq > ?", sinceSeq)
 	}
@@ -163,9 +178,20 @@ func (r *BunRepository) LoadActiveRunDefinitions(ctx context.Context) ([]RunDef,
 	if err != nil {
 		return nil, err
 	}
+	return r.loadActiveRunDefinitions(ctx, "tenant_id = ? AND entity_id = ? AND deleted_at = 0", claims.TenantID, claims.EntityID)
+}
+
+// LoadAllActiveRunDefinitions returns every non-terminal run across all
+// tenants/entities. It exists for control-plane crash recovery, which must
+// rehydrate the control plane's own runs without a user principal in context.
+func (r *BunRepository) LoadAllActiveRunDefinitions(ctx context.Context) ([]RunDef, error) {
+	return r.loadActiveRunDefinitions(ctx, "deleted_at = 0")
+}
+
+func (r *BunRepository) loadActiveRunDefinitions(ctx context.Context, where string, args ...any) ([]RunDef, error) {
 	items := make([]RunDef, 0)
-	err = r.db.NewSelect().Model(&items).
-		Where("tenant_id = ? AND entity_id = ? AND deleted_at = 0", claims.TenantID, claims.EntityID).
+	err := r.db.NewSelect().Model(&items).
+		Where(where, args...).
 		Where("status NOT IN ('completed','failed','cancelled')").Order("created_at DESC").Scan(ctx)
 	return items, err
 }

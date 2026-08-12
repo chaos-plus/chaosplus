@@ -14,28 +14,31 @@ var Actions = []authz.Action{{Resource: "workspace_task", Verb: "create", Scope:
 type entityInput struct{}
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
 	entityInput
 	Kind          Kind     `query:"kind"`
 	Status        Status   `query:"status"`
-	RequirementID *guid.ID `query:"requirementId"`
+	RequirementID guid.ParamID `query:"requirementId"`
 }
 type createInput struct {
 	entityInput
 	Body CreateInput
 }
 type updateInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Version int64 `query:"version" minimum:"1"`
 }
 type executeInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body struct {
 		Version int64 `json:"version" minimum:"1"`
 	}
@@ -60,7 +63,12 @@ func register[I, O any](m *Module, api huma.API, op huma.Operation, verb string,
 	authz.RegisterEntity(m.registrar, api, op, authz.Guard{Resource: "workspace_task", Verb: verb}, h)
 }
 func (m *Module) list(c context.Context, i *listInput) (*body[[]Task], error) {
-	v, e := m.service.List(c, i.Kind, i.Status, i.RequirementID)
+	var requirementID *guid.ID
+	if !guid.ID(i.RequirementID).Zero() {
+		id := guid.ID(i.RequirementID)
+		requirementID = &id
+	}
+	v, e := m.service.List(c, i.Kind, i.Status, requirementID)
 	if e != nil {
 		return nil, apiError(e)
 	}
@@ -74,27 +82,27 @@ func (m *Module) create(c context.Context, i *createInput) (*body[Task], error) 
 	return &body[Task]{Body: *v}, nil
 }
 func (m *Module) get(c context.Context, i *idInput) (*body[Task], error) {
-	v, e := m.service.Get(c, i.ID)
+	v, e := m.service.Get(c, guid.ID(i.ID))
 	if e != nil {
 		return nil, apiError(e)
 	}
 	return &body[Task]{Body: *v}, nil
 }
 func (m *Module) update(c context.Context, i *updateInput) (*body[Task], error) {
-	v, e := m.service.Update(c, i.ID, i.Body)
+	v, e := m.service.Update(c, guid.ID(i.ID), i.Body)
 	if e != nil {
 		return nil, apiError(e)
 	}
 	return &body[Task]{Body: *v}, nil
 }
 func (m *Module) delete(c context.Context, i *deleteInput) (*body[ok], error) {
-	if e := m.service.Delete(c, i.ID, i.Version); e != nil {
+	if e := m.service.Delete(c, guid.ID(i.ID), i.Version); e != nil {
 		return nil, apiError(e)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil
 }
 func (m *Module) execute(c context.Context, i *executeInput) (*body[execution], error) {
-	id, e := m.service.Execute(c, i.ID, i.Body.Version)
+	id, e := m.service.Execute(c, guid.ID(i.ID), i.Body.Version)
 	if e != nil {
 		return nil, apiError(e)
 	}

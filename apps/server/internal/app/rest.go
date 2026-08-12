@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"reflect"
 	"strings"
 	"time"
 
@@ -34,6 +35,26 @@ var (
 // readHeaderTimeout bounds how long the server waits for request headers,
 // guarding against Slowloris-style connections.
 const readHeaderTimeout = 10 * time.Second
+
+// packageQualifiedSchemaNamer prefixes huma schema names with the type's
+// package so bounded contexts can reuse short type names without the schema
+// registry treating same-named types from different modules as duplicates.
+// The prefix is the last path segment only; two packages whose final segment
+// collides (e.g. core/extension/authn vs modules/authn) would still clash, so
+// keep final segments distinct when adding modules.
+func packageQualifiedSchemaNamer(t reflect.Type, hint string) string {
+	for t != nil && (t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+		t = t.Elem()
+	}
+	if t == nil || t.PkgPath() == "" {
+		return huma.DefaultSchemaNamer(t, hint)
+	}
+	pkg := t.PkgPath()
+	if i := strings.LastIndex(pkg, "/"); i >= 0 {
+		pkg = pkg[i+1:]
+	}
+	return pkg + "." + huma.DefaultSchemaNamer(t, hint)
+}
 
 // StartRestServer mounts the huma API on a chi router (plus the docs UI) and
 // starts an HTTP server in a background goroutine. The server is stored on the
@@ -80,6 +101,11 @@ func (app *App) StartRestServer() error {
 	// Disable huma's built-in single-renderer /docs so our own tabbed page
 	// (registered below) is not overwritten when humachi.New registers routes.
 	config = docs.Register(router, config, app.name)
+
+	// Qualify schema names by package so bounded contexts may reuse short
+	// request/response type names (CreateInput, ok, ...) without the huma
+	// schema registry panicking on same-named types from different modules.
+	config.Components.Schemas = huma.NewMapRegistry("#/components/schemas/", packageQualifiedSchemaNamer)
 
 	// Localize every envelope Message into the request locale at serialize time.
 	config.Transformers = append(config.Transformers, respx.LocalizeMessage)

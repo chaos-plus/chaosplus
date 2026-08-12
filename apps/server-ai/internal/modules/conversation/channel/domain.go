@@ -66,13 +66,13 @@ type Member struct {
 	Version       int64      `bun:"version,notnull" json:"version"`
 }
 
-type CreateInput struct {
+type ChannelCreateInput struct {
 	ProjectID guid.ID `json:"projectId"`
 	Name      string  `json:"name"`
 	Topic     string  `json:"topic,omitempty"`
 }
 
-type UpdateInput struct {
+type ChannelUpdateInput struct {
 	Name    *string `json:"name,omitempty"`
 	Topic   *string `json:"topic,omitempty"`
 	Status  *Status `json:"status,omitempty"`

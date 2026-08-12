@@ -21,13 +21,13 @@ type artifactEntityInput struct{}
 
 type listArtifactsInput struct {
 	artifactEntityInput
-	ProjectID guid.ID `query:"projectId" required:"false"`
+	ProjectID guid.ParamID `query:"projectId" required:"false"`
 	Status    string  `query:"status" enum:"valid,stale,invalid,orphaned" required:"false"`
 }
 
 type artifactIDInput struct {
 	artifactEntityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 
 type artifactBody[T any] struct{ Body T }
@@ -42,7 +42,7 @@ func (m *Module) RegisterREST(api huma.API) {
 }
 
 func (m *Module) listArtifacts(ctx context.Context, input *listArtifactsInput) (*artifactBody[[]Artifact], error) {
-	items, err := m.repository.ListArtifacts(ctx, authn.EntityIDFromContext(ctx), input.ProjectID, input.Status)
+	items, err := m.repository.ListArtifacts(ctx, authn.EntityIDFromContext(ctx), guid.ID(input.ProjectID), input.Status)
 	if err != nil {
 		return nil, artifactAPIError(err)
 	}
@@ -50,7 +50,7 @@ func (m *Module) listArtifacts(ctx context.Context, input *listArtifactsInput) (
 }
 
 func (m *Module) forceValid(ctx context.Context, input *artifactIDInput) (*artifactBody[artifactOK], error) {
-	if err := m.repository.ForceValidateArtifact(ctx, input.ID, authn.PrincipalIDFromContext(ctx)); err != nil {
+	if err := m.repository.ForceValidateArtifact(ctx, guid.ID(input.ID), authn.PrincipalIDFromContext(ctx)); err != nil {
 		return nil, artifactAPIError(err)
 	}
 	return &artifactBody[artifactOK]{Body: artifactOK{OK: true}}, nil

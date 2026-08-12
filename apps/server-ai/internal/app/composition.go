@@ -16,8 +16,10 @@ import (
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workspace"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workspace/attachment"
 	sharedapp "github.com/chaos-plus/chaosplus/internal/app"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/uptrace/bun"
 )
 
 // Extension declares AI bounded contexts on the shared application host.
@@ -58,12 +60,16 @@ func buildModules(config Config, dependencies sharedapp.ModuleDependencies) ([]a
 	}
 
 	hub := machine.NewHub(client.Bridge(), machine.NewTokenStore(), nil, dependencies.NextID, dependencies.OriginPolicy)
+	// A runner registers over the machine WS bridge; surface it to the run
+	// gateway so run launch can discover and dispatch to connected daemons,
+	// and drop it on disconnect so zombies are never dispatch targets.
+	hub.SetRunnerMarker(client.Gateway().MarkRunner, client.Gateway().UnmarkRunner)
 	machineModule := machine.NewModule(dependencies.Writer, hub, dependencies.Authorization)
 	agentModule := agent.NewModule(dependencies.Writer, dependencies.NextID, dependencies.Authorization)
 	machineModule.SetAgentDirectory(agentModule.Directory())
 	channelModule := channel.NewModule(dependencies.Writer, dependencies.NextID, dependencies.Authorization, agentModule.Service())
 	link := &workflow.NatsRunnerLink{G: client.Gateway()}
-	artifactModule := artifact.NewModule(dependencies.Writer, dependencies.NextID, link, nil, config.Reconcile.Interval, dependencies.Authorization)
+	artifactModule := artifact.NewModule(dependencies.Writer, dependencies.NextID, link, artifactScopeDirectory{dependencies.Writer}, config.Reconcile.Interval, dependencies.Authorization)
 	workflowModule := workflow.NewModule(
 		dependencies.Writer,
 		client.Primary(),
@@ -103,6 +109,40 @@ func workspaceBlobStore(config Config) (*attachment.S3BlobStore, error) {
 		return nil, fmt.Errorf("configure workspace object storage: %w", err)
 	}
 	return store, nil
+}
+
+// artifactScopeDirectory enumerates the tenant/entity scopes that own
+// artifacts so background reconciliation (PRD §12) can run without a request
+// context. It reads distinct artifact scopes; the reconcile pass itself checks
+// per-artifact existence/checksum.
+type artifactScopeDirectory struct {
+	db *bun.DB
+}
+
+var _ artifact.ScopeDirectory = artifactScopeDirectory{}
+
+func (d artifactScopeDirectory) ActiveArtifactScopes(ctx context.Context) ([]authn.Claims, error) {
+	rows := make([]struct {
+		TenantID guid.ID `bun:"tenant_id"`
+		EntityID guid.ID `bun:"entity_id"`
+	}, 0)
+	if err := d.db.NewSelect().Table("artifacts").
+		Column("tenant_id", "entity_id").
+		Group("tenant_id", "entity_id").
+		Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("enumerate artifact scopes: %w", err)
+	}
+	out := make([]authn.Claims, 0, len(rows))
+	for _, r := range rows {
+		if r.TenantID.Zero() || r.EntityID.Zero() {
+			continue
+		}
+		// The reconciliation pass is a trusted, tenant/entity-scoped system
+		// scan; it needs a non-zero principal only to satisfy the repository's
+		// claim guard. A fixed sentinel keeps it from being a real user.
+		out = append(out, authn.Claims{TenantID: r.TenantID, EntityID: r.EntityID, PrincipalID: 1})
+	}
+	return out, nil
 }
 
 func machinePicker(hub *machine.Hub) workflow.MachinePicker {

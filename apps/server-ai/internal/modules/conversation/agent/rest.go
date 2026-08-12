@@ -20,32 +20,36 @@ var Actions = []authz.Action{
 type entityInput struct{}
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type createInput struct {
 	entityInput
-	Body CreateInput
+	Body AgentCreateInput
 }
 type updateInput struct {
-	idInput
-	Body UpdateInput
+	entityInput
+	ID guid.ParamID `path:"id"`
+	Body AgentUpdateInput
 }
 type statusInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body struct {
 		Status  Status `json:"status"`
 		Version int64  `json:"version" minimum:"1"`
 	}
 }
 type retireInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body struct {
 		HandoverDoc string `json:"handoverDoc" minLength:"1" maxLength:"65535"`
 		Version     int64  `json:"version" minimum:"1"`
 	}
 }
 type deleteInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Version int64 `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
@@ -82,35 +86,35 @@ func (m *Module) create(ctx context.Context, input *createInput) (*body[Agent], 
 	return &body[Agent]{Body: *value}, nil
 }
 func (m *Module) get(ctx context.Context, input *idInput) (*body[Agent], error) {
-	value, err := m.service.Get(ctx, input.ID)
+	value, err := m.service.Get(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Agent]{Body: *value}, nil
 }
 func (m *Module) update(ctx context.Context, input *updateInput) (*body[Agent], error) {
-	value, err := m.service.Update(ctx, input.ID, input.Body)
+	value, err := m.service.Update(ctx, guid.ID(input.ID), input.Body)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Agent]{Body: *value}, nil
 }
 func (m *Module) setStatus(ctx context.Context, input *statusInput) (*body[Agent], error) {
-	value, err := m.service.SetStatus(ctx, input.ID, input.Body.Status, input.Body.Version)
+	value, err := m.service.SetStatus(ctx, guid.ID(input.ID), input.Body.Status, input.Body.Version)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Agent]{Body: *value}, nil
 }
 func (m *Module) retire(ctx context.Context, input *retireInput) (*body[Agent], error) {
-	value, err := m.service.Retire(ctx, input.ID, input.Body.HandoverDoc, input.Body.Version)
+	value, err := m.service.Retire(ctx, guid.ID(input.ID), input.Body.HandoverDoc, input.Body.Version)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Agent]{Body: *value}, nil
 }
 func (m *Module) delete(ctx context.Context, input *deleteInput) (*body[ok], error) {
-	if err := m.service.Delete(ctx, input.ID, input.Version); err != nil {
+	if err := m.service.Delete(ctx, guid.ID(input.ID), input.Version); err != nil {
 		return nil, apiError(err)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil

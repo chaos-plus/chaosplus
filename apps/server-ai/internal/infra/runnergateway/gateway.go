@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -201,6 +202,10 @@ func (g *Gateway) RegisteredRunners() []string {
 	for id := range g.onRunner {
 		out = append(out, id)
 	}
+	// Deterministic ordering: run launch falls back to reg[0] when no runner id
+	// is supplied, and a random map order would pick an arbitrary (possibly
+	// stale) daemon. Sort so the choice is stable across launches.
+	sort.Strings(out)
 	return out
 }
 
@@ -387,6 +392,26 @@ func (g *Gateway) registerWaiter(runnerID, spawnID string) (*spawnWaiter, func()
 func (g *Gateway) touchRunner(runnerID string) {
 	g.mu.Lock()
 	g.lastSeen[runnerID] = time.Now()
+	g.mu.Unlock()
+}
+
+// MarkRunner registers a runner id so engine runner discovery sees it. Used by
+// the WS machine hub when a daemon connects: the runner registers over the
+// machine WS bridge, not the NATS register subject, so without this the gateway
+// (and therefore run launch) never discovers the connected runner.
+func (g *Gateway) MarkRunner(runnerID string) {
+	g.mu.Lock()
+	g.onRunner[runnerID] = struct{}{}
+	g.lastSeen[runnerID] = time.Now()
+	g.mu.Unlock()
+}
+
+// UnmarkRunner removes a runner id from discovery. Called by the machine hub
+// when a daemon disconnects so stale/zombie runners are never dispatch targets.
+func (g *Gateway) UnmarkRunner(runnerID string) {
+	g.mu.Lock()
+	delete(g.onRunner, runnerID)
+	delete(g.lastSeen, runnerID)
 	g.mu.Unlock()
 }
 

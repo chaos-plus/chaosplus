@@ -40,9 +40,28 @@ func (id *ID) UnmarshalText(b []byte) error {
 	return err
 }
 
-// Schema reports the OpenAPI schema as a positive numeric string.
+// Schema reports the OpenAPI schema as a positive numeric string. The JSON
+// wire form is a decimal string (MarshalJSON) so ids stay exact past
+// JavaScript's 2^53; body validation therefore requires TypeString.
 func (ID) Schema(_ huma.Registry) *huma.Schema {
 	return &huma.Schema{Type: huma.TypeString, Pattern: `^[1-9][0-9]*$`}
+}
+
+// ParamID is the path/query parameter form of ID. Huma binds parameters by
+// reflect kind (int64) and then validates the bound value against the schema,
+// so a TypeString schema on an int64-backed field makes every id route reject
+// with "expected a string". ParamID carries an integer schema so path/query
+// binding and validation agree, while JSON bodies keep the string wire form.
+type ParamID ID
+
+// Schema reports the parameter OpenAPI schema as a positive integer.
+func (ParamID) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{Type: huma.TypeInteger, Format: "int64", Minimum: intPointer(1)}
+}
+
+func intPointer(v int64) *float64 {
+	f := float64(v)
+	return &f
 }
 
 // Value stores the id as a BIGINT.

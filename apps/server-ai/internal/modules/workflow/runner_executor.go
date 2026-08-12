@@ -140,9 +140,11 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 
 	// PRD §10/§11: validate output against outputSpec.produces BEFORE trusting
 	// the agent's self-claim. Required artifacts must exist and match declared type.
+	// validateProduces returns the partial artifacts it found even on failure so
+	// the engine can compare consecutive attempts (PRD F.10 similarity detection).
 	artifacts, err := r.validateProduces(ctx, node, runnerID, spawnID, out)
 	if err != nil {
-		return AgentResult{}, fmt.Errorf("node %s: output validation: %w", node.ID, err)
+		return AgentResult{Artifacts: artifacts}, fmt.Errorf("node %s: output validation: %w", node.ID, err)
 	}
 
 	// PRD F.5 outputValidator ('cmd:<template>'): the agent's self-claim is not
@@ -153,7 +155,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		res, err := r.link.RunCmd(ctx, runnerID, spawnID, validator.Command, validator.TimeoutMs)
 		if err != nil {
 			if validator.Required {
-				return AgentResult{}, fmt.Errorf("node %s: validator %q: %w", node.ID, validator.Ref, err)
+				return AgentResult{Artifacts: artifacts}, fmt.Errorf("node %s: validator %q: %w", node.ID, validator.Ref, err)
 			}
 			continue
 		}
@@ -166,7 +168,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 				detail = fmt.Sprintf("exit %d", res.ExitCode)
 			}
 			if validator.Required {
-				return AgentResult{}, fmt.Errorf("node %s: validator %q failed: %s", node.ID, validator.Ref, sanitizeErrText(detail, r.workspace))
+				return AgentResult{Artifacts: artifacts}, fmt.Errorf("node %s: validator %q failed: %s", node.ID, validator.Ref, sanitizeErrText(detail, r.workspace))
 			}
 			continue
 		}
@@ -199,7 +201,7 @@ func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runne
 				if !p.Required {
 					continue
 				}
-				return nil, fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
+				return artifacts, fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
 			}
 			body = b
 		}
@@ -207,22 +209,22 @@ func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runne
 			if !p.Required {
 				continue
 			}
-			return nil, fmt.Errorf("required artifact %q (%s) is empty", p.ID, path)
+			return artifacts, fmt.Errorf("required artifact %q (%s) is empty", p.ID, path)
 		}
 		switch p.Type {
 		case "json":
 			if !json.Valid(body) {
-				return nil, fmt.Errorf("artifact %q (%s) declared as %s but is not valid JSON", p.ID, path, p.Type)
+				return artifacts, fmt.Errorf("artifact %q (%s) declared as %s but is not valid JSON", p.ID, path, p.Type)
 			}
 		case "object":
 			var value map[string]any
 			if json.Unmarshal(body, &value) != nil {
-				return nil, fmt.Errorf("artifact %q (%s) declared as object but is not a JSON object", p.ID, path)
+				return artifacts, fmt.Errorf("artifact %q (%s) declared as object but is not a JSON object", p.ID, path)
 			}
 		case "array":
 			var value []any
 			if json.Unmarshal(body, &value) != nil {
-				return nil, fmt.Errorf("artifact %q (%s) declared as array but is not a JSON array", p.ID, path)
+				return artifacts, fmt.Errorf("artifact %q (%s) declared as array but is not a JSON array", p.ID, path)
 			}
 		}
 		digest := sha256.Sum256(body)

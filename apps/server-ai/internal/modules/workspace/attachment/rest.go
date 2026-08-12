@@ -25,15 +25,16 @@ type entityInput struct{}
 type listInput struct {
 	entityInput
 	ResourceType ResourceType `query:"resourceType"`
-	ResourceID   guid.ID      `query:"resourceId"`
+	ResourceID   guid.ParamID `query:"resourceId"`
 }
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type deleteInput struct {
-	idInput
-	Version int64 `query:"version" minimum:"1"`
+	entityInput
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type uploadData struct {
 	ResourceType ResourceType  `form:"resourceType" required:"true"`
@@ -61,7 +62,7 @@ func register[I, O any](m *Module, api huma.API, operation huma.Operation, verb 
 }
 
 func (m *Module) list(ctx context.Context, input *listInput) (*body[[]Attachment], error) {
-	items, err := m.service.List(ctx, input.ResourceType, input.ResourceID)
+	items, err := m.service.List(ctx, input.ResourceType, guid.ID(input.ResourceID))
 	if err != nil {
 		return nil, apiError(err)
 	}
@@ -82,7 +83,7 @@ func (m *Module) upload(ctx context.Context, input *uploadInput) (*body[Attachme
 }
 
 func (m *Module) download(ctx context.Context, input *idInput) (*huma.StreamResponse, error) {
-	value, reader, err := m.service.Download(ctx, input.ID)
+	value, reader, err := m.service.Download(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, apiError(err)
 	}
@@ -100,7 +101,7 @@ func (m *Module) download(ctx context.Context, input *idInput) (*huma.StreamResp
 }
 
 func (m *Module) delete(ctx context.Context, input *deleteInput) (*body[ok], error) {
-	if err := m.service.Delete(ctx, input.ID, input.Version); err != nil {
+	if err := m.service.Delete(ctx, guid.ID(input.ID), input.Version); err != nil {
 		return nil, apiError(err)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil

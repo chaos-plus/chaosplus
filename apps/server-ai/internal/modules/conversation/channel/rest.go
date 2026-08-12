@@ -20,31 +20,35 @@ var Actions = []authz.Action{
 type entityInput struct{}
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
 	entityInput
-	ProjectID guid.ID `query:"projectId" required:"false"`
+	ProjectID guid.ParamID `query:"projectId" required:"false"`
 }
 type createInput struct {
 	entityInput
-	Body CreateInput
+	Body ChannelCreateInput
 }
 type updateInput struct {
-	idInput
-	Body UpdateInput
+	entityInput
+	ID guid.ParamID `path:"id"`
+	Body ChannelUpdateInput
 }
 type deleteInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Version int64 `query:"version" minimum:"1"`
 }
 type memberInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body AddMemberInput
 }
 type removeMemberInput struct {
-	idInput
-	MemberID guid.ID    `path:"memberId"`
+	entityInput
+	ID guid.ParamID `path:"id"`
+	MemberID guid.ParamID `path:"memberId"`
 	Kind     MemberKind `path:"kind" enum:"human,agent"`
 	Version  int64      `query:"version" minimum:"1"`
 }
@@ -69,7 +73,7 @@ func register[I, O any](m *Module, api huma.API, operation huma.Operation, verb 
 }
 
 func (m *Module) list(ctx context.Context, input *listInput) (*body[[]Channel], error) {
-	items, err := m.service.List(ctx, input.ProjectID)
+	items, err := m.service.List(ctx, guid.ID(input.ProjectID))
 	if err != nil {
 		return nil, apiError(err)
 	}
@@ -83,41 +87,41 @@ func (m *Module) create(ctx context.Context, input *createInput) (*body[Channel]
 	return &body[Channel]{Body: *value}, nil
 }
 func (m *Module) get(ctx context.Context, input *idInput) (*body[Channel], error) {
-	value, err := m.service.Get(ctx, input.ID)
+	value, err := m.service.Get(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Channel]{Body: *value}, nil
 }
 func (m *Module) update(ctx context.Context, input *updateInput) (*body[Channel], error) {
-	value, err := m.service.Update(ctx, input.ID, input.Body)
+	value, err := m.service.Update(ctx, guid.ID(input.ID), input.Body)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Channel]{Body: *value}, nil
 }
 func (m *Module) delete(ctx context.Context, input *deleteInput) (*body[ok], error) {
-	if err := m.service.Delete(ctx, input.ID, input.Version); err != nil {
+	if err := m.service.Delete(ctx, guid.ID(input.ID), input.Version); err != nil {
 		return nil, apiError(err)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil
 }
 func (m *Module) listMembers(ctx context.Context, input *idInput) (*body[[]Member], error) {
-	items, err := m.service.ListMembers(ctx, input.ID)
+	items, err := m.service.ListMembers(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[[]Member]{Body: items}, nil
 }
 func (m *Module) addMember(ctx context.Context, input *memberInput) (*body[Member], error) {
-	value, err := m.service.AddMember(ctx, input.ID, input.Body)
+	value, err := m.service.AddMember(ctx, guid.ID(input.ID), input.Body)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Member]{Body: *value}, nil
 }
 func (m *Module) removeMember(ctx context.Context, input *removeMemberInput) (*body[ok], error) {
-	if err := m.service.RemoveMember(ctx, input.ID, input.MemberID, input.Kind, input.Version); err != nil {
+	if err := m.service.RemoveMember(ctx, guid.ID(input.ID), guid.ID(input.MemberID), input.Kind, input.Version); err != nil {
 		return nil, apiError(err)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil

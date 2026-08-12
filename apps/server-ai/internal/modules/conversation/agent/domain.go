@@ -51,7 +51,7 @@ type Agent struct {
 	Version      int64   `bun:"version,notnull" json:"version"`
 }
 
-type CreateInput struct {
+type AgentCreateInput struct {
 	Name         string  `json:"name"`
 	Kind         Kind    `json:"kind"`
 	Runtime      string  `json:"runtime"`
@@ -62,7 +62,7 @@ type CreateInput struct {
 	MachineID    guid.ID `json:"machineId"`
 }
 
-type UpdateInput struct {
+type AgentUpdateInput struct {
 	Name         *string  `json:"name,omitempty"`
 	Kind         *Kind    `json:"kind,omitempty"`
 	Runtime      *string  `json:"runtime,omitempty"`

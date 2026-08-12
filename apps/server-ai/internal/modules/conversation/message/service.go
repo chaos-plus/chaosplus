@@ -35,7 +35,7 @@ func NewService(repository Repository, channels ChannelAccess, attachments Attac
 	return &Service{repository: repository, channels: channels, attachments: attachments, publisher: publisher, nextID: nextID}
 }
 
-func (s *Service) Post(ctx context.Context, channelID guid.ID, input CreateInput) (*Message, error) {
+func (s *Service) Post(ctx context.Context, channelID guid.ID, input MessageCreateInput) (*Message, error) {
 	payload, err := validateInput(&input)
 	if err != nil || channelID.Zero() {
 		return nil, ErrInvalid

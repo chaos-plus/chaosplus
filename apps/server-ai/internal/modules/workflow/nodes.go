@@ -53,6 +53,19 @@ func (e *Engine) execTrigger(st *nodeState) error {
 func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 	result, err := e.exec.RunAgent(ctx, st.node, e.agentInput(st))
 	if err != nil {
+		// Keep the partial produces the runner found even on a failed attempt and
+		// merge them into the run scope so the next attempt's input sees them as
+		// context — the F.10 similarity precursor. Failed events intentionally
+		// omit artifacts.
+		if len(result.Artifacts) > 0 {
+			st.artifacts = result.Artifacts
+			for _, artifact := range result.Artifacts {
+				e.scope[artifact.ID] = map[string]any{
+					"path": artifact.Path, "type": artifact.Type,
+					"checksum": artifact.Checksum, "sizeBytes": artifact.SizeBytes,
+				}
+			}
+		}
 		st.err = err.Error()
 		return err
 	}

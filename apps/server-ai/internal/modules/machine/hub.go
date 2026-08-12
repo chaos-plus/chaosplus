@@ -95,6 +95,23 @@ type Hub struct {
 	// runtimes 是每台机上报的可用执行器(claude/codex/...),数字人表单据此给下拉。
 	runtimes map[coreid.ID][]string
 	oses     map[coreid.ID]string // 注册时上报的 OS/架构
+
+	// markRunner/unmarkRunner are optional hooks (set by the composition root)
+	// that tell the run gateway when a daemon connects/disconnects, so run
+	// launch can discover live WS-only runners and never dispatch to zombies.
+	// Nil means no gateway integration.
+	markRunner   func(string)
+	unmarkRunner func(string)
+}
+
+// SetRunnerMarker wires the run gateway so connected daemons become visible to
+// runner discovery and disconnected daemons are removed. Called once by the
+// composition root.
+func (h *Hub) SetRunnerMarker(mark, unmark func(string)) {
+	h.mu.Lock()
+	h.markRunner = mark
+	h.unmarkRunner = unmark
+	h.mu.Unlock()
 }
 
 type IDGenerator func() (coreid.ID, error)
@@ -174,13 +191,18 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var markRunner func(string)
 	h.mu.Lock()
 	h.conns[at.MachineID] = c
 	h.subs[at.MachineID] = sub
 	if !at.LongTerm {
 		h.pending[at.MachineID] = true
 	}
+	markRunner = h.markRunner
 	h.mu.Unlock()
+	if markRunner != nil {
+		markRunner(at.MachineID.String())
+	}
 	if h.machines != nil {
 		// 记录 daemon 实际连接地址(来自 WS 握手,不是浏览器 confirm 的地址)。
 		// 未确认的机器还没落库,更新是 no-op,confirm 时再从连接里取。
@@ -254,11 +276,18 @@ func (h *Hub) bridgeEvent(conn *daemonConn, ev *wsEvent) {
 
 func (h *Hub) unregister(c *daemonConn, sub *nats.Subscription) {
 	_ = sub.Unsubscribe()
+	removed := false
 	h.mu.Lock()
 	if h.conns[c.machineID] == c {
 		delete(h.conns, c.machineID)
+		removed = true
 	}
-	delete(h.subs, c.machineID)
+	// Guard by identity like conns: a reconnecting daemon installs a new sub for
+	// the same machine id before the stale conn's loop exits; the stale conn
+	// must not delete the live sub (Close would then leak the subscription).
+	if h.subs[c.machineID] == sub {
+		delete(h.subs, c.machineID)
+	}
 	wasPending := h.pending[c.machineID]
 	if wasPending {
 		delete(h.pending, c.machineID)
@@ -266,7 +295,17 @@ func (h *Hub) unregister(c *daemonConn, sub *nats.Subscription) {
 		// under h.mu so no race window (tokens.mu is separate; order is h.mu→tokens.mu).
 		h.tokens.Invalidate(c.machineID)
 	}
+	var unmarkRunner func(string)
+	if removed {
+		unmarkRunner = h.unmarkRunner
+	}
 	h.mu.Unlock()
+	// Only unmark when this connection was still the live one: a reconnect can
+	// install a new conn for the same machine id before the old conn's read loop
+	// exits, and the stale conn must not remove a live runner from discovery.
+	if unmarkRunner != nil {
+		unmarkRunner(c.machineID.String())
+	}
 	_ = c.ws.Close()
 }
 

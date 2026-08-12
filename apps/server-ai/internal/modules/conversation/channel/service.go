@@ -19,7 +19,7 @@ func NewService(repository Repository, agents AgentDirectory) *Service {
 	return &Service{repository: repository, agents: agents}
 }
 
-func (s *Service) Create(ctx context.Context, input CreateInput) (*Channel, error) {
+func (s *Service) Create(ctx context.Context, input ChannelCreateInput) (*Channel, error) {
 	value := &Channel{ProjectID: input.ProjectID, Name: input.Name, Topic: input.Topic, Status: StatusActive}
 	if err := validateChannel(value); err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func (s *Service) Get(ctx context.Context, id guid.ID) (*Channel, error) {
 	return s.repository.Get(ctx, id)
 }
 
-func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*Channel, error) {
+func (s *Service) Update(ctx context.Context, id guid.ID, input ChannelUpdateInput) (*Channel, error) {
 	if id.Zero() || input.Version < 1 {
 		return nil, ErrInvalid
 	}

@@ -125,6 +125,14 @@ func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 		return err
 	}
 
+	// Provision runs before the application's guid module starts, so the
+	// package-level generator is not yet installed. Lease a worker and install
+	// it here or EnsureBootstrapPrincipal fails with "default generator not
+	// initialized" and desktop first-launch (J1) can never create its admin.
+	if err := ensureGuidGenerator(ctx, runtimeDB); err != nil {
+		return fmt.Errorf("provision guid generator: %w", err)
+	}
+
 	adminCfg := cfg.Bootstrap.InitialAdmin
 	if adminCfg.TenantID != "" {
 		password, err := secretx.Resolve("bootstrap.initial_admin.password", adminCfg.Password, adminCfg.PasswordFile, 4096)
@@ -147,6 +155,29 @@ func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 	}
 
 	slog.Info("deployment resources provisioned")
+	return nil
+}
+
+// ensureGuidGenerator installs the package-level guid generator against a
+// worker leased from the runtime database, if it is not already installed.
+// Provision runs before the application lifecycle starts the guid module, so
+// this is what makes bootstrap-provided ids (initial admin etc.) possible.
+func ensureGuidGenerator(ctx context.Context, db *bun.DB) error {
+	if guid.Default() != nil {
+		return nil
+	}
+	worker, err := wuid.Open(ctx, db)
+	if err != nil {
+		return fmt.Errorf("lease bootstrap worker id: %w", err)
+	}
+	defer func() {
+		_ = worker.Close(context.Background())
+	}()
+	generator, err := guid.New(worker.ID())
+	if err != nil {
+		return fmt.Errorf("init bootstrap guid generator: %w", err)
+	}
+	guid.SetDefault(generator)
 	return nil
 }
 

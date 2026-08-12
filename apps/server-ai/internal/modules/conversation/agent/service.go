@@ -16,7 +16,7 @@ func NewService(repository Repository) *Service {
 	return &Service{repository: repository}
 }
 
-func (s *Service) Create(ctx context.Context, input CreateInput) (*Agent, error) {
+func (s *Service) Create(ctx context.Context, input AgentCreateInput) (*Agent, error) {
 	value := &Agent{Name: input.Name, Kind: input.Kind, Runtime: input.Runtime, Model: input.Model, Provider: input.Provider, SystemPrompt: input.SystemPrompt, Description: input.Description, MachineID: input.MachineID, Status: StatusStopped}
 	if err := validate(value); err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func (s *Service) IsAvailable(ctx context.Context, id guid.ID) (bool, error) {
 	return value.Status != StatusRetired && value.DeletedAt == 0, nil
 }
 
-func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*Agent, error) {
+func (s *Service) Update(ctx context.Context, id guid.ID, input AgentUpdateInput) (*Agent, error) {
 	if id.Zero() || input.Version < 1 {
 		return nil, ErrInvalid
 	}

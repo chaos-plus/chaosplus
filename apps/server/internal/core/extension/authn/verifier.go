@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -410,8 +411,10 @@ type jwk struct {
 	Kty string `json:"kty"`
 	Kid string `json:"kid"`
 	Alg string `json:"alg"`
+	Crv string `json:"crv"`
 	N   string `json:"n"`
 	E   string `json:"e"`
+	X   string `json:"x"`
 }
 
 func (k jwk) publicKey() (crypto.PublicKey, error) {
@@ -429,20 +432,40 @@ func (k jwk) publicKey() (crypto.PublicKey, error) {
 			return nil, fmt.Errorf("decode rsa exponent: %w", err)
 		}
 		return &rsa.PublicKey{N: intFromBytes(n), E: int(intFromBytes(e).Int64())}, nil
+	case "OKP":
+		if k.Crv != "" && k.Crv != "Ed25519" {
+			return nil, fmt.Errorf("unsupported okp crv %q", k.Crv)
+		}
+		x, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil || len(x) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("decode okp public key")
+		}
+		return ed25519.PublicKey(x), nil
 	default:
 		return nil, fmt.Errorf("unsupported jwks kty %q", k.Kty)
 	}
 }
 
 func verifySignature(alg string, key crypto.PublicKey, signed, sig []byte) error {
-	hash := sha256.Sum256(signed)
 	switch alg {
 	case "RS256":
+		hash := sha256.Sum256(signed)
 		rsaKey, ok := key.(*rsa.PublicKey)
 		if !ok {
 			return ErrInvalidToken
 		}
 		return rsa.VerifyPKCS1v15(rsaKey, crypto.SHA256, hash[:], sig)
+	case "EdDSA":
+		// The local issuer (authn/web.go) signs Ed25519; the verifier must
+		// accept it or every locally-issued access token is rejected.
+		edKey, ok := key.(ed25519.PublicKey)
+		if !ok {
+			return ErrInvalidToken
+		}
+		if !ed25519.Verify(edKey, signed, sig) {
+			return ErrInvalidToken
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: unsupported alg %s", ErrInvalidToken, alg)
 	}

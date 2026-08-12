@@ -24,5 +24,5 @@ type RunnerConfig struct {
 }
 
 type ReconcileConfig struct {
-	Interval time.Duration `mapstructure:"interval" description:"artifact reconciliation interval; zero disables background reconciliation" default:"0s"`
+	Interval time.Duration `mapstructure:"interval" description:"artifact reconciliation interval; zero falls back to the 30s default" default:"5m"`
 }

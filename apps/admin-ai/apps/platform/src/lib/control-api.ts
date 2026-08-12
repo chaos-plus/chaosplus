@@ -267,7 +267,7 @@ function headersFor(extra?: Record<string, string>): Headers {
   const tenant = getTenant();
   const entity = getEntity();
   if (tenant) headers.set("X-Tenant-Id", tenant);
-  if (entity) headers.set("X-Entity", entity);
+  if (entity) headers.set("X-Entity-Id", entity);
   return headers;
 }
 

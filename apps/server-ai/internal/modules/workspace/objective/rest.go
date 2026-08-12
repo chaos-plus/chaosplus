@@ -20,7 +20,7 @@ var Actions = []authz.Action{
 type entityInput struct{}
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
 	entityInput
@@ -31,11 +31,13 @@ type createInput struct {
 	Body CreateInput
 }
 type updateInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Version int64 `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
@@ -70,21 +72,21 @@ func (m *Module) create(ctx context.Context, input *createInput) (*body[Objectiv
 	return &body[Objective]{Body: *value}, nil
 }
 func (m *Module) get(ctx context.Context, input *idInput) (*body[Objective], error) {
-	value, err := m.service.Get(ctx, input.ID)
+	value, err := m.service.Get(ctx, guid.ID(input.ID))
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Objective]{Body: *value}, nil
 }
 func (m *Module) update(ctx context.Context, input *updateInput) (*body[Objective], error) {
-	value, err := m.service.Update(ctx, input.ID, input.Body)
+	value, err := m.service.Update(ctx, guid.ID(input.ID), input.Body)
 	if err != nil {
 		return nil, apiError(err)
 	}
 	return &body[Objective]{Body: *value}, nil
 }
 func (m *Module) delete(ctx context.Context, input *deleteInput) (*body[ok], error) {
-	if err := m.service.Delete(ctx, input.ID, input.Version); err != nil {
+	if err := m.service.Delete(ctx, guid.ID(input.ID), input.Version); err != nil {
 		return nil, apiError(err)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil

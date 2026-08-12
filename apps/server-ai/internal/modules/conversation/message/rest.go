@@ -22,16 +22,18 @@ var Actions = []authz.Action{
 type entityInput struct{}
 type channelInput struct {
 	entityInput
-	ChannelID guid.ID `path:"id"`
+	ChannelID guid.ParamID `path:"id"`
 }
 type listInput struct {
-	channelInput
+	entityInput
+	ChannelID guid.ParamID `path:"id"`
 	AfterSeq int64 `query:"afterSeq" minimum:"0"`
 	Limit    int   `query:"limit" minimum:"1" maximum:"500" default:"100"`
 }
 type createInput struct {
-	channelInput
-	Body CreateInput
+	entityInput
+	ChannelID guid.ParamID `path:"id"`
+	Body MessageCreateInput
 }
 type body[T any] struct{ Body T }
 
@@ -46,7 +48,7 @@ func register[I, O any](m *Module, api huma.API, operation huma.Operation, verb 
 }
 
 func (m *Module) list(ctx context.Context, input *listInput) (*body[[]Message], error) {
-	items, err := m.service.List(ctx, input.ChannelID, input.AfterSeq, input.Limit)
+	items, err := m.service.List(ctx, guid.ID(input.ChannelID), input.AfterSeq, input.Limit)
 	if err != nil {
 		return nil, apiError(err)
 	}
@@ -54,7 +56,7 @@ func (m *Module) list(ctx context.Context, input *listInput) (*body[[]Message], 
 }
 
 func (m *Module) create(ctx context.Context, input *createInput) (*body[Message], error) {
-	value, err := m.service.Post(ctx, input.ChannelID, input.Body)
+	value, err := m.service.Post(ctx, guid.ID(input.ChannelID), input.Body)
 	if err != nil {
 		return nil, apiError(err)
 	}

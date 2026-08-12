@@ -22,11 +22,12 @@ type entityInput struct{}
 
 type machineInput struct {
 	entityInput
-	ID coreid.ID `path:"id"`
+	ID coreid.ParamID `path:"id"`
 }
 
 type machineTokenInput struct {
-	machineInput
+	entityInput
+	ID coreid.ParamID `path:"id"`
 	Body struct {
 		Token string `json:"token" minLength:"1" maxLength:"512"`
 	}
@@ -148,7 +149,7 @@ func (m *Module) getMachine(ctx context.Context, input *machineInput) (*bodyResp
 		return nil, machineAPIError(err)
 	}
 	for _, item := range items {
-		if item.ID != input.ID {
+		if item.ID != coreid.ID(input.ID) {
 			continue
 		}
 		name := m.hub.MachineName(item.ID)
@@ -168,17 +169,17 @@ func (m *Module) getMachine(ctx context.Context, input *machineInput) (*bodyResp
 }
 
 func (m *Module) confirmMachine(ctx context.Context, input *machineTokenInput) (*bodyResponse[okResponse], error) {
-	if err := m.hub.Confirm(ctx, input.ID, input.Body.Token); err != nil {
+	if err := m.hub.Confirm(ctx, coreid.ID(input.ID), input.Body.Token); err != nil {
 		return nil, machineAPIError(err)
 	}
 	return &bodyResponse[okResponse]{Body: okResponse{OK: true}}, nil
 }
 
 func (m *Module) getOnboardingStatus(ctx context.Context, input *machineTokenInput) (*bodyResponse[onboardingStatus], error) {
-	if !m.hub.CanAccess(ctx, input.ID) {
+	if !m.hub.CanAccess(ctx, coreid.ID(input.ID)) {
 		return nil, huma.Error404NotFound("machine.not_found")
 	}
-	state, expiresAt := m.hub.OnboardingStatus(input.ID, input.Body.Token)
+	state, expiresAt := m.hub.OnboardingStatus(coreid.ID(input.ID), input.Body.Token)
 	response := onboardingStatus{State: state}
 	if !expiresAt.IsZero() {
 		response.ExpiresAt = expiresAt.UTC().UnixMilli()
@@ -187,18 +188,18 @@ func (m *Module) getOnboardingStatus(ctx context.Context, input *machineTokenInp
 }
 
 func (m *Module) deleteMachine(ctx context.Context, input *machineInput) (*bodyResponse[okResponse], error) {
-	if err := m.hub.Cancel(ctx, input.ID); err != nil {
+	if err := m.hub.Cancel(ctx, coreid.ID(input.ID)); err != nil {
 		return nil, machineAPIError(err)
 	}
 	return &bodyResponse[okResponse]{Body: okResponse{OK: true}}, nil
 }
 
 func (m *Module) rotateToken(ctx context.Context, input *machineInput) (*bodyResponse[tokenResponse], error) {
-	token, err := m.hub.RefreshToken(ctx, input.ID)
+	token, err := m.hub.RefreshToken(ctx, coreid.ID(input.ID))
 	if err != nil {
 		return nil, machineAPIError(err)
 	}
-	return &bodyResponse[tokenResponse]{Body: tokenResponse{Token: token, MachineID: input.ID, LongTerm: true}}, nil
+	return &bodyResponse[tokenResponse]{Body: tokenResponse{Token: token, MachineID: coreid.ID(input.ID), LongTerm: true}}, nil
 }
 
 func machineAPIError(err error) error {

@@ -278,6 +278,10 @@ func (m *RunManager) Start(ctx context.Context) error {
 		<-ctx.Done()
 		_ = sub.Unsubscribe()
 	}()
+	// Rehydrate non-terminal runs so in-flight approvals/pauses survive a
+	// control-plane restart (crash recovery, PRD §15.1). Without this the live
+	// run map is empty after boot and waiting approvals can never resolve.
+	m.LoadFromStore(ctx)
 	return nil
 }
 
@@ -474,7 +478,11 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 		m.removeRun(run.ID)
 		return nil, err
 	}
-	if err := m.startEngine(ctx, run, req, nil); err != nil {
+	// The engine must outlive the HTTP request: binding it to the request
+	// context cancels every node spawn the moment the launch response returns
+	// ("context canceled"). The recovery path already uses m.Context(); launch
+	// must do the same so runs survive after the request completes.
+	if err := m.startEngine(m.Context(), run, req, nil); err != nil {
 		if statusErr := m.st.UpdateRunStatus(run.context(ctx), run.ID, RunFailed); statusErr != nil {
 			err = errors.Join(err, fmt.Errorf("mark workflow run failed after activation error: %w", statusErr))
 		}

@@ -15,7 +15,7 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 	if m.st == nil {
 		return
 	}
-	active, err := m.st.LoadActiveRunDefinitions(ctx)
+	active, err := m.st.LoadAllActiveRunDefinitions(ctx)
 	if err != nil {
 		slog.Warn("load active runs", "err", err)
 		return
@@ -44,7 +44,7 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 		// rewriting them would collide with pre-restart events and silently drop
 		// new ones (review: >1000-event runs truncated). Load well beyond any
 		// realistic run size rather than a fixed 1000 cap.
-		events, _ := m.st.ListEvents(ctx, rd.ID, 0, 100000)
+		events, _ := m.st.ListAllEvents(ctx, rd.ID, 0, 100000)
 		maxSeq := 0
 		restored := make([]Event, 0, len(events))
 		for _, evt := range events {
@@ -111,7 +111,11 @@ func (m *RunManager) waitForStoredLease(ctx context.Context, run *Run, status Ru
 }
 
 func (m *RunManager) refreshStoredRun(ctx context.Context, run *Run) (RunStatus, []Event, bool, error) {
-	rd, err := m.st.GetRunDef(ctx, run.ID)
+	// The lease-takeover path runs with the process context (no request
+	// principal); scope the read to the run's own tenant/entity so the
+	// repository's claim guard passes without leaking cross-tenant data.
+	runCtx := run.context(ctx)
+	rd, err := m.st.GetRunDef(runCtx, run.ID)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -119,7 +123,7 @@ func (m *RunManager) refreshStoredRun(ctx context.Context, run *Run) (RunStatus,
 	case RunCompleted, RunFailed, RunCancelled:
 		return rd.Status, nil, true, nil
 	}
-	events, err := m.st.ListEvents(ctx, rd.ID, 0, 100000)
+	events, err := m.st.ListEvents(runCtx, rd.ID, 0, 100000)
 	if err != nil {
 		return "", nil, false, err
 	}

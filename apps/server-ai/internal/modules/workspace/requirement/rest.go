@@ -19,23 +19,25 @@ var Actions = []authz.Action{
 type entityInput struct{}
 type idInput struct {
 	entityInput
-	ID guid.ID `path:"id"`
+	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
 	entityInput
 	Status   Status   `query:"status"`
-	ParentID *guid.ID `query:"parentId"`
+	ParentID guid.ParamID `query:"parentId"`
 }
 type createInput struct {
 	entityInput
 	Body CreateInput
 }
 type updateInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	idInput
+	entityInput
+	ID guid.ParamID `path:"id"`
 	Version int64 `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
@@ -54,7 +56,12 @@ func register[I, O any](m *Module, api huma.API, op huma.Operation, verb string,
 	authz.RegisterEntity(m.registrar, api, op, authz.Guard{Resource: "workspace_requirement", Verb: verb}, handler)
 }
 func (m *Module) list(ctx context.Context, in *listInput) (*body[[]Requirement], error) {
-	v, e := m.service.List(ctx, in.Status, in.ParentID)
+	var parentID *guid.ID
+	if !guid.ID(in.ParentID).Zero() {
+		id := guid.ID(in.ParentID)
+		parentID = &id
+	}
+	v, e := m.service.List(ctx, in.Status, parentID)
 	if e != nil {
 		return nil, apiError(e)
 	}
@@ -68,21 +75,21 @@ func (m *Module) create(ctx context.Context, in *createInput) (*body[Requirement
 	return &body[Requirement]{Body: *v}, nil
 }
 func (m *Module) get(ctx context.Context, in *idInput) (*body[Requirement], error) {
-	v, e := m.service.Get(ctx, in.ID)
+	v, e := m.service.Get(ctx, guid.ID(in.ID))
 	if e != nil {
 		return nil, apiError(e)
 	}
 	return &body[Requirement]{Body: *v}, nil
 }
 func (m *Module) update(ctx context.Context, in *updateInput) (*body[Requirement], error) {
-	v, e := m.service.Update(ctx, in.ID, in.Body)
+	v, e := m.service.Update(ctx, guid.ID(in.ID), in.Body)
 	if e != nil {
 		return nil, apiError(e)
 	}
 	return &body[Requirement]{Body: *v}, nil
 }
 func (m *Module) delete(ctx context.Context, in *deleteInput) (*body[ok], error) {
-	if e := m.service.Delete(ctx, in.ID, in.Version); e != nil {
+	if e := m.service.Delete(ctx, guid.ID(in.ID), in.Version); e != nil {
 		return nil, apiError(e)
 	}
 	return &body[ok]{Body: ok{OK: true}}, nil

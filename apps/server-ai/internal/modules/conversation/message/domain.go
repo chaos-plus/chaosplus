@@ -61,13 +61,13 @@ type Payload struct {
 	ReviewNode    string    `json:"reviewNode,omitempty"`
 }
 
-type CreateInput struct {
+type MessageCreateInput struct {
 	IdempotencyKey string    `json:"idempotencyKey"`
 	Text           string    `json:"text,omitempty"`
 	AttachmentIDs  []guid.ID `json:"attachmentIds,omitempty"`
 }
 
-func validateInput(input *CreateInput) (Payload, error) {
+func validateInput(input *MessageCreateInput) (Payload, error) {
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.Text = strings.TrimSpace(input.Text)
 	if input.IdempotencyKey == "" || len(input.IdempotencyKey) > 128 || len(input.Text) > 65535 || (input.Text == "" && len(input.AttachmentIDs) == 0) || len(input.AttachmentIDs) > 20 {
