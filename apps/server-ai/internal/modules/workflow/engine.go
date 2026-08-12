@@ -2,9 +2,12 @@ package workflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -62,6 +65,9 @@ type nodeState struct {
 	// the F.10 similarity check to pause "原地打转" retries.
 	prevProduces map[string]string
 	notified     bool // §13: this node already crossed retry.notifyThreshold
+	// recentState is the last few produces fingerprints; the §13 oscillation
+	// check pauses A→B→A→B (window 4).
+	recentState []string
 }
 
 // Engine is a static-DAG scheduler (PRD §7.3). It is executor-agnostic: agent
@@ -401,9 +407,32 @@ func producesMap(artifacts []ProducedArtifact) map[string]string {
 	return m
 }
 
+// producesFingerprint derives a stable per-attempt state from the produces
+// checksums (sorted so map order never changes the result).
+func producesFingerprint(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	var b strings.Builder
+	for _, p := range paths {
+		b.WriteString(p)
+		b.WriteByte('=')
+		b.WriteString(m[p])
+		b.WriteByte(';')
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
 // recordAttemptProduces keeps the previous attempt's produces as the baseline
 // and installs the current attempt's produces, so scheduleRetry can detect a
-// node that keeps producing the same output across attempts ("原地打转").
+// node that keeps producing the same output across attempts ("原地打转") or
+// oscillating A→B→A→B (§13, window 4).
 func (e *Engine) recordAttemptProduces(st *nodeState, artifacts []ProducedArtifact) {
 	if len(artifacts) == 0 {
 		return
@@ -412,6 +441,21 @@ func (e *Engine) recordAttemptProduces(st *nodeState, artifacts []ProducedArtifa
 		st.prevProduces = producesMap(st.artifacts)
 	}
 	st.artifacts = artifacts
+	fp := producesFingerprint(producesMap(artifacts))
+	st.recentState = append(st.recentState, fp)
+	if len(st.recentState) > 4 {
+		st.recentState = st.recentState[len(st.recentState)-4:]
+	}
+}
+
+// oscillates reports whether the last window of state fingerprints alternates
+// A→B→A→B (the §13 scheduler stuck signal).
+func oscillates(state []string) bool {
+	if len(state) < 4 {
+		return false
+	}
+	w := state[len(state)-4:]
+	return w[0] == w[2] && w[1] == w[3] && w[0] != w[1]
 }
 
 // similarityRatio returns the fraction of produces files whose checksum differs
@@ -532,6 +576,11 @@ func (e *Engine) scheduleRetry(ctx context.Context, st *nodeState, err error) bo
 	// more retries. attempt=1 has no baseline (similarityRatio returns 1).
 	if st.attempts > 1 && similarityRatio(producesMap(st.artifacts), st.prevProduces) < 0.08 {
 		return false // caller marks the node paused_for_human
+	}
+	// §13: a node whose produces oscillate A→B→A→B across four attempts is
+	// stuck in a loop — pause instead of retrying further.
+	if oscillates(st.recentState) {
+		return false
 	}
 	// §13 escalation: once retries cross notifyThreshold, flag the retry event so
 	// subscribers (IM/UI) can notify the human without blocking execution.

@@ -29,6 +29,21 @@ func TestSimilarityRatio(t *testing.T) {
 
 // TestSimilarityPausesStuckRetry verifies F.10: an agent that retries while
 // producing near-identical files is paused_for_human instead of burning retries.
+func TestOscillationDetected(t *testing.T) {
+	if oscillates([]string{"a", "b", "a", "b"}) != true {
+		t.Fatal("A→B→A→B must be flagged as oscillation")
+	}
+	if oscillates([]string{"a", "a", "a", "a"}) {
+		t.Fatal("stable output is not oscillation")
+	}
+	if oscillates([]string{"a", "b", "c", "d"}) {
+		t.Fatal("four distinct states are not oscillation")
+	}
+	if oscillates([]string{"a", "b", "a"}) {
+		t.Fatal("window must be 4 to flag")
+	}
+}
+
 func TestSimilarityPausesStuckRetry(t *testing.T) {
 	def := &WorkflowDef{ID: "wf", Version: "1", Name: "wf", Nodes: []Node{
 		{ID: "gen", Type: NodeAgent, Agent: &ExecutorAgentSpec{ID: "gen", Role: "demo", Executor: "mock", SystemPrompt: "x",
