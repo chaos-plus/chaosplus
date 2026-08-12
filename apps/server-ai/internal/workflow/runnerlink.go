@@ -13,7 +13,7 @@ import (
 type RunnerLink interface {
 	// SpawnAndWait spawns and blocks until done/error. idle > 0 resets on live
 	// activity; max > 0 is an absolute bound. Either may be 0 (no limit).
-	SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max time.Duration) (gateway.SpawnResult, error)
+	SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max, heartbeat time.Duration) (gateway.SpawnResult, error)
 	Kill(ctx context.Context, runnerID, spawnID string) error
 	ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error)
 	RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (gateway.CmdResult, error)
@@ -24,13 +24,16 @@ type RunnerLink interface {
 // into SpawnWaitOptions). Kept so the NATS daemon path stays available.
 type NatsRunnerLink struct{ G *gateway.Gateway }
 
-func (l *NatsRunnerLink) SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max time.Duration) (gateway.SpawnResult, error) {
+func (l *NatsRunnerLink) SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max, heartbeat time.Duration) (gateway.SpawnResult, error) {
 	var opts []gateway.SpawnWaitOption
 	if idle > 0 {
 		opts = append(opts, gateway.WithIdleTimeout(idle))
 	}
 	if max > 0 {
 		opts = append(opts, gateway.WithMaxTimeout(max))
+	}
+	if heartbeat > 0 {
+		opts = append(opts, gateway.WithHeartbeatTimeout(heartbeat))
 	}
 	return l.G.SpawnAndWaitOpts(ctx, runnerID, sp, opts...)
 }

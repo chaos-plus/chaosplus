@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,103 @@ func persistedRun(t *testing.T, st *store.Store, id string, def workflow.Workflo
 		}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestLoadFromStoreTakesOverOnlyAfterPreviousLeaseReleases(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "takeover.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	def := workflow.WorkflowDef{ID: "takeover", Version: "1", Nodes: []workflow.Node{{
+		ID: "work", Type: workflow.NodeAgent, Agent: &workflow.ExecutorAgentSpec{ID: "work", Executor: "mock"},
+	}}}
+	persistedRun(t, st, "run-takeover", def, RunEvent{Seq: 1, NodeID: "work", Status: workflow.StatusRunning})
+	oldLease, err := st.AcquireRunLease(ctx, "run-takeover", "old-control", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := startTestNATS(t)
+	m := NewRunManager(nc, nil, st, "")
+	var calls atomic.Int32
+	m.baseFactory = func(string) workflow.Executor {
+		return &workflow.MockExecutor{RunAgentFn: func(context.Context, *workflow.Node, json.RawMessage) (workflow.AgentResult, error) {
+			calls.Add(1)
+			return workflow.AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
+		}}
+	}
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m.LoadFromStore(ctx)
+	time.Sleep(200 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatal("run executed while the previous control plane held a live lease")
+	}
+	if _, visible := m.Get("run-takeover"); visible {
+		t.Fatal("foreign-owned run was exposed as locally controlled")
+	}
+	if err := st.ReleaseRunLease(ctx, oldLease); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		run, ok := m.Get("run-takeover")
+		return ok && run.Status() == RunCompleted
+	}, 4*time.Second)
+	if calls.Load() != 1 {
+		t.Fatalf("takeover executed %d times, want once", calls.Load())
+	}
+}
+
+func TestLoadFromStoreDoesNotReviveRunCompletedWhileWaitingForLease(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "terminal-takeover.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	def := workflow.WorkflowDef{ID: "terminal", Version: "1", Nodes: []workflow.Node{{
+		ID: "work", Type: workflow.NodeAgent, Agent: &workflow.ExecutorAgentSpec{ID: "work", Executor: "mock"},
+	}}}
+	persistedRun(t, st, "run-terminal", def, RunEvent{Seq: 1, NodeID: "work", Status: workflow.StatusRunning})
+	oldLease, err := st.AcquireRunLease(ctx, "run-terminal", "old-control", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := startTestNATS(t)
+	m := NewRunManager(nc, nil, st, "")
+	var calls atomic.Int32
+	m.baseFactory = func(string) workflow.Executor {
+		return &workflow.MockExecutor{RunAgentFn: func(context.Context, *workflow.Node, json.RawMessage) (workflow.AgentResult, error) {
+			calls.Add(1)
+			return workflow.AgentResult{}, nil
+		}}
+	}
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m.LoadFromStore(ctx)
+	terminal := RunEvent{Seq: 2, RunID: "run-terminal", RunStatus: RunCompleted}
+	payload, _ := json.Marshal(terminal)
+	if err := st.CommitRunEvents(ctx, oldLease, []store.Event{{
+		ID: "run-terminal-2", RunID: "run-terminal", Type: "RUN_COMPLETED",
+		IdempotencyKey: "run-terminal:completed:2", PayloadJSON: string(payload),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReleaseRunLease(ctx, oldLease); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatalf("completed run was revived %d times", calls.Load())
+	}
+	if _, visible := m.Get("run-terminal"); visible {
+		t.Fatal("terminal run should remain history-only after takeover refresh")
 	}
 }
 

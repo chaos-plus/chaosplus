@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { LoaderCircle, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card } from "@workspace/ui/components/card"
@@ -17,12 +18,28 @@ function parseKR(s: string): KR[] {
 export default function OkrsPage() {
   const [okrs, setOkrs] = useState<Okr[]>([])
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Okr | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Okr | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [form, setForm] = useState({ title: "", objective: "", period: "", krs: "" })
 
-  const load = useCallback(() => {
-    void controlApi.okrs().then((x) => setOkrs(x ?? [])).catch((e: unknown) => { setOkrs([]); toast.error(`加载 OKR 失败:${e instanceof Error ? e.message : String(e)}`) })
+  const load = useCallback(async () => {
+    try {
+      setOkrs((await controlApi.okrs()) ?? [])
+      setLoadError(false)
+    } catch {
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
   }, [])
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timer)
+  }, [load])
 
   const [krError, setKrError] = useState("")
 
@@ -37,19 +54,53 @@ export default function OkrsPage() {
         return
       }
     }
+    setSaving(true)
     try {
-      await controlApi.createOkr({
+      const payload = {
         title: form.title.trim(),
         objective: form.objective,
         period: form.period,
         keyResults: JSON.stringify(krs),
-      })
+      }
+      if (editing) await controlApi.updateOkr(editing.id, payload)
+      else await controlApi.createOkr(payload)
       setOpen(false)
+      setEditing(null)
       setForm({ title: "", objective: "", period: "", krs: "" })
       setKrError("")
-      load()
+      await load()
     } catch (e) {
-      setKrError(e instanceof Error ? e.message : "创建失败")
+      setKrError(e instanceof Error ? e.message : "保存失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const beginCreate = () => {
+    setEditing(null)
+    setForm({ title: "", objective: "", period: "", krs: "" })
+    setKrError("")
+    setOpen(true)
+  }
+
+  const beginEdit = (okr: Okr) => {
+    setEditing(okr)
+    setForm({ title: okr.title, objective: okr.objective, period: okr.period, krs: okr.keyResults })
+    setKrError("")
+    setOpen(true)
+  }
+
+  const remove = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await controlApi.deleteOkr(deleteTarget.id)
+      setDeleteTarget(null)
+      await load()
+    } catch (e) {
+      toast.error(`删除 OKR 失败:${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -60,19 +111,45 @@ export default function OkrsPage() {
           <h1 className="text-xl font-semibold">OKR 管理</h1>
           <p className="text-sm text-muted-foreground">目标 + 关键结果,进度汇总。</p>
         </div>
-        <Button onClick={() => setOpen(true)}>＋ 新建 OKR</Button>
+        <Button className="min-h-11 gap-2" onClick={beginCreate}>
+          <Plus className="size-4" />
+          新建 OKR
+        </Button>
       </div>
 
       <div className="space-y-2">
-        {okrs.map((o) => {
+        {loading && (
+          <div className="flex min-h-24 items-center justify-center gap-2 rounded-md border border-dashed text-sm text-muted-foreground" role="status">
+            <LoaderCircle className="size-4 animate-spin" />
+            加载 OKR…
+          </div>
+        )}
+        {!loading && loadError && (
+          <div className="flex min-h-24 flex-col items-center justify-center gap-3 rounded-md border border-dashed text-sm text-muted-foreground" role="alert">
+            <span>OKR 加载失败,请检查控制面连接。</span>
+            <Button variant="outline" className="min-h-11 gap-2" onClick={() => void load()}>
+              <RefreshCw className="size-4" />
+              重试
+            </Button>
+          </div>
+        )}
+        {!loading && !loadError && okrs.map((o) => {
           const krs = parseKR(o.keyResults)
-          const overall = krs.length ? Math.round(krs.reduce((a, k) => a + k.progress, 0) / krs.length) : 0
+          const overall = krs.length
+            ? Math.round(krs.reduce((sum, kr) => sum + Math.min(100, (kr.progress / (kr.target || 1)) * 100), 0) / krs.length)
+            : 0
           return (
             <Card key={o.id} className="p-3">
               <div className="flex items-center gap-2">
                 <span className="font-medium">{o.title}</span>
                 <Badge variant="secondary">{o.period}</Badge>
-                <span className="ml-auto text-sm text-muted-foreground">{overall}%</span>
+                <span className="ml-auto text-sm tabular-nums text-muted-foreground">{overall}%</span>
+                <Button size="icon" variant="ghost" className="size-11" aria-label={`编辑 ${o.title}`} onClick={() => beginEdit(o)}>
+                  <Pencil className="size-4" />
+                </Button>
+                <Button size="icon" variant="ghost" className="size-11 text-muted-foreground hover:text-destructive" aria-label={`删除 ${o.title}`} onClick={() => setDeleteTarget(o)}>
+                  <Trash2 className="size-4" />
+                </Button>
               </div>
               {o.objective && <p className="mt-1 text-sm text-muted-foreground">{o.objective}</p>}
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
@@ -81,9 +158,9 @@ export default function OkrsPage() {
               <div className="mt-2 space-y-1">
                 {krs.map((k, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="w-40 truncate">{k.title}</span>
-                    <span>{k.progress}/{k.target}{k.unit}</span>
-                    <div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted">
+                    <span className="min-w-0 flex-1" title={k.title}>{k.title}</span>
+                    <span className="shrink-0 tabular-nums">{k.progress}/{k.target}{k.unit}</span>
+                    <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-muted sm:w-32">
                       <div className="h-full bg-accent" style={{ width: `${Math.min(100, (k.progress / (k.target || 1)) * 100)}%` }} />
                     </div>
                   </div>
@@ -92,34 +169,51 @@ export default function OkrsPage() {
             </Card>
           )
         })}
-        {okrs.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">还没有 OKR,点「新建 OKR」。</p>}
+        {!loading && !loadError && okrs.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">还没有 OKR,点「新建 OKR」。</p>}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(value) => { if (!saving) setOpen(value) }}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>新建 OKR</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editing ? "编辑 OKR" : "新建 OKR"}</DialogTitle></DialogHeader>
           <div className="grid gap-3 py-2">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium">标题 *</label>
-              <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="如:Q3 增长" />
+              <label htmlFor="okr-title" className="text-sm font-medium">标题 *</label>
+              <Input id="okr-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="如:Q3 增长" />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium">目标 Objective</label>
-              <Textarea rows={2} value={form.objective} onChange={(e) => setForm({ ...form, objective: e.target.value })} />
+              <label htmlFor="okr-objective" className="text-sm font-medium">目标 Objective</label>
+              <Textarea id="okr-objective" rows={2} value={form.objective} onChange={(e) => setForm({ ...form, objective: e.target.value })} />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium">周期</label>
-              <Input value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value })} placeholder="如:2026-Q3" />
+              <label htmlFor="okr-period" className="text-sm font-medium">周期</label>
+              <Input id="okr-period" value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value })} placeholder="如:2026-Q3" />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium">关键结果(JSON)</label>
-              <Textarea rows={3} value={form.krs} onChange={(e) => setForm({ ...form, krs: e.target.value })} placeholder='[{"title":"MAU","target":100,"progress":40,"unit":"万"}]' />
+              <label htmlFor="okr-krs" className="text-sm font-medium">关键结果(JSON)</label>
+              <Textarea id="okr-krs" aria-describedby={krError ? "okr-krs-error" : undefined} aria-invalid={Boolean(krError)} rows={3} value={form.krs} onChange={(e) => setForm({ ...form, krs: e.target.value })} placeholder='[{"title":"MAU","target":100,"progress":40,"unit":"万"}]' />
             </div>
-            {krError && <p className="text-sm text-destructive">{krError}</p>}
+            {krError && <p id="okr-krs-error" className="text-sm text-destructive" role="alert">{krError}</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" className="cursor-pointer" onClick={() => setOpen(false)}>取消</Button>
-            <Button onClick={create} disabled={!form.title.trim()}>创建</Button>
+            <Button variant="outline" className="min-h-11" disabled={saving} onClick={() => setOpen(false)}>取消</Button>
+            <Button className="min-h-11 gap-2" onClick={create} disabled={saving || !form.title.trim()}>
+              {saving && <LoaderCircle className="size-4 animate-spin" />}
+              {editing ? "保存" : "创建"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteTarget !== null} onOpenChange={(value) => !value && !deleting && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>删除 OKR</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">将永久删除「{deleteTarget?.title}」及其关键结果。</p>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</Button>
+            <Button variant="destructive" className="min-h-11 gap-2" disabled={deleting} onClick={() => void remove()}>
+              {deleting && <LoaderCircle className="size-4 animate-spin" />}
+              删除
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

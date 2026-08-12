@@ -75,7 +75,7 @@ type reconciliationLink struct {
 	err     error
 }
 
-func (l *reconciliationLink) SpawnAndWait(context.Context, string, gateway.Spawn, time.Duration, time.Duration) (gateway.SpawnResult, error) {
+func (l *reconciliationLink) SpawnAndWait(context.Context, string, gateway.Spawn, time.Duration, time.Duration, time.Duration) (gateway.SpawnResult, error) {
 	return gateway.SpawnResult{}, errors.New("not used")
 }
 func (l *reconciliationLink) Kill(context.Context, string, string) error { return nil }
@@ -102,12 +102,43 @@ func TestReconcileArtifactsInvalidatesExternalChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewRunManager(nil, &reconciliationLink{content: []byte("externally changed")}, st, "")
-	report, err := m.ReconcileArtifacts(ctx)
+	report, err := m.ReconcileArtifacts(ctx, "")
 	if err != nil || report.Checked != 1 || report.Changed != 1 {
 		t.Fatalf("reconcile = (%+v, %v)", report, err)
 	}
 	invalid, _ := st.ListArtifacts(ctx, "i", "p", store.ArtifactInvalid)
 	if len(invalid) != 1 {
 		t.Fatalf("invalid artifacts = %+v", invalid)
+	}
+}
+
+func TestReconcileArtifactsScopesManualScanToEntity(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	for _, entityID := range []string{"tenant-a", "tenant-b"} {
+		artifact := store.Artifact{
+			ID: entityID, InstanceID: entityID, ProjectID: "project", LogicalID: "release", LogicalPath: "release.json",
+			Checksum: "sha256:old", RunnerID: "runner-1", SpawnID: "spawn-1", ProducerRunID: "run-" + entityID,
+		}
+		if err := st.UpsertArtifact(ctx, artifact, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewRunManager(nil, &reconciliationLink{content: []byte("tenant A observed content")}, st, "")
+	report, err := m.ReconcileArtifacts(ctx, "tenant-a")
+	if err != nil || report.Checked != 1 || report.Changed != 1 {
+		t.Fatalf("tenant reconcile = (%+v, %v)", report, err)
+	}
+	a, err := st.GetArtifact(ctx, "tenant-a", "tenant-a")
+	if err != nil || a.Status != store.ArtifactInvalid {
+		t.Fatalf("tenant A artifact = (%+v, %v)", a, err)
+	}
+	b, err := st.GetArtifact(ctx, "tenant-b", "tenant-b")
+	if err != nil || b.Status != store.ArtifactValid || b.Checksum != "sha256:old" {
+		t.Fatalf("tenant B artifact changed by tenant A scan = (%+v, %v)", b, err)
 	}
 }

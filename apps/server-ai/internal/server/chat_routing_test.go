@@ -65,7 +65,7 @@ func TestRouteAgentMentionBeatsScoreAndBusyBreaksTies(t *testing.T) {
 		}
 	}
 
-	cs := NewChatService(st, nil, nil, nil, "", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	members := []store.ChannelMember{
 		{MemberID: be1.ID, Kind: "agent"},
 		{MemberID: be2.ID, Kind: "agent"},
@@ -402,7 +402,7 @@ func TestChannelEventsWSRealtime(t *testing.T) {
 		t.Fatalf("create channel: %v", err)
 	}
 
-	cs := NewChatService(st, nil, nil, nil, "", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	mux := http.NewServeMux()
 	cs.register(mux)
 	ts := httptest.NewServer(mux)

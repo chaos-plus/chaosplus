@@ -325,18 +325,13 @@ func TestHTTPErrors(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// GET / → 200 且含页面标记。
+	// server-ai is API-only; the formal UI is apps/admin-ai.
 	get, err := http.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatalf("get /: %v", err)
 	}
-	if get.StatusCode != 200 {
+	if get.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET / = %d", get.StatusCode)
 	}
-	buf := make([]byte, 512)
-	n, _ := get.Body.Read(buf)
 	_ = get.Body.Close()
-	if !strings.Contains(string(buf[:n]), "chaos.plus") {
-		t.Error("GET / does not serve the UI page")
-	}
 }

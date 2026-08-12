@@ -1,6 +1,6 @@
-// Command nats runs the NATS server embedded with chaos.plus. It provides a
-// self-contained default for desktop installs while accepting a native NATS
-// configuration file for clustered production deployments.
+// Command nats is a local-development fallback for hosts without Docker.
+// Production must run the official NATS container image; this command refuses
+// to start when CONTROL_ENV=production.
 package main
 
 import (
@@ -28,6 +28,9 @@ func main() {
 }
 
 func run() error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CONTROL_ENV")), "production") {
+		return errors.New("embedded NATS is development-only; production must use the official NATS container image")
+	}
 	opts, err := loadOptions()
 	if err != nil {
 		return err

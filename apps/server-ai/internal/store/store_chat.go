@@ -34,6 +34,7 @@ type AgentSpec struct {
 
 func (s *Store) CreateAgent(ctx context.Context, a *AgentSpec) error {
 	a.CreatedAt = time.Now().UnixMilli()
+	a.EntityID = EntityOf(ctx)
 	if _, err := s.db.NewInsert().Model(a).Exec(ctx); err != nil {
 		return fmt.Errorf("create agent: %w", err)
 	}
@@ -55,20 +56,22 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentSpec, error) {
 
 func (s *Store) GetAgent(ctx context.Context, id string) (*AgentSpec, error) {
 	var a AgentSpec
-	if err := s.db.NewSelect().Model(&a).Where("id = ?", id).Scan(ctx); err != nil {
+	q := scopeEntity(s.db.NewSelect().Model(&a).Where("id = ?", id), ctx)
+	if err := q.Scan(ctx); err != nil {
 		return nil, fmt.Errorf("get agent: %w", err)
 	}
 	return &a, nil
 }
 
 func (s *Store) UpdateAgent(ctx context.Context, a *AgentSpec) error {
-	if _, err := s.db.NewUpdate().Model(a).Where("id = ?", a.ID).
+	q := s.db.NewUpdate().Model(a).Where("id = ?", a.ID).
 		Set("name = ?", a.Name).Set("kind = ?", a.Kind).
 		Set("runtime = ?", a.Runtime).Set("model = ?", a.Model).
 		Set("provider = ?", a.Provider).Set("system_prompt = ?", a.SystemPrompt).
 		Set("description = ?", a.Description).Set("machine_id = ?", a.MachineID).
-		Set("status = ?", a.Status).Set("default_channels = ?", a.DefaultChannels).Set("owner_id = ?", a.OwnerID).
-		Exec(ctx); err != nil {
+		Set("status = ?", a.Status).Set("default_channels = ?", a.DefaultChannels).Set("owner_id = ?", a.OwnerID)
+	q = scopeEntity(q, ctx)
+	if _, err := q.Exec(ctx); err != nil {
 		return fmt.Errorf("update agent: %w", err)
 	}
 	return nil
@@ -76,8 +79,9 @@ func (s *Store) UpdateAgent(ctx context.Context, a *AgentSpec) error {
 
 // SetAgentStatus 只改生命周期状态(启动/停止),不碰配置字段。
 func (s *Store) SetAgentStatus(ctx context.Context, id, status string) error {
-	if _, err := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).
-		Set("status = ?", status).Exec(ctx); err != nil {
+	q := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).Set("status = ?", status)
+	q = scopeEntity(q, ctx)
+	if _, err := q.Exec(ctx); err != nil {
 		return fmt.Errorf("set agent status: %w", err)
 	}
 	return nil
@@ -86,9 +90,11 @@ func (s *Store) SetAgentStatus(ctx context.Context, id, status string) error {
 // RetireAgent 注销数字人:落交接文档 + 置 retired(§6.2.1)。保留记录而不是删除,
 // 交接文档必须可查。
 func (s *Store) RetireAgent(ctx context.Context, id, handoverDoc string) error {
-	if _, err := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).
+	q := s.db.NewUpdate().Model(&AgentSpec{}).Where("id = ?", id).
 		Set("status = ?", "retired").Set("handover_doc = ?", handoverDoc).
-		Set("retired_at = ?", time.Now().UnixMilli()).Exec(ctx); err != nil {
+		Set("retired_at = ?", time.Now().UnixMilli())
+	q = scopeEntity(q, ctx)
+	if _, err := q.Exec(ctx); err != nil {
 		return fmt.Errorf("retire agent: %w", err)
 	}
 	return nil
@@ -110,7 +116,8 @@ func (s *Store) CountAgentsByMachine(ctx context.Context) (map[string]int, error
 }
 
 func (s *Store) DeleteAgent(ctx context.Context, id string) error {
-	if _, err := s.db.NewDelete().Model(&AgentSpec{}).Where("id = ?", id).Exec(ctx); err != nil {
+	q := scopeEntity(s.db.NewDelete().Model(&AgentSpec{}).Where("id = ?", id), ctx)
+	if _, err := q.Exec(ctx); err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}
 	return nil
@@ -131,20 +138,28 @@ type Channel struct {
 
 // DeleteChannel 解散频道:连同成员与消息一起删除,不留孤儿数据。
 func (s *Store) DeleteChannel(ctx context.Context, id string) error {
-	if _, err := s.db.NewDelete().Model(&ChannelMessage{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
-		return fmt.Errorf("delete channel messages: %w", err)
+	if _, err := s.GetChannel(ctx, id); err != nil {
+		return err
 	}
-	if _, err := s.db.NewDelete().Model(&ChannelMember{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
-		return fmt.Errorf("delete channel members: %w", err)
-	}
-	if _, err := s.db.NewDelete().Model(&Channel{}).Where("id = ?", id).Exec(ctx); err != nil {
-		return fmt.Errorf("delete channel: %w", err)
-	}
-	return nil
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewDelete().Model(&ChannelMessage{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
+			return fmt.Errorf("delete channel messages: %w", err)
+		}
+		if _, err := tx.NewDelete().Model(&ChannelMember{}).Where("channel_id = ?", id).Exec(ctx); err != nil {
+			return fmt.Errorf("delete channel members: %w", err)
+		}
+		q := tx.NewDelete().Model(&Channel{}).Where("id = ?", id)
+		q = scopeEntity(q, ctx)
+		if _, err := q.Exec(ctx); err != nil {
+			return fmt.Errorf("delete channel: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) CreateChannel(ctx context.Context, c *Channel) error {
 	c.CreatedAt = time.Now().UnixMilli()
+	c.EntityID = EntityOf(ctx)
 	if _, err := s.db.NewInsert().Model(c).Exec(ctx); err != nil {
 		return fmt.Errorf("create channel: %w", err)
 	}
@@ -166,13 +181,17 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 
 func (s *Store) GetChannel(ctx context.Context, id string) (*Channel, error) {
 	var c Channel
-	if err := s.db.NewSelect().Model(&c).Where("id = ?", id).Scan(ctx); err != nil {
+	q := scopeEntity(s.db.NewSelect().Model(&c).Where("id = ?", id), ctx)
+	if err := q.Scan(ctx); err != nil {
 		return nil, fmt.Errorf("get channel: %w", err)
 	}
 	return &c, nil
 }
 
 func (s *Store) AddChannelMember(ctx context.Context, channelID, memberID, kind string) error {
+	if _, err := s.GetChannel(ctx, channelID); err != nil {
+		return err
+	}
 	if _, err := s.db.NewInsert().Model(&ChannelMember{ChannelID: channelID, MemberID: memberID, Kind: kind}).
 		On("CONFLICT DO NOTHING").Exec(ctx); err != nil {
 		return fmt.Errorf("add member: %w", err)
@@ -181,6 +200,9 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, memberID, kind 
 }
 
 func (s *Store) RemoveChannelMember(ctx context.Context, channelID, memberID, kind string) error {
+	if _, err := s.GetChannel(ctx, channelID); err != nil {
+		return err
+	}
 	if _, err := s.db.NewDelete().Model(&ChannelMember{}).
 		Where("channel_id = ? AND member_id = ? AND kind = ?", channelID, memberID, kind).Exec(ctx); err != nil {
 		return fmt.Errorf("remove member: %w", err)
@@ -189,6 +211,9 @@ func (s *Store) RemoveChannelMember(ctx context.Context, channelID, memberID, ki
 }
 
 func (s *Store) ListChannelMembers(ctx context.Context, channelID string) ([]ChannelMember, error) {
+	if _, err := s.GetChannel(ctx, channelID); err != nil {
+		return nil, err
+	}
 	out := []ChannelMember{}
 	if err := s.db.NewSelect().Model(&out).Where("channel_id = ?", channelID).Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
@@ -218,6 +243,9 @@ type ChannelMessage struct {
 }
 
 func (s *Store) AppendChannelMessage(ctx context.Context, m *ChannelMessage) error {
+	if _, err := s.GetChannel(ctx, m.ChannelID); err != nil {
+		return err
+	}
 	m.TS = time.Now().UnixMilli()
 	if _, err := s.db.NewInsert().Model(m).On("CONFLICT (idempotency_key) DO NOTHING").Exec(ctx); err != nil {
 		return fmt.Errorf("append message: %w", err)
@@ -226,6 +254,9 @@ func (s *Store) AppendChannelMessage(ctx context.Context, m *ChannelMessage) err
 }
 
 func (s *Store) ListChannelMessages(ctx context.Context, channelID string, limit int) ([]ChannelMessage, error) {
+	if _, err := s.GetChannel(ctx, channelID); err != nil {
+		return nil, err
+	}
 	out := []ChannelMessage{}
 	q := s.db.NewSelect().Model(&out).Where("channel_id = ?", channelID)
 	if limit > 0 {

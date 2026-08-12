@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +35,98 @@ func fakeIdleRunner(t *testing.T, nc *nats.Conn, runnerID string, events []time.
 	})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
+	}
+}
+
+func TestSpawnAndWaitHeartbeatLost(t *testing.T) {
+	nc := startEmbedded(t)
+	g := New(nc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = g.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	fakeIdleRunner(t, nc, "runner-lost", []time.Duration{2 * time.Second})
+
+	_, err := g.SpawnAndWaitOpts(ctx, "runner-lost", Spawn{SpawnID: "sp-lost", Prompt: "hi", Cwd: "/"},
+		WithIdleTimeout(5*time.Second), WithMaxTimeout(5*time.Second), WithHeartbeatTimeout(250*time.Millisecond))
+	if !errors.Is(err, ErrRunnerHeartbeatLost) {
+		t.Fatalf("heartbeat loss = %v, want ErrRunnerHeartbeatLost", err)
+	}
+}
+
+func TestSpawnAndWaitHeartbeatActivityPreventsFalsePositive(t *testing.T) {
+	nc := startEmbedded(t)
+	g := New(nc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = g.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	cmdSubj := "chaos.runner.runner-live.cmd"
+	evtSubj := "chaos.runner.runner-live.evt"
+	_, err := nc.Subscribe(cmdSubj, func(m *nats.Msg) {
+		var cmd runnerCmd
+		_ = json.Unmarshal(m.Data, &cmd)
+		_ = m.Respond([]byte(`{"ok":true}`))
+		go func() {
+			for range 6 {
+				time.Sleep(100 * time.Millisecond)
+				_ = nc.Publish(evtSubj, mustJSON(t, map[string]any{"type": "heartbeat"}))
+			}
+			_ = nc.Publish(evtSubj, mustJSON(t, map[string]any{"type": "spawn-done", "spawnId": cmd.Spawn.SpawnID, "ok": true}))
+		}()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.SpawnAndWaitOpts(ctx, "runner-live", Spawn{SpawnID: "sp-live", Prompt: "hi", Cwd: "/"},
+		WithIdleTimeout(2*time.Second), WithMaxTimeout(3*time.Second), WithHeartbeatTimeout(250*time.Millisecond))
+	if err != nil || !res.OK {
+		t.Fatalf("live runner result = (%+v, %v)", res, err)
+	}
+}
+
+func TestConcurrentSpawnWaitersDoNotConsumeEachOthersEvents(t *testing.T) {
+	nc := startEmbedded(t)
+	g := New(nc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = g.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	cmdSubj := "chaos.runner.runner-concurrent.cmd"
+	evtSubj := "chaos.runner.runner-concurrent.evt"
+	_, err := nc.Subscribe(cmdSubj, func(m *nats.Msg) {
+		var cmd runnerCmd
+		_ = json.Unmarshal(m.Data, &cmd)
+		_ = m.Respond([]byte(`{"ok":true}`))
+		go func(spawnID string) {
+			time.Sleep(50 * time.Millisecond)
+			_ = nc.Publish(evtSubj, mustJSON(t, map[string]any{"type": "spawn-done", "spawnId": spawnID, "ok": true}))
+		}(cmd.Spawn.SpawnID)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, spawnID := range []string{"sp-a", "sp-b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := g.SpawnAndWaitOpts(ctx, "runner-concurrent", Spawn{SpawnID: spawnID, Prompt: "hi", Cwd: "/"},
+				WithIdleTimeout(time.Second), WithMaxTimeout(2*time.Second), WithHeartbeatTimeout(time.Second))
+			if err != nil {
+				errs <- err
+				return
+			}
+			if !res.OK {
+				errs <- errors.New("spawn returned not ok")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 

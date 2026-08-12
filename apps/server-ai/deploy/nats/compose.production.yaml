@@ -1,0 +1,29 @@
+name: ${COMPOSE_PROJECT_NAME:-chaosplus-ai}
+
+services:
+  nats:
+    image: ${NATS_IMAGE:-nats:2.14.4-alpine}
+    command: ["--config", "/etc/nats/nats.conf"]
+    restart: unless-stopped
+    environment:
+      NATS_AUTH_TOKEN: ${NATS_AUTH_TOKEN:?set NATS_AUTH_TOKEN}
+    ports:
+      - "${NATS_BIND_ADDRESS:-127.0.0.1}:${NATS_CLIENT_PORT:-4222}:4222"
+      - "127.0.0.1:${NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - ./nats.production.conf:/etc/nats/nats.conf:ro
+      - ${NATS_TLS_DIR:?set NATS_TLS_DIR}:/etc/nats/tls:ro
+      - nats-production-data:/data/jetstream
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8222/healthz | grep -q ok"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  nats-production-data:

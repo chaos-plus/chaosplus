@@ -72,7 +72,7 @@ type ApprovalBroker struct {
 	decided map[string]Decision
 	// OnDecision fires after a successful Resolve (nil-safe). Used by RunManager
 	// to emit REVIEW_APPROVED / REVIEW_REJECTED events live.
-	OnDecision func(nodeID string, d Decision)
+	OnDecision func(nodeID string, d Decision) error
 }
 
 func NewApprovalBroker() *ApprovalBroker {
@@ -134,7 +134,12 @@ func (b *ApprovalBroker) Resolve(nodeID string, ok bool, reason string, fb *Feed
 	// releasing the gate, so the engine cannot run the DAG to completion and
 	// evaluate finalStatus before the review event is visible (M4).
 	if onDec != nil {
-		onDec(nodeID, d)
+		if err := onDec(nodeID, d); err != nil {
+			b.mu.Lock()
+			delete(b.decided, nodeID)
+			b.mu.Unlock()
+			return fmt.Errorf("approval %q: persist decision: %w", nodeID, err)
+		}
 	}
 	if ch != nil {
 		ch <- d // buffered(1): never blocks; Wait may have been cancelled

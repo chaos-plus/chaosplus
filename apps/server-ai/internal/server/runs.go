@@ -90,14 +90,16 @@ type Run struct {
 	Workspace  string
 	created    time.Time
 
-	mu     sync.Mutex
-	status RunStatus
-	events []RunEvent
-	subs   map[RunSubscriber]struct{}
-	seq    int
-	cancel context.CancelFunc
-	done   chan struct{}
-	req    LaunchRequest
+	mu         sync.Mutex
+	status     RunStatus
+	events     []RunEvent
+	subs       map[RunSubscriber]struct{}
+	seq        int
+	cancel     context.CancelFunc
+	done       chan struct{}
+	req        LaunchRequest
+	lease      store.RunLease
+	persistErr error
 }
 
 func (r *Run) publish(ev RunEvent) {
@@ -159,6 +161,34 @@ func (r *Run) setStatus(s RunStatus) {
 	r.mu.Unlock()
 }
 
+func (r *Run) currentLease() store.RunLease {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lease
+}
+
+func (r *Run) setLease(lease store.RunLease) {
+	r.mu.Lock()
+	r.lease = lease
+	r.persistErr = nil
+	r.mu.Unlock()
+}
+
+func (r *Run) persistenceError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.persistErr
+}
+
+func (r *Run) setPersistenceError(err error) context.CancelFunc {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.persistErr == nil {
+		r.persistErr = err
+	}
+	return r.cancel
+}
+
 func (r *Run) nextSeq() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -186,17 +216,22 @@ type RunManager struct {
 	st       *store.Store
 	runnerID string
 
-	mu          sync.Mutex
-	runs        map[string]*Run
-	seq         int
-	sub         *nats.Subscription
-	baseFactory func(runID string) workflow.Executor // test seam; nil → RunnerExecutor
-	picker      workflow.MachinePicker               // per-node machine selector (nil = use runnerID)
-	processCtx  context.Context
+	mu               sync.Mutex
+	runs             map[string]*Run
+	seq              int
+	sub              *nats.Subscription
+	baseFactory      func(runID string) workflow.Executor // test seam; nil → RunnerExecutor
+	picker           workflow.MachinePicker               // per-node machine selector (nil = use runnerID)
+	processCtx       context.Context
+	ownerID          string
+	leaseTTL         time.Duration
+	heartbeatTimeout time.Duration
 }
 
 func NewRunManager(nc *nats.Conn, link workflow.RunnerLink, st *store.Store, runnerID string) *RunManager {
-	return &RunManager{nc: nc, link: link, st: st, runnerID: runnerID, runs: make(map[string]*Run)}
+	return &RunManager{nc: nc, link: link, st: st, runnerID: runnerID, runs: make(map[string]*Run),
+		ownerID: "control-" + randRunSuffix() + randRunSuffix(), leaseTTL: 15 * time.Second,
+		heartbeatTimeout: 45 * time.Second}
 }
 
 // SetMachinePicker configures per-node machine dispatch. When set, each agent
@@ -289,6 +324,71 @@ func (m *RunManager) GetFor(id, instanceID string) (*Run, bool) {
 	return run, true
 }
 
+func (m *RunManager) removeRun(id string) {
+	m.mu.Lock()
+	delete(m.runs, id)
+	m.mu.Unlock()
+}
+
+func (m *RunManager) acquireLease(ctx context.Context, run *Run) error {
+	if m.st == nil {
+		return nil
+	}
+	lease, err := m.st.AcquireRunLease(ctx, run.ID, m.ownerID, m.leaseTTL)
+	if err != nil {
+		return fmt.Errorf("acquire run %s single-writer lease: %w", run.ID, err)
+	}
+	run.setLease(lease)
+	return nil
+}
+
+func (m *RunManager) renewLease(ctx context.Context, run *Run) {
+	if m.st == nil {
+		return
+	}
+	interval := m.leaseTTL / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lease, err := m.st.RenewRunLease(ctx, run.currentLease(), m.leaseTTL)
+			if err != nil {
+				m.stopOnPersistenceError(run, fmt.Errorf("renew run lease: %w", err))
+				return
+			}
+			run.mu.Lock()
+			if run.lease.FencingToken == lease.FencingToken && run.lease.OwnerID == lease.OwnerID {
+				run.lease = lease
+			}
+			run.mu.Unlock()
+		}
+	}
+}
+
+func (m *RunManager) releaseLease(run *Run) {
+	if m.st == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := m.st.ReleaseRunLease(ctx, run.currentLease()); err != nil {
+		slog.Warn("release run lease", "run", run.ID, "err", err)
+	}
+}
+
+func (m *RunManager) stopOnPersistenceError(run *Run, err error) {
+	slog.Error("run persistence fenced or failed", "run", run.ID, "err", err)
+	if cancel := run.setPersistenceError(err); cancel != nil {
+		cancel()
+	}
+}
+
 // randRunSuffix returns a short random hex so run IDs stay unique across restarts.
 func randRunSuffix() string {
 	b := make([]byte, 4)
@@ -363,17 +463,13 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	run.ProjectID = req.ProjectID
 	run.Workspace = req.Workspace
 	run.req = req
-	// Persist the run definition so it survives restarts (PRD §15.1).
-	if m.st != nil {
-		defJSON, _ := json.Marshal(&def)
-		_ = m.st.SaveRunDefinition(context.Background(), store.RunDef{
-			ID: run.ID, DefJSON: string(defJSON), Status: string(RunRunning),
-			ContextJSON: string(req.Context), Workspace: req.Workspace, RunnerID: req.RunnerID,
-			InstanceID: req.InstanceID, ProjectID: req.ProjectID,
-		})
+	if err := m.acquireLease(ctx, run); err != nil {
+		m.removeRun(run.ID)
+		return nil, err
 	}
 	if err := m.startEngine(ctx, run, req, nil); err != nil {
-		m.failPersistedRun(run.ID)
+		m.releaseLease(run)
+		m.removeRun(run.ID)
 		return nil, err
 	}
 	return run, nil
@@ -388,12 +484,15 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 	run.done = done
 	run.mu.Unlock()
 	broker := run.Broker
-	broker.OnDecision = func(nodeID string, d workflow.Decision) {
-		m.emit(run, RunEvent{
+	broker.OnDecision = func(nodeID string, d workflow.Decision) error {
+		if err := m.emit(run, RunEvent{
 			NodeID: nodeID, Status: workflow.StatusCompleted,
 			Review: &ReviewInfo{Approved: d.OK, Reason: d.Reason, Feedback: d.Feedback},
-		})
-		m.recordReviewProjection(run, nodeID, d)
+		}); err != nil {
+			return err
+		}
+		run.setStatus(RunRunning)
+		return nil
 	}
 
 	var base workflow.Executor
@@ -414,7 +513,8 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 		}
 		base = workflow.NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID).
 			WithMachinePicker(m.picker).
-			WithAttemptOffsets(attemptOffsets(run.Events()))
+			WithAttemptOffsets(attemptOffsets(run.Events())).
+			WithHeartbeatTimeout(m.heartbeatTimeout)
 	}
 	exec := workflow.NewApprovalExecutor(base, broker)
 
@@ -438,41 +538,51 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 		snapshot = &RunSnapshot{Workflow: defJSON, Context: req.Context, Workspace: req.Workspace,
 			RunnerID: req.RunnerID, InstanceID: req.InstanceID, ProjectID: req.ProjectID, CreatedAt: run.created.UnixMilli()}
 	}
-	m.emit(run, RunEvent{RunStatus: RunRunning, EventType: eventType, Snapshot: snapshot})
+	if err := m.emit(run, RunEvent{RunStatus: RunRunning, EventType: eventType, Snapshot: snapshot}); err != nil {
+		cancel()
+		return err
+	}
+	go m.renewLease(runCtx, run)
 	go func() {
 		defer cancelCause(nil)
 		defer close(done)
 		eng.OnEvent = func(ev workflow.Event) {
-			if ev.Status == workflow.StatusWaitingApproval {
-				run.setStatus(RunWaitingApproval)
-				if m.st != nil {
-					_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunWaitingApproval))
-				}
-			}
-			if ev.Status == workflow.StatusPausedForHuman {
-				run.setStatus(RunPaused)
-				if m.st != nil {
-					_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunPaused))
-				}
-			}
-			m.emit(run, RunEvent{
+			if err := m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
 				Status: ev.Status, Output: ev.Output, Error: ev.Error,
 				Attempt: ev.Attempt, Artifacts: ev.Artifacts, Preview: ev.Preview,
-			})
+			}); err != nil {
+				m.stopOnPersistenceError(run, err)
+				return
+			}
+			if ev.Status == workflow.StatusWaitingApproval {
+				run.setStatus(RunWaitingApproval)
+			}
+			if ev.Status == workflow.StatusPausedForHuman {
+				run.setStatus(RunPaused)
+			}
 		}
 		_, err := eng.Run(runCtx, req.Context)
+		persistErr := run.persistenceError()
+		if persistErr != nil {
+			err = persistErr
+		}
 		final := run.Status()
-		if final != RunPaused && final != RunCancelled {
+		if persistErr != nil {
+			final = RunFailed
+		} else if final != RunPaused && final != RunCancelled {
 			final = m.finalStatus(run, err)
 		}
-		run.setStatus(final)
 		// Run-level terminal event (F.2 RUN_COMPLETED/FAILED/PAUSED).
-		m.emit(run, RunEvent{RunStatus: run.Status()})
-		// Persist terminal status so restart doesn't show stale "running".
-		if m.st != nil {
-			_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(final))
+		if emitErr := m.emit(run, RunEvent{RunStatus: final}); emitErr != nil {
+			slog.Error("persist terminal run event", "run", run.ID, "status", final, "err", emitErr)
+			if final != RunCancelled {
+				final = RunFailed
+			}
 		}
+		run.setStatus(final)
+		cancelCause(nil)
+		m.releaseLease(run)
 	}()
 	return nil
 }
@@ -615,44 +725,61 @@ func (m *RunManager) Resume(runID string) error {
 		}
 	}
 	run.Broker = workflow.NewApprovalBroker()
+	if err := m.acquireLease(m.Context(), run); err != nil {
+		return err
+	}
 	run.setStatus(RunRunning)
-	return m.startEngine(m.Context(), run, run.req, restored)
+	if err := m.startEngine(m.Context(), run, run.req, restored); err != nil {
+		m.releaseLease(run)
+		return err
+	}
+	return nil
 }
 
-// emit delivers an event to the run's subscribers, publishes it to NATS
-// (cluster fan-out), and persists it to the StateStore when configured.
-// Local delivery happens FIRST so the NATS echo of this same instance finds the
-// seq already in the run history and dedups (hasSeq) instead of double-posting.
-func (m *RunManager) emit(run *Run, ev RunEvent) {
+// emit commits the authoritative event and every rebuildable projection in one
+// fenced transaction before it becomes visible in memory or over NATS.
+func (m *RunManager) emit(run *Run, ev RunEvent) error {
 	ev.Seq = run.nextSeq()
 	ev.RunID = run.ID
-	run.publish(ev)
-	m.persistNodeExecution(run, ev)
-	m.persistArtifacts(run, ev)
-	data, _ := json.Marshal(ev)
-	if err := m.nc.Publish(runSubjectPrefix+run.ID+".evt", data); err != nil {
-		slog.Warn("publish run event", "err", err)
-	}
 	if m.st != nil {
 		typ := storeTypeFor(ev)
-		payload, _ := json.Marshal(ev)
-		if err := m.st.Append(context.Background(), store.Event{
+		payload, err := json.Marshal(ev)
+		if err != nil {
+			return fmt.Errorf("marshal run event: %w", err)
+		}
+		events := []store.Event{{
 			ID:             fmt.Sprintf("%s-%d", run.ID, ev.Seq),
 			InstanceID:     run.InstanceID,
 			RunID:          run.ID,
 			Type:           typ,
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, typ, ev.Seq),
 			PayloadJSON:    string(payload),
-		}); err != nil {
-			// 事件必须可重放:落库失败要看得见,不能吞。
-			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
+		}}
+		artifactEvents, err := m.artifactEvents(run, ev)
+		if err != nil {
+			return err
+		}
+		events = append(events, artifactEvents...)
+		if err := m.st.CommitRunEvents(context.Background(), run.currentLease(), events); err != nil {
+			return fmt.Errorf("commit run event %s/%d: %w", typ, ev.Seq, err)
 		}
 	}
+	run.publish(ev)
+	if m.nc != nil {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return fmt.Errorf("marshal NATS run event: %w", err)
+		}
+		if err := m.nc.Publish(runSubjectPrefix+run.ID+".evt", data); err != nil {
+			slog.Warn("publish run event", "run", run.ID, "seq", ev.Seq, "err", err)
+		}
+	}
+	return nil
 }
 
-func (m *RunManager) persistArtifacts(run *Run, ev RunEvent) {
+func (m *RunManager) artifactEvents(run *Run, ev RunEvent) ([]store.Event, error) {
 	if m.st == nil || len(ev.Artifacts) == 0 {
-		return
+		return nil, nil
 	}
 	node := nodeByID(run.Def, ev.NodeID)
 	consumes := []string{}
@@ -663,9 +790,9 @@ func (m *RunManager) persistArtifacts(run *Run, ev RunEvent) {
 	}
 	deps, err := m.st.ResolveArtifacts(context.Background(), run.InstanceID, run.ProjectID, consumes)
 	if err != nil {
-		slog.Warn("resolve artifact dependencies", "run", run.ID, "node", ev.NodeID, "err", err)
-		return
+		return nil, fmt.Errorf("resolve artifact dependencies for %s/%s: %w", run.ID, ev.NodeID, err)
 	}
+	events := make([]store.Event, 0, len(ev.Artifacts))
 	for _, produced := range ev.Artifacts {
 		id := artifactIdentity(run.InstanceID, run.ProjectID, produced.Path)
 		artifact := store.Artifact{
@@ -675,100 +802,30 @@ func (m *RunManager) persistArtifacts(run *Run, ev RunEvent) {
 			ProducerRunID: run.ID, ProducerNode: ev.NodeID, Attempt: ev.Attempt + 1,
 			RunnerID: produced.RunnerID, SpawnID: produced.SpawnID,
 		}
-		if err := m.st.UpsertArtifact(context.Background(), artifact, deps); err != nil {
-			slog.Error("persist artifact", "run", run.ID, "node", ev.NodeID, "artifact", produced.ID, "err", err)
-			continue
-		}
 		edges := make([]store.ArtifactDep, 0, len(deps))
 		for _, dep := range deps {
 			edges = append(edges, store.ArtifactDep{ArtifactID: artifact.ID, DependsOnID: dep.ID, InputChecksum: dep.Checksum})
 		}
-		payload, _ := json.Marshal(struct {
+		payload, err := json.Marshal(struct {
 			Artifact     store.Artifact      `json:"artifact"`
 			Dependencies []store.ArtifactDep `json:"dependencies"`
 		}{Artifact: artifact, Dependencies: edges})
-		if err := m.st.Append(context.Background(), store.Event{
-			ID: fmt.Sprintf("artifact-%s-%d", id, time.Now().UnixNano()), InstanceID: run.InstanceID,
+		if err != nil {
+			return nil, fmt.Errorf("marshal artifact event %s: %w", produced.ID, err)
+		}
+		events = append(events, store.Event{
+			ID: fmt.Sprintf("%s-artifact-%d-%s", run.ID, ev.Seq, id), InstanceID: run.InstanceID,
 			RunID: run.ID, Type: "ARTIFACT_PRODUCED",
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d:%s:%s", run.ID, ev.NodeID, ev.Attempt, id, produced.Checksum),
 			PayloadJSON:    string(payload),
-		}); err != nil {
-			slog.Error("persist artifact event", "artifact", id, "err", err)
-		}
+		})
 	}
+	return events, nil
 }
 
 func artifactIdentity(instanceID, projectID, logicalPath string) string {
 	digest := sha256.Sum256([]byte(instanceID + "\x00" + projectID + "\x00" + logicalPath))
 	return fmt.Sprintf("art-%x", digest[:12])
-}
-
-// failPersistedRun marks a run failed in the store after a launch error, so a
-// run that never started does not linger as an active (running) row.
-func (m *RunManager) failPersistedRun(runID string) {
-	if m.st == nil {
-		return
-	}
-	if err := m.st.UpdateRunStatus(context.Background(), runID, string(RunFailed)); err != nil {
-		slog.Warn("mark failed launch run", "run", runID, "err", err)
-	}
-}
-
-// persistNodeExecution mirrors a node lifecycle event into the node_executions
-// projection (PRD §16). Best-effort; the events table remains authoritative.
-func (m *RunManager) persistNodeExecution(run *Run, ev RunEvent) {
-	if m.st == nil || ev.NodeID == "" {
-		return
-	}
-	completedAt := int64(0)
-	switch ev.Status {
-	case workflow.StatusCompleted, workflow.StatusFailed, workflow.StatusSkipped:
-		completedAt = time.Now().UnixMilli()
-	}
-	if err := m.st.UpsertNodeExecution(context.Background(), store.NodeExecution{
-		RunID: run.ID, NodeID: ev.NodeID, Attempt: ev.Attempt + 1, // 1-based attempt (review: retries no longer collapse to one row)
-		Status: string(ev.Status), Error: ev.Error, CompletedAt: completedAt,
-	}); err != nil {
-		slog.Warn("persist node execution", "run", run.ID, "node", ev.NodeID, "err", err)
-	}
-}
-
-// recordReviewProjection persists the human-approval verdict as audit
-// projections (PRD F.2): validation_results for every review, feedback_log for
-// rejections (the structured feedback). Best-effort: the events table (already
-// written by emit) is the authoritative, rebuildable source of truth (§15.1),
-// so a projection write failure never loses a decision. Errors are logged.
-func (m *RunManager) recordReviewProjection(run *Run, nodeID string, d workflow.Decision) {
-	if m.st == nil {
-		return
-	}
-	ctx := context.Background()
-	passed := 0
-	if d.OK {
-		passed = 1
-	}
-	evidence, _ := json.Marshal(map[string]any{"reason": d.Reason})
-	v := store.ValidationResult{
-		ID: "vr-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
-		ValidatorID: "human", ValidatorType: "human", Passed: passed,
-		EvidenceJSON: string(evidence), ReviewedBy: "human",
-	}
-	if d.OK {
-		if err := m.st.RecordValidationResult(ctx, v); err != nil {
-			slog.Warn("record validation result", "run", run.ID, "node", nodeID, "err", err)
-		}
-		return
-	}
-	// Rejection: the failed verdict and its structured feedback land atomically.
-	f := store.FeedbackLogEntry{
-		ID: "fb-" + randHex(8), ArtifactID: run.ID, ExecutionID: nodeID,
-		Reviewer: "human", Category: string(d.Feedback.Category),
-		Location: d.Feedback.Location, Expected: d.Feedback.Expected,
-		Detail: d.Feedback.Detail,
-	}
-	if err := m.st.RecordRejection(ctx, v, f); err != nil {
-		slog.Warn("record rejection projection", "run", run.ID, "node", nodeID, "err", err)
-	}
 }
 
 func storeTypeFor(ev RunEvent) string {

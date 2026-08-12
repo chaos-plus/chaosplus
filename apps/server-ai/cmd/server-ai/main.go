@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -81,6 +82,14 @@ func main() {
 	natsOpts := []nats.Option{nats.Timeout(5 * time.Second)}
 	if token := os.Getenv("CONTROL_NATS_TOKEN"); token != "" {
 		natsOpts = append(natsOpts, nats.Token(token))
+	}
+	if ca := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CA")); ca != "" {
+		natsOpts = append(natsOpts, nats.RootCAs(ca))
+	}
+	certFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CERT"))
+	keyFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_KEY"))
+	if certFile != "" && keyFile != "" {
+		natsOpts = append(natsOpts, nats.ClientCert(certFile, keyFile))
 	}
 	nc, err := nats.Connect(url, append(natsOpts,
 		nats.Name("chaosplus-server-ai"),
@@ -175,12 +184,16 @@ func main() {
 	}
 
 	var chat *server.ChatService
+	var modules []server.RESTRegistrar
 	if st != nil {
-		chat = server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", defaultWorkspaceRoot()))
+		workspaceRoot := envOr("CHAT_WORKSPACE_ROOT", defaultWorkspaceRoot())
+		runnerID := envOr("CONTROL_RUNNER_ID", "")
+		chat = server.NewChatService(st, link, g, workspaceRoot)
+		modules = append(modules, server.NewWorkspaceModule(st, rm, chat, runnerID, workspaceRoot))
 	}
 	hs := &http.Server{
 		Addr:              httpAddr,
-		Handler:           server.NewHandler(rm, hub, chat),
+		Handler:           server.NewHandler(rm, hub, chat, modules...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -219,14 +232,29 @@ func validateRuntimeConfig(httpAddr string) error {
 	if !strings.EqualFold(os.Getenv("CONTROL_ENV"), "production") {
 		return nil
 	}
-	missing := make([]string, 0, 4)
-	for _, key := range []string{"CONTROL_API_TOKEN", "CONTROL_DB_DSN", "EMAIL_WEBHOOK_SECRET", "CONTROL_AUTH_HARDENED"} {
+	missing := make([]string, 0, 8)
+	for _, key := range []string{"CONTROL_API_TOKEN", "CONTROL_DB_DSN", "CONTROL_EMAIL_WEBHOOK_SECRET", "CONTROL_AUTH_HARDENED",
+		"CONTROL_NATS_URL", "CONTROL_NATS_TOKEN", "CONTROL_NATS_TLS_CA", "CONTROL_NATS_DEPLOYMENT"} {
 		if strings.TrimSpace(os.Getenv(key)) == "" {
 			missing = append(missing, key)
 		}
 	}
 	if value := os.Getenv("CONTROL_AUTH_HARDENED"); value != "" && value != "1" {
 		return errors.New("production configuration requires CONTROL_AUTH_HARDENED=1")
+	}
+	if deployment := strings.TrimSpace(os.Getenv("CONTROL_NATS_DEPLOYMENT")); deployment != "" && deployment != "official-image" {
+		return errors.New("production configuration requires CONTROL_NATS_DEPLOYMENT=official-image")
+	}
+	if rawURL := strings.TrimSpace(os.Getenv("CONTROL_NATS_URL")); rawURL != "" {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("production CONTROL_NATS_URL must be a valid tls://host:port URL without embedded credentials, query, or fragment")
+		}
+	}
+	certFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CERT"))
+	keyFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_KEY"))
+	if (certFile == "") != (keyFile == "") {
+		return errors.New("CONTROL_NATS_TLS_CERT and CONTROL_NATS_TLS_KEY must be set together")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("production configuration requires %s", strings.Join(missing, ", "))

@@ -25,7 +25,7 @@ func (m *RunManager) reconcileLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			report, err := m.ReconcileArtifacts(ctx)
+			report, err := m.ReconcileArtifacts(ctx, "")
 			if err != nil {
 				slog.Warn("artifact reconciliation", "err", err)
 			} else if report.Changed > 0 || report.Orphaned > 0 {
@@ -35,12 +35,12 @@ func (m *RunManager) reconcileLoop(ctx context.Context) {
 	}
 }
 
-func (m *RunManager) ReconcileArtifacts(ctx context.Context) (ReconcileReport, error) {
+func (m *RunManager) ReconcileArtifacts(ctx context.Context, instanceID string) (ReconcileReport, error) {
 	var report ReconcileReport
 	if m.st == nil || m.link == nil {
 		return report, nil
 	}
-	artifacts, err := m.st.ListArtifacts(ctx, "", "", "")
+	artifacts, err := m.st.ListArtifacts(ctx, instanceID, "", "")
 	if err != nil {
 		return report, err
 	}
@@ -55,45 +55,51 @@ func (m *RunManager) ReconcileArtifacts(ctx context.Context) (ReconcileReport, e
 		body, err := m.link.ReadArtifact(ctx, artifact.RunnerID, artifact.SpawnID, artifact.LogicalPath)
 		if err != nil {
 			if online[artifact.RunnerID] && artifact.Status != store.ArtifactOrphaned {
-				if markErr := m.st.MarkArtifactOrphaned(ctx, artifact.ID); markErr != nil {
-					return report, markErr
-				}
 				artifact.Status = store.ArtifactOrphaned
-				payload, _ := json.Marshal(artifact)
-				if appendErr := m.st.Append(ctx, store.Event{
+				payload, marshalErr := json.Marshal(artifact)
+				if marshalErr != nil {
+					return report, marshalErr
+				}
+				committed, appendErr := m.st.CommitArtifactEventIfChecksum(ctx, store.Event{
 					ID: fmt.Sprintf("orphan-%s-%d", artifact.ID, time.Now().UnixNano()), InstanceID: artifact.InstanceID,
 					RunID: artifact.ProducerRunID, Type: "ARTIFACT_ORPHANED",
 					IdempotencyKey: fmt.Sprintf("orphan:%s:%s", artifact.ID, artifact.Checksum), PayloadJSON: string(payload),
-				}); appendErr != nil {
+				}, artifact.Checksum)
+				if appendErr != nil {
 					return report, appendErr
 				}
-				report.Orphaned++
+				if committed {
+					report.Orphaned++
+				}
 			}
 			continue
 		}
 		report.Checked++
 		digest := sha256.Sum256(body)
 		checksum := fmt.Sprintf("sha256:%x", digest[:])
-		changed, err := m.st.ReconcileArtifact(ctx, artifact.ID, checksum, int64(len(body)))
-		if err != nil {
-			return report, err
-		}
-		if !changed {
+		if artifact.Checksum == checksum {
 			continue
 		}
-		report.Changed++
+		expectedChecksum := artifact.Checksum
 		artifact.Checksum = checksum
 		artifact.SizeBytes = int64(len(body))
 		artifact.Status = store.ArtifactInvalid
-		payload, _ := json.Marshal(artifact)
-		if err := m.st.Append(ctx, store.Event{
+		payload, marshalErr := json.Marshal(artifact)
+		if marshalErr != nil {
+			return report, marshalErr
+		}
+		committed, err := m.st.CommitArtifactEventIfChecksum(ctx, store.Event{
 			ID:         fmt.Sprintf("reconcile-%s-%d", artifact.ID, time.Now().UnixNano()),
 			InstanceID: artifact.InstanceID, RunID: artifact.ProducerRunID,
 			Type:           "ARTIFACT_INVALIDATED",
 			IdempotencyKey: fmt.Sprintf("reconcile:%s:%s", artifact.ID, checksum),
 			PayloadJSON:    string(payload),
-		}); err != nil {
+		}, expectedChecksum)
+		if err != nil {
 			return report, err
+		}
+		if committed {
+			report.Changed++
 		}
 	}
 	return report, nil

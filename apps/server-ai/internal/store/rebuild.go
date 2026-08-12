@@ -71,6 +71,7 @@ type replayFeedback struct {
 type replayArtifactEvent struct {
 	Artifact     Artifact      `json:"artifact"`
 	Dependencies []ArtifactDep `json:"dependencies"`
+	Reviewer     string        `json:"reviewer,omitempty"`
 }
 
 func replayCoreEvent(ctx context.Context, tx bun.Tx, event Event) error {
@@ -104,7 +105,11 @@ func replayCoreEvent(ctx context.Context, tx bun.Tx, event Event) error {
 	case "RUN_FAILED":
 		return updateRunProjection(ctx, tx, event.RunID, "failed", event.TS)
 	case "RUN_PAUSED":
-		return updateRunProjection(ctx, tx, event.RunID, "paused", event.TS)
+		status := "paused"
+		if runEvent.RunStatus == "waiting_approval" {
+			status = runEvent.RunStatus
+		}
+		return updateRunProjection(ctx, tx, event.RunID, status, event.TS)
 	case "RUN_CANCELLED":
 		return updateRunProjection(ctx, tx, event.RunID, "cancelled", event.TS)
 	case "ARTIFACT_PRODUCED":
@@ -124,7 +129,13 @@ func replayCoreEvent(ctx context.Context, tx bun.Tx, event Event) error {
 	node := NodeExecution{RunID: event.RunID, NodeID: runEvent.NodeID, Attempt: runEvent.Attempt + 1,
 		Status: runEvent.Status, StartedAt: event.TS, CompletedAt: completedAt, Error: runEvent.Error}
 	_, err := tx.NewInsert().Model(&node).On("CONFLICT (run_id, node_id, attempt) DO UPDATE SET status = excluded.status, completed_at = excluded.completed_at, error = excluded.error").Exec(ctx)
-	return err
+	if err != nil {
+		return err
+	}
+	if event.Type == "REVIEW_REQUESTED" {
+		return updateRunProjection(ctx, tx, event.RunID, "waiting_approval", event.TS)
+	}
+	return nil
 }
 
 func updateRunProjection(ctx context.Context, tx bun.Tx, runID, status string, ts int64) error {
@@ -187,8 +198,8 @@ func replayArtifactStatus(ctx context.Context, tx bun.Tx, event Event) error {
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		return err
 	}
+	var envelope replayArtifactEvent
 	if payload.ID == "" {
-		var envelope replayArtifactEvent
 		if err := json.Unmarshal([]byte(event.PayloadJSON), &envelope); err != nil {
 			return err
 		}
@@ -206,10 +217,12 @@ func replayArtifactStatus(ctx context.Context, tx bun.Tx, event Event) error {
 	case "ARTIFACT_FORCE_VALIDATED":
 		status, force = ArtifactValid, true
 	}
-	_, err := tx.NewUpdate().Model((*Artifact)(nil)).Set("status = ?", status).Set("force_valid = ?", force).
-		Set("checksum = CASE WHEN ? <> '' THEN ? ELSE checksum END", payload.Checksum, payload.Checksum).
-		Set("size_bytes = CASE WHEN ? > 0 THEN ? ELSE size_bytes END", payload.SizeBytes, payload.SizeBytes).
-		Set("updated_at = ?", event.TS).Where("id = ?", payload.ID).Exec(ctx)
+	q := tx.NewUpdate().Model((*Artifact)(nil)).Set("status = ?", status).Set("force_valid = ?", force).
+		Set("updated_at = ?", event.TS).Where("id = ?", payload.ID)
+	if event.Type == "ARTIFACT_INVALIDATED" {
+		q = q.Set("checksum = ?", payload.Checksum).Set("size_bytes = ?", payload.SizeBytes)
+	}
+	_, err := q.Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -217,8 +230,12 @@ func replayArtifactStatus(ctx context.Context, tx bun.Tx, event Event) error {
 		return markArtifactDependentsStale(ctx, tx, payload.ID)
 	}
 	if event.Type == "ARTIFACT_FORCE_VALIDATED" {
+		reviewer := envelope.Reviewer
+		if reviewer == "" {
+			reviewer = "human"
+		}
 		validation := ValidationResult{ID: "wrt-" + event.ID, ArtifactID: payload.ID, ValidatorID: "force_valid",
-			ValidatorType: "human", Passed: 1, EvidenceJSON: `{"forceValid":true}`, ReviewedBy: "human", TS: event.TS}
+			ValidatorType: "human", Passed: 1, EvidenceJSON: `{"forceValid":true}`, ReviewedBy: reviewer, TS: event.TS}
 		_, err = tx.NewInsert().Model(&validation).On("CONFLICT (id) DO NOTHING").Exec(ctx)
 	}
 	return err
@@ -236,6 +253,9 @@ func replayReviewProjection(ctx context.Context, tx bun.Tx, event Event, payload
 	validation := ValidationResult{ID: "wrt-v-" + event.ID, ArtifactID: event.RunID, ExecutionID: payload.NodeID,
 		ValidatorID: "human", ValidatorType: "human", Passed: passed, EvidenceJSON: string(evidence), ReviewedBy: "human", TS: event.TS}
 	if _, err := tx.NewInsert().Model(&validation).On("CONFLICT (id) DO NOTHING").Exec(ctx); err != nil {
+		return err
+	}
+	if err := updateRunProjection(ctx, tx, event.RunID, "running", event.TS); err != nil {
 		return err
 	}
 	if payload.Review.Approved || payload.Review.Feedback == nil {

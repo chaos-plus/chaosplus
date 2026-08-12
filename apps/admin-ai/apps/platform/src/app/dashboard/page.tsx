@@ -135,9 +135,10 @@ export default function DashboardPage() {
                 <button
                   key={`${p.runId}-${p.nodeId}`}
                   onClick={() => navigate(p.channelId ? `/sessions/${p.channelId}` : `/workflow/runs/${p.runId}`)}
-                  className="block w-full cursor-pointer truncate rounded px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="flex min-h-11 w-full cursor-pointer items-center rounded px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  title={`${p.title || p.runId} · ${p.nodeId}`}
                 >
-                  {p.title || p.runId} · {p.nodeId}
+                  <span className="truncate">{p.title || p.runId} · {p.nodeId}</span>
                 </button>
               ))}
               {(stats?.pendingApprovals.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">{t("none")}</span>}

@@ -33,7 +33,7 @@ func newHandlerTestServer(t *testing.T) (*httptest.Server, *RunManager) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("run manager: %v", err)
 	}
-	cs := NewChatService(st, nil, nil, m, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	srv := httptest.NewServer(NewHandler(m, nil, cs))
 	t.Cleanup(srv.Close)
 	return srv, m
@@ -270,7 +270,7 @@ func TestDashboardStatsDegradesWithoutHubOrStore(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("run manager: %v", err)
 	}
-	cs := NewChatService(nil, nil, nil, m, "runner-1", t.TempDir())
+	cs := NewChatService(nil, nil, nil, t.TempDir())
 	srv := httptest.NewServer(NewHandler(m, nil, cs))
 	defer srv.Close()
 
@@ -300,7 +300,7 @@ func TestMachinesListCarriesAgentCountAndRuntimes(t *testing.T) {
 		t.Fatalf("run manager: %v", err)
 	}
 	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
-	cs := NewChatService(st, nil, nil, rm, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	srv := httptest.NewServer(NewHandler(rm, hub, cs))
 	defer srv.Close()
 
@@ -347,7 +347,7 @@ func TestMachineDetailEndpoint(t *testing.T) {
 		t.Fatalf("run manager: %v", err)
 	}
 	hub := machine.NewHub(nc, machine.NewTokenStore(), st)
-	cs := NewChatService(st, nil, nil, rm, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	srv := httptest.NewServer(NewHandler(rm, hub, cs))
 	defer srv.Close()
 

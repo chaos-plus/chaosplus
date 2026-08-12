@@ -101,7 +101,7 @@ func newChatOverNats(t *testing.T, ok bool, reply string) (*httptest.Server, *st
 		t.Fatalf("register runner: %v", err)
 	}
 
-	cs := NewChatService(st, &workflow.NatsRunnerLink{G: g}, g, nil, "runner-1", t.TempDir())
+	cs := NewChatService(st, &workflow.NatsRunnerLink{G: g}, g, t.TempDir())
 	mux := http.NewServeMux()
 	cs.register(mux)
 	srv := httptest.NewServer(mux)

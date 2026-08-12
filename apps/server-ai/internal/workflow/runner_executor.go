@@ -34,6 +34,7 @@ type RunnerExecutor struct {
 	picker    MachinePicker // per-node machine selection (nil = always use runnerID)
 	idle      time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
 	max       time.Duration // per-spawn absolute cap; 0 = none
+	heartbeat time.Duration // runner liveness timeout; 0 = disabled
 	seq       int
 	attempts  map[string]int
 	mu        sync.Mutex
@@ -74,6 +75,11 @@ func (r *RunnerExecutor) WithSpawnTimeout(idle, max time.Duration) *RunnerExecut
 	return r
 }
 
+func (r *RunnerExecutor) WithHeartbeatTimeout(timeout time.Duration) *RunnerExecutor {
+	r.heartbeat = timeout
+	return r
+}
+
 func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	r.mu.Lock()
 	r.seq++
@@ -110,7 +116,7 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		SystemPrompt: node.Agent.SystemPrompt,
 		AllowedTools: append([]string(nil), node.Agent.AllowedTools...),
 		MaxTurns:     maxTurns(node.Agent),
-	}, r.idle, r.max)
+	}, r.idle, r.max, r.heartbeat)
 	if err != nil {
 		// On timeout, tell the runner to stop the stray session so it doesn't
 		// keep burning tokens/CPU after we've given up on it.

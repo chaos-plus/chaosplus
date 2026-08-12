@@ -7,8 +7,10 @@ import {
   CirclePlay,
   FileText,
   Hash,
+  LoaderCircle,
   Paperclip,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react"
 import { Badge } from "@workspace/ui/components/badge"
@@ -54,18 +56,22 @@ export default function WorkspacePage() {
 
   const [items, setItems] = useState<WorkItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [filterStatus, setFilterStatus] = useState("")
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [createFor, setCreateFor] = useState<{ open: boolean; parent: string }>({ open: false, parent: "" })
   const [form, setForm] = useState({ title: "", description: "", estimateHours: "" })
   const [detail, setDetail] = useState<WorkItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<WorkItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const list = await controlApi.workItems(type, filterStatus || undefined)
       setItems(list ?? [])
+      setLoadError(false)
     } catch {
-      setItems([])
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -107,13 +113,18 @@ export default function WorkspacePage() {
     }
   }
 
-  const remove = async (id: string) => {
+  const remove = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
     try {
-      await controlApi.deleteWorkItem(id)
-      if (detail?.id === id) setDetail(null)
-      void load()
+      await controlApi.deleteWorkItem(deleteTarget.id)
+      if (detail?.id === deleteTarget.id) setDetail(null)
+      setDeleteTarget(null)
+      await load()
     } catch (e) {
       reportError("删除", e)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -138,16 +149,12 @@ export default function WorkspacePage() {
     const isCollapsed = collapsed[it.id]
     return (
       <div key={it.id}>
-        <Card
-          className="group cursor-pointer p-3 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/40 focus-within:ring-2 focus-within:ring-ring"
-          style={{ marginLeft: depth * 20 }}
-          onClick={() => setDetail(it)}
-        >
+        <Card className="group p-3 transition-colors duration-200 hover:border-primary/40" style={{ marginLeft: depth * 20 }}>
           <div className="flex flex-wrap items-center gap-2">
             {kids.length > 0 ? (
               <button
                 aria-label={isCollapsed ? "展开子任务" : "收起子任务"}
-                className="cursor-pointer rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                className="grid size-11 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 onClick={(e) => {
                   e.stopPropagation()
                   setCollapsed((c) => ({ ...c, [it.id]: !c[it.id] }))
@@ -156,11 +163,17 @@ export default function WorkspacePage() {
                 {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
               </button>
             ) : (
-              <span className="inline-block size-5" />
+              <span className="inline-block size-11 shrink-0" />
             )}
 
             <Badge variant={it.type === "bug" ? "destructive" : "secondary"}>{TYPE_LABEL[it.type] ?? it.type}</Badge>
-            <span className="font-medium">{it.title}</span>
+            <button
+              type="button"
+              className="min-h-11 min-w-0 cursor-pointer rounded px-1 text-left font-medium hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={() => setDetail(it)}
+            >
+              {it.title}
+            </button>
             <StatusChip status={it.status} />
 
             {it.progress > 0 && (
@@ -181,7 +194,7 @@ export default function WorkspacePage() {
               <select
                 value={it.status}
                 onChange={(e) => setStatus(it.id, e.target.value)}
-                className="h-7 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                className="min-h-11 cursor-pointer rounded-md border border-input bg-transparent px-2 text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 aria-label={`${it.title} 状态`}
               >
                 {STATUS_OPTIONS.map((s) => (
@@ -193,7 +206,7 @@ export default function WorkspacePage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="cursor-pointer gap-1"
+                className="min-h-11 cursor-pointer gap-1"
                 disabled={it.status === "in_progress"}
                 onClick={() => execute(it.id)}
                 title="按工作流执行"
@@ -204,7 +217,7 @@ export default function WorkspacePage() {
               <Button
                 size="sm"
                 variant="ghost"
-                className="cursor-pointer gap-1"
+                className="min-h-11 cursor-pointer gap-1"
                 onClick={() => {
                   setCreateFor({ open: true, parent: it.id })
                   setForm({ title: "", description: "", estimateHours: "" })
@@ -217,9 +230,9 @@ export default function WorkspacePage() {
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 cursor-pointer text-muted-foreground hover:text-destructive"
+                className="size-11 cursor-pointer text-muted-foreground hover:text-destructive"
                 aria-label={`删除 ${it.title}`}
-                onClick={() => remove(it.id)}
+                onClick={() => setDeleteTarget(it)}
               >
                 <Trash2 className="size-3.5" />
               </Button>
@@ -269,9 +282,23 @@ export default function WorkspacePage() {
       </div>
 
       <div className="space-y-2">
-        {loading && <div className="h-16 animate-pulse rounded-xl border border-dashed" />}
-        {!loading && roots.map((it) => renderRow(it, 0))}
-        {!loading && roots.length === 0 && (
+        {loading && (
+          <div className="flex min-h-24 items-center justify-center gap-2 rounded-md border border-dashed text-sm text-muted-foreground" role="status">
+            <LoaderCircle className="size-4 animate-spin" />
+            加载工作项…
+          </div>
+        )}
+        {!loading && loadError && (
+          <div className="flex min-h-24 flex-col items-center justify-center gap-3 rounded-md border border-dashed text-sm text-muted-foreground" role="alert">
+            <span>工作项加载失败,请检查控制面连接。</span>
+            <Button variant="outline" className="min-h-11 gap-2" onClick={() => void load()}>
+              <RefreshCw className="size-4" />
+              重试
+            </Button>
+          </div>
+        )}
+        {!loading && !loadError && roots.map((it) => renderRow(it, 0))}
+        {!loading && !loadError && roots.length === 0 && (
           <div className="rounded-xl border border-dashed p-8 text-center">
             <FileText className="mx-auto size-6 text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">
@@ -350,6 +377,26 @@ export default function WorkspacePage() {
             </Button>
             <Button className="cursor-pointer" onClick={create} disabled={!form.title.trim()}>
               创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>删除工作项</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            将删除「{deleteTarget?.title}」。已有子任务不会自动删除,但会变为顶层工作项。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" className="min-h-11 gap-2" disabled={deleting} onClick={() => void remove()}>
+              {deleting && <LoaderCircle className="size-4 animate-spin" />}
+              删除
             </Button>
           </DialogFooter>
         </DialogContent>

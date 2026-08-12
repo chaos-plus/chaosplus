@@ -2,48 +2,66 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workspace"
 	"github.com/uptrace/bun"
 )
 
-// WorkItem is a workspace item (requirement / task / bug) — the system of record
-// that chat channels reference and subscribe to.
-type WorkItem struct {
+// WorkItem remains an alias for source compatibility. The aggregate is owned
+// by the workspace module; this package is only its SQLite adapter.
+type WorkItem = workspace.WorkItem
+
+type workItemRow struct {
 	bun.BaseModel `bun:"table:work_items"`
-	ID            string  `bun:"id,pk" json:"id"`
-	Type          string  `bun:"type,notnull,default:'task'" json:"type"`
-	Title         string  `bun:"title,notnull" json:"title"`
-	Description   string  `bun:"description,notnull,default:''" json:"description"`
-	Status        string  `bun:"status,notnull,default:'open'" json:"status"`
-	ParentID      string  `bun:"parent_id,notnull,default:''" json:"parentId"`
-	EstimateHours float64 `bun:"estimate_hours,notnull,default:0" json:"estimateHours"`
-	SpentHours    float64 `bun:"spent_hours,notnull,default:0" json:"spentHours"`
-	Progress      int     `bun:"progress,notnull,default:0" json:"progress"`
-	WorkflowRunID string  `bun:"workflow_run_id,notnull,default:''" json:"workflowRunId"`
-	AssigneeAgent string  `bun:"assignee_agent,notnull,default:''" json:"assigneeAgent"`
-	ChannelID     string  `bun:"channel_id,notnull,default:''" json:"channelId"`
-	EntityID      string  `bun:"entity_id,notnull,default:''" json:"entityId"`
-	CreatedAt     int64   `bun:"created_at,notnull,default:0" json:"createdAt"`
-	UpdatedAt     int64   `bun:"updated_at,notnull,default:0" json:"updatedAt"`
+	ID            string  `bun:"id,pk"`
+	Type          string  `bun:"type,notnull,default:'task'"`
+	Title         string  `bun:"title,notnull"`
+	Description   string  `bun:"description,notnull,default:''"`
+	Status        string  `bun:"status,notnull,default:'open'"`
+	ParentID      string  `bun:"parent_id,notnull,default:''"`
+	EstimateHours float64 `bun:"estimate_hours,notnull,default:0"`
+	SpentHours    float64 `bun:"spent_hours,notnull,default:0"`
+	Progress      int     `bun:"progress,notnull,default:0"`
+	WorkflowRunID string  `bun:"workflow_run_id,notnull,default:''"`
+	AssigneeAgent string  `bun:"assignee_agent,notnull,default:''"`
+	ChannelID     string  `bun:"channel_id,notnull,default:''"`
+	EntityID      string  `bun:"entity_id,notnull,default:''"`
+	CreatedAt     int64   `bun:"created_at,notnull,default:0"`
+	UpdatedAt     int64   `bun:"updated_at,notnull,default:0"`
 }
 
-func (s *Store) CreateWorkItem(ctx context.Context, w *WorkItem) error {
+func workItemToRow(w *workspace.WorkItem) *workItemRow {
+	return &workItemRow{ID: w.ID, Type: w.Type, Title: w.Title, Description: w.Description, Status: w.Status,
+		ParentID: w.ParentID, EstimateHours: w.EstimateHours, SpentHours: w.SpentHours, Progress: w.Progress,
+		WorkflowRunID: w.WorkflowRunID, AssigneeAgent: w.AssigneeAgent, ChannelID: w.ChannelID,
+		EntityID: w.EntityID, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+}
+
+func workItemFromRow(w workItemRow) workspace.WorkItem {
+	return workspace.WorkItem{ID: w.ID, Type: w.Type, Title: w.Title, Description: w.Description, Status: w.Status,
+		ParentID: w.ParentID, EstimateHours: w.EstimateHours, SpentHours: w.SpentHours, Progress: w.Progress,
+		WorkflowRunID: w.WorkflowRunID, AssigneeAgent: w.AssigneeAgent, ChannelID: w.ChannelID,
+		EntityID: w.EntityID, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+}
+
+func (s *Store) CreateWorkItem(ctx context.Context, w *workspace.WorkItem) error {
 	now := time.Now().UnixMilli()
 	w.CreatedAt, w.UpdatedAt = now, now
-	if _, err := s.db.NewInsert().Model(w).Exec(ctx); err != nil {
+	w.EntityID = EntityOf(ctx)
+	if _, err := s.db.NewInsert().Model(workItemToRow(w)).Exec(ctx); err != nil {
 		return fmt.Errorf("create work item: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) ListWorkItems(ctx context.Context, itemType, status, parent string) ([]WorkItem, error) {
-	out := []WorkItem{}
-	q := s.db.NewSelect().Model(&out)
-	if e := EntityOf(ctx); e != "" {
-		q = q.Where("entity_id = ?", e)
-	}
+func (s *Store) ListWorkItems(ctx context.Context, itemType, status, parent string) ([]workspace.WorkItem, error) {
+	rows := []workItemRow{}
+	q := s.db.NewSelect().Model(&rows)
+	q = scopeEntity(q, ctx)
 	if itemType != "" {
 		q = q.Where("type = ?", itemType)
 	}
@@ -56,40 +74,49 @@ func (s *Store) ListWorkItems(ctx context.Context, itemType, status, parent stri
 	if err := q.Order("updated_at DESC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list work items: %w", err)
 	}
+	out := make([]workspace.WorkItem, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, workItemFromRow(row))
+	}
 	return out, nil
 }
 
-func (s *Store) GetWorkItem(ctx context.Context, id string) (*WorkItem, error) {
-	var w WorkItem
-	if err := s.db.NewSelect().Model(&w).Where("id = ?", id).Scan(ctx); err != nil {
+func (s *Store) GetWorkItem(ctx context.Context, id string) (*workspace.WorkItem, error) {
+	var row workItemRow
+	q := scopeEntity(s.db.NewSelect().Model(&row).Where("id = ?", id), ctx)
+	if err := q.Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, workspace.ErrNotFound
+		}
 		return nil, fmt.Errorf("get work item: %w", err)
 	}
-	return &w, nil
+	item := workItemFromRow(row)
+	return &item, nil
 }
 
-func (s *Store) UpdateWorkItem(ctx context.Context, w *WorkItem) error {
+func (s *Store) UpdateWorkItem(ctx context.Context, w *workspace.WorkItem) error {
 	w.UpdatedAt = time.Now().UnixMilli()
-	if _, err := s.db.NewUpdate().Model(w).Where("id = ?", w.ID).
+	row := workItemToRow(w)
+	q := s.db.NewUpdate().Model(row).Where("id = ?", w.ID).
 		Set("type = ?", w.Type).Set("title = ?", w.Title).Set("description = ?", w.Description).
 		Set("status = ?", w.Status).Set("parent_id = ?", w.ParentID).
 		Set("estimate_hours = ?", w.EstimateHours).Set("spent_hours = ?", w.SpentHours).
 		Set("progress = ?", w.Progress).Set("workflow_run_id = ?", w.WorkflowRunID).
-		Set("assignee_agent = ?", w.AssigneeAgent).
-		Set("channel_id = ?", w.ChannelID).Set("entity_id = ?", w.EntityID).Set("updated_at = ?", w.UpdatedAt).
-		Exec(ctx); err != nil {
+		Set("assignee_agent = ?", w.AssigneeAgent).Set("channel_id = ?", w.ChannelID).
+		Set("updated_at = ?", w.UpdatedAt)
+	q = scopeEntity(q, ctx)
+	res, err := q.Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("update work item: %w", err)
 	}
-	return nil
+	return requireAffected(res, workspace.ErrNotFound)
 }
 
-// ReconcileStaleRunning 把重启前遗留的 in_progress 工作项收回到 review。
-// RunManager 是内存态:进程重启后那些 run 已不存在,工作项会永远卡在执行中
-// 且被 /execute 的 409 挡住,只能靠启动时对账解开。
 func (s *Store) ReconcileStaleRunning(ctx context.Context) (int64, error) {
-	res, err := s.db.NewUpdate().Model(&WorkItem{}).
-		Where("status = ?", "in_progress").
-		Set("status = ?", "review").Set("updated_at = ?", time.Now().UnixMilli()).
-		Exec(ctx)
+	q := s.db.NewUpdate().Model(&workItemRow{}).Where("status = ?", "in_progress").
+		Set("status = ?", "review").Set("updated_at = ?", time.Now().UnixMilli())
+	q = scopeEntity(q, ctx)
+	res, err := q.Exec(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("reconcile stale running: %w", err)
 	}
@@ -97,61 +124,75 @@ func (s *Store) ReconcileStaleRunning(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// CalibrateEstimate 回填估时:首次执行完成且人工未估时,用实际耗时作为校准值。
 func (s *Store) CalibrateEstimate(ctx context.Context, id string, spentHours float64) error {
-	if _, err := s.db.NewUpdate().Model(&WorkItem{}).
-		Where("id = ? AND estimate_hours <= 0", id).
-		Set("estimate_hours = ?", spentHours).
-		Exec(ctx); err != nil {
+	q := s.db.NewUpdate().Model(&workItemRow{}).Where("id = ? AND estimate_hours <= 0", id).
+		Set("estimate_hours = ?", spentHours)
+	q = scopeEntity(q, ctx)
+	_, err := q.Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("calibrate estimate: %w", err)
 	}
 	return nil
 }
 
-// RollupParent 把子任务的工时/进度汇总到父项(进度取子项均值,工时取合计)。
 func (s *Store) RollupParent(ctx context.Context, parentID string) error {
 	if parentID == "" {
 		return nil
 	}
 	kids, err := s.ListWorkItems(ctx, "", "", parentID)
-	if err != nil {
+	if err != nil || len(kids) == 0 {
 		return err
-	}
-	if len(kids) == 0 {
-		return nil
 	}
 	var estimate, spent float64
 	var progress int
-	for _, k := range kids {
-		estimate += k.EstimateHours
-		spent += k.SpentHours
-		progress += k.Progress
+	for _, kid := range kids {
+		estimate += kid.EstimateHours
+		spent += kid.SpentHours
+		progress += kid.Progress
 	}
-	progress /= len(kids)
-	if _, err := s.db.NewUpdate().Model(&WorkItem{}).Where("id = ?", parentID).
+	q := s.db.NewUpdate().Model(&workItemRow{}).Where("id = ?", parentID).
 		Set("estimate_hours = ?", estimate).Set("spent_hours = ?", spent).
-		Set("progress = ?", progress).Set("updated_at = ?", time.Now().UnixMilli()).
-		Exec(ctx); err != nil {
-		return fmt.Errorf("rollup parent: %w", err)
-	}
-	return nil
+		Set("progress = ?", progress/len(kids)).Set("updated_at = ?", time.Now().UnixMilli())
+	q = scopeEntity(q, ctx)
+	_, err = q.Exec(ctx)
+	return err
 }
 
-// UpdateWorkItemRun 只在 run 推进时更新 progress/status/spent_hours(投影,不覆盖人工字段)。
 func (s *Store) UpdateWorkItemRun(ctx context.Context, id string, progress int, status string, spentHours float64) error {
-	now := time.Now().UnixMilli()
-	if _, err := s.db.NewUpdate().Model(&WorkItem{}).Where("id = ?", id).
+	q := s.db.NewUpdate().Model(&workItemRow{}).Where("id = ?", id).
 		Set("progress = ?", progress).Set("status = ?", status).
-		Set("spent_hours = ?", spentHours).Set("updated_at = ?", now).
-		Exec(ctx); err != nil {
+		Set("spent_hours = ?", spentHours).Set("updated_at = ?", time.Now().UnixMilli())
+	q = scopeEntity(q, ctx)
+	res, err := q.Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("update work item run: %w", err)
 	}
-	return nil
+	return requireAffected(res, workspace.ErrNotFound)
 }
 
 func (s *Store) DeleteWorkItem(ctx context.Context, id string) error {
-	if _, err := s.db.NewDelete().Model(&WorkItem{}).Where("id = ?", id).Exec(ctx); err != nil {
+	q := scopeEntity(s.db.NewDelete().Model(&workItemRow{}).Where("id = ?", id), ctx)
+	res, err := q.Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("delete work item: %w", err)
+	}
+	return requireAffected(res, workspace.ErrNotFound)
+}
+
+func scopeEntity[T interface{ Where(string, ...any) T }](q T, ctx context.Context) T {
+	if entityID := EntityOf(ctx); entityID != "" {
+		return q.Where("entity_id = ?", entityID)
+	}
+	return q
+}
+
+func requireAffected(result sql.Result, notFound error) error {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return notFound
 	}
 	return nil
 }

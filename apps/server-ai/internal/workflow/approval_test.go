@@ -72,12 +72,49 @@ func TestApprovalBrokerWaitCancel(t *testing.T) {
 func TestApprovalBrokerOnDecision(t *testing.T) {
 	b := NewApprovalBroker()
 	var got string
-	b.OnDecision = func(nodeID string, d Decision) { got = nodeID + ":" + d.Reason }
+	b.OnDecision = func(nodeID string, d Decision) error {
+		got = nodeID + ":" + d.Reason
+		return nil
+	}
 	if err := b.Resolve("n1", false, "redo", &Feedback{Category: FeedbackFunctional, Detail: "redo"}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if got != "n1:redo" {
 		t.Errorf("OnDecision = %q, want %q", got, "n1:redo")
+	}
+}
+
+func TestApprovalBrokerPersistenceFailureDoesNotReleaseGate(t *testing.T) {
+	b := NewApprovalBroker()
+	done := make(chan Decision, 1)
+	go func() {
+		d, _ := b.Wait(context.Background(), "n1")
+		done <- d
+	}()
+	time.Sleep(10 * time.Millisecond)
+	b.OnDecision = func(string, Decision) error { return errors.New("fenced") }
+	if err := b.Resolve("n1", true, "", nil); err == nil {
+		t.Fatal("persistence failure must reject the decision")
+	}
+	if _, decided := b.Decision("n1"); decided {
+		t.Fatal("failed persistence must not leave a decided approval")
+	}
+	select {
+	case <-done:
+		t.Fatal("failed persistence released the approval gate")
+	default:
+	}
+	b.OnDecision = func(string, Decision) error { return nil }
+	if err := b.Resolve("n1", true, "", nil); err != nil {
+		t.Fatalf("retry resolve: %v", err)
+	}
+	select {
+	case decision := <-done:
+		if !decision.OK {
+			t.Fatal("retried approval was not delivered")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retried approval did not release the gate")
 	}
 }
 

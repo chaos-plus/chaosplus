@@ -28,6 +28,12 @@ var upgrader = websocket.Upgrader{
 // argv is world-readable via /proc). Empty = auth disabled (desktop/localhost).
 var AuthToken string
 
+// RESTRegistrar is implemented by bounded-context modules. The server package
+// owns cross-cutting middleware only; feature routes register themselves.
+type RESTRegistrar interface {
+	RegisterREST(*http.ServeMux)
+}
+
 // authMiddleware wraps h with Bearer token validation. Skipped when AuthToken
 // is empty (desktop profile). Machine WebSocket onboarding routes are exempt —
 // they validate their own machine tokens.
@@ -85,7 +91,7 @@ func isWSPath(p string) bool {
 }
 
 // NewHandler wires all server-ai HTTP routes.
-func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler {
+func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService, modules ...RESTRegistrar) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -107,6 +113,11 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 	})
 	if chat != nil {
 		chat.register(mux)
+	}
+	for _, module := range modules {
+		if module != nil {
+			module.RegisterREST(mux)
+		}
 	}
 
 	// machines — runner onboarding (PRD §5.3.1).
@@ -271,14 +282,6 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		// 长期 token:手动轮换后长期有效,无过期时间。
 		writeJSON(w, 200, map[string]any{"token": token, "longTerm": true})
 	})
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(uiHTML))
-	})
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		var req LaunchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -323,23 +326,28 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, http.StatusNotFound, "artifact not found or orphaned")
 			return
 		}
-		if err := m.st.ForceValidateArtifact(r.Context(), artifact.ID, reviewer); err != nil {
-			writeErr(w, http.StatusNotFound, "artifact not found")
+		artifact.Status, artifact.ForceValid = store.ArtifactValid, true
+		payload, err := json.Marshal(map[string]any{"artifact": artifact, "reviewer": reviewer})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to encode force-valid audit event")
 			return
 		}
-		artifact.Status, artifact.ForceValid = store.ArtifactValid, true
-		payload, _ := json.Marshal(artifact)
-		if err := m.st.Append(r.Context(), store.Event{
+		committed, err := m.st.CommitArtifactEventIfChecksum(r.Context(), store.Event{
 			ID: "force-" + randHex(8), InstanceID: artifact.InstanceID, RunID: artifact.ProducerRunID,
 			Type: "ARTIFACT_FORCE_VALIDATED", IdempotencyKey: "force:" + artifact.ID + ":" + randHex(8), PayloadJSON: string(payload),
-		}); err != nil {
+		}, artifact.Checksum)
+		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "failed to persist force-valid audit event")
+			return
+		}
+		if !committed {
+			writeErr(w, http.StatusConflict, "artifact changed while it was being reviewed")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/artifacts/reconcile", func(w http.ResponseWriter, r *http.Request) {
-		report, err := m.ReconcileArtifacts(r.Context())
+		report, err := m.ReconcileArtifacts(r.Context(), store.EntityOf(r.Context()))
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "artifact reconciliation failed")
 			return

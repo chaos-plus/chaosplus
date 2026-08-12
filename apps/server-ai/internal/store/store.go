@@ -7,6 +7,8 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
@@ -31,7 +33,7 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Open opens a SQLite datasource, runs migrations, returns the Store.
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	ds := bunx.Datasource{Type: "sqlite", Dsn: dsn, Writable: true}
+	ds := bunx.Datasource{Type: "sqlite", Dsn: immediateTransactionDSN(dsn), Writable: true}
 	db := ds.NewDB()
 	if db == nil {
 		return nil, fmt.Errorf("bunx: failed to open sqlite %q", dsn)
@@ -43,6 +45,22 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	slog.Info("server-ai store ready", "dsn", dsn)
 	return &Store{db: db}, nil
+}
+
+// SQLite's default deferred transactions can fail while upgrading from a read
+// to a write transaction, even with busy_timeout configured. Event commits
+// read the fencing lease before writing, so acquire the writer reservation at
+// BEGIN and let concurrent writers wait there instead of failing mid-commit.
+func immediateTransactionDSN(dsn string) string {
+	queryStart := strings.IndexByte(dsn, '?')
+	if queryStart >= 0 {
+		query, err := url.ParseQuery(dsn[queryStart+1:])
+		if err == nil && query.Has("_txlock") {
+			return dsn
+		}
+		return dsn + "&_txlock=immediate"
+	}
+	return dsn + "?_txlock=immediate"
 }
 
 // Event is one append-only row in the event log (PRD §16 events table).

@@ -75,6 +75,13 @@ type Gateway struct {
 	onEvent  func(RunnerEvent) // optional sink (e.g. event-log persistence)
 	mu       sync.Mutex
 	onRunner map[string]struct{} // runners seen via register
+	lastSeen map[string]time.Time
+	waiters  map[string]*spawnWaiter // (runnerID,spawnID) -> exclusive delivery
+}
+
+type spawnWaiter struct {
+	terminal chan RunnerEvent
+	activity chan RunnerEvent
 }
 
 // OnEvent registers a sink invoked for every runner event (in addition to
@@ -88,6 +95,8 @@ func New(nc *nats.Conn) *Gateway {
 		nc:       nc,
 		events:   make(chan RunnerEvent, 256),
 		onRunner: make(map[string]struct{}),
+		lastSeen: make(map[string]time.Time),
+		waiters:  make(map[string]*spawnWaiter),
 	}
 }
 
@@ -104,6 +113,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 		g.mu.Lock()
 		g.onRunner[req.RunnerID] = struct{}{}
+		g.lastSeen[req.RunnerID] = time.Now()
 		g.mu.Unlock()
 		_ = m.Respond([]byte(`{"ok":true}`))
 	})
@@ -123,6 +133,36 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 		ev.RunnerID = runnerID
 		ev.Payload = m.Data
+		var envelope struct {
+			SpawnID string `json:"spawnId"`
+		}
+		_ = json.Unmarshal(m.Data, &envelope)
+		g.mu.Lock()
+		g.lastSeen[runnerID] = time.Now()
+		waiter := g.waiters[waiterKey(runnerID, envelope.SpawnID)]
+		g.mu.Unlock()
+		if waiter != nil {
+			switch ev.Type {
+			case "spawn-done", "spawn-error":
+				select {
+				case waiter.terminal <- ev:
+				default:
+				}
+			default:
+				select {
+				case waiter.activity <- ev:
+				default:
+					select {
+					case <-waiter.activity:
+					default:
+					}
+					select {
+					case waiter.activity <- ev:
+					default:
+					}
+				}
+			}
+		}
 		if g.onEvent != nil {
 			g.onEvent(ev)
 		}
@@ -162,7 +202,11 @@ func (g *Gateway) Spawn(ctx context.Context, runnerID string, sp Spawn) error {
 	if err != nil {
 		return err
 	}
-	return g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	if err := g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd); err != nil {
+		return err
+	}
+	g.touchRunner(runnerID)
+	return nil
 }
 
 // SpawnResult is the outcome of a completed spawn.
@@ -180,8 +224,9 @@ type SpawnResult struct {
 type SpawnWaitOption func(*spawnWaitConfig)
 
 type spawnWaitConfig struct {
-	idle time.Duration // no matching event for this long → timeout
-	max  time.Duration // absolute cap regardless of activity
+	idle      time.Duration // no matching spawn event for this long → timeout
+	max       time.Duration // absolute cap regardless of activity
+	heartbeat time.Duration // no runner activity for this long → runner lost
 }
 
 // WithIdleTimeout fails the wait after `d` with no matching spawn event.
@@ -193,6 +238,15 @@ func WithIdleTimeout(d time.Duration) SpawnWaitOption {
 func WithMaxTimeout(d time.Duration) SpawnWaitOption {
 	return func(c *spawnWaitConfig) { c.max = d }
 }
+
+// WithHeartbeatTimeout fails an in-flight spawn when the selected runner has
+// produced no register, heartbeat, or spawn activity for d. This closes the
+// Phantom Running gap independently of the (usually longer) agent idle timeout.
+func WithHeartbeatTimeout(d time.Duration) SpawnWaitOption {
+	return func(c *spawnWaitConfig) { c.heartbeat = d }
+}
+
+var ErrRunnerHeartbeatLost = errors.New("runner heartbeat lost")
 
 // SpawnAndWait sends a spawn command and blocks until the matching
 // spawn-done / spawn-error event arrives for that spawnId. Events are consumed
@@ -209,6 +263,11 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 	for _, o := range opts {
 		o(cfg)
 	}
+	waiter, unregister, err := g.registerWaiter(runnerID, sp.SpawnID)
+	if err != nil {
+		return SpawnResult{}, err
+	}
+	defer unregister()
 	if err := g.Spawn(ctx, runnerID, sp); err != nil {
 		return SpawnResult{}, err
 	}
@@ -219,6 +278,11 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 		maxCtx, cancelMax = context.WithTimeout(ctx, cfg.max)
 	}
 	defer cancelMax()
+	g.mu.Lock()
+	if _, ok := g.lastSeen[runnerID]; !ok {
+		g.lastSeen[runnerID] = time.Now()
+	}
+	g.mu.Unlock()
 
 	var idle *time.Timer
 	idleC := make(chan time.Time, 1)
@@ -230,13 +294,21 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 			idle.Reset(cfg.idle)
 		}
 	}
+	var heartbeat *time.Ticker
+	var heartbeatC <-chan time.Time
+	if cfg.heartbeat > 0 {
+		interval := cfg.heartbeat / 3
+		if interval < 50*time.Millisecond {
+			interval = 50 * time.Millisecond
+		}
+		heartbeat = time.NewTicker(interval)
+		heartbeatC = heartbeat.C
+		defer heartbeat.Stop()
+	}
 
 	for {
 		select {
-		case ev := <-g.events:
-			if ev.RunnerID != runnerID {
-				continue
-			}
+		case ev := <-waiter.terminal:
 			var p struct {
 				SpawnID  string `json:"spawnId"`
 				OK       *bool  `json:"ok"`
@@ -253,8 +325,6 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 			if p.SpawnID != sp.SpawnID {
 				continue
 			}
-			// Any matching event = live activity → reset idle timer.
-			resetIdle()
 			switch ev.Type {
 			case "spawn-done":
 				ok := p.OK == nil || *p.OK
@@ -262,12 +332,51 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 			case "spawn-error":
 				return SpawnResult{OK: false, Error: p.Message}, nil
 			}
+		case <-waiter.activity:
+			resetIdle()
 		case <-idleC:
 			return SpawnResult{}, fmt.Errorf("spawn %s idle timeout after %s", sp.SpawnID, cfg.idle)
+		case <-heartbeatC:
+			g.mu.Lock()
+			lastSeen := g.lastSeen[runnerID]
+			g.mu.Unlock()
+			if time.Since(lastSeen) >= cfg.heartbeat {
+				return SpawnResult{}, fmt.Errorf("%w: runner %s silent for %s", ErrRunnerHeartbeatLost, runnerID, cfg.heartbeat)
+			}
 		case <-maxCtx.Done():
 			return SpawnResult{}, maxCtx.Err()
 		}
 	}
+}
+
+func waiterKey(runnerID, spawnID string) string { return runnerID + "\x00" + spawnID }
+
+func (g *Gateway) registerWaiter(runnerID, spawnID string) (*spawnWaiter, func(), error) {
+	if runnerID == "" || spawnID == "" {
+		return nil, nil, fmt.Errorf("runnerID and spawnID are required")
+	}
+	key := waiterKey(runnerID, spawnID)
+	waiter := &spawnWaiter{terminal: make(chan RunnerEvent, 1), activity: make(chan RunnerEvent, 1)}
+	g.mu.Lock()
+	if _, exists := g.waiters[key]; exists {
+		g.mu.Unlock()
+		return nil, nil, fmt.Errorf("spawn %s already has a waiter", spawnID)
+	}
+	g.waiters[key] = waiter
+	g.mu.Unlock()
+	return waiter, func() {
+		g.mu.Lock()
+		if g.waiters[key] == waiter {
+			delete(g.waiters, key)
+		}
+		g.mu.Unlock()
+	}, nil
+}
+
+func (g *Gateway) touchRunner(runnerID string) {
+	g.mu.Lock()
+	g.lastSeen[runnerID] = time.Now()
+	g.mu.Unlock()
 }
 
 // Kill sends a kill command for a running spawn.

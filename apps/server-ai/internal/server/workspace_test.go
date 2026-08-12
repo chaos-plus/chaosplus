@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	workspace "github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workspace"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
@@ -38,9 +39,10 @@ func newWorkspaceTestServerWithManager(t *testing.T) (*httptest.Server, *store.S
 		t.Fatalf("run manager: %v", err)
 	}
 
-	cs := NewChatService(st, nil, nil, rm, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	mux := http.NewServeMux()
 	cs.register(mux)
+	NewWorkspaceModule(st, rm, cs, "runner-1", t.TempDir()).RegisterREST(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, st, rm
@@ -504,7 +506,7 @@ func TestUploadRejectsOversizeBody(t *testing.T) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, _ := mw.CreateFormFile("file", "big.bin")
-	_, _ = fw.Write(bytes.Repeat([]byte("A"), maxUploadBytes+1024))
+	_, _ = fw.Write(bytes.Repeat([]byte("A"), (20<<20)+1024))
 	_ = mw.Close()
 
 	res, err := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", mw.FormDataContentType(), &buf)
@@ -552,7 +554,7 @@ func TestSafeMimeClassification(t *testing.T) {
 		{"noext", "application/octet-stream", false},
 	}
 	for _, c := range cases {
-		mime, inline := safeMime(c.file)
+		mime, inline := workspace.SafeMime(c.file)
 		if mime != c.mime || inline != c.inline {
 			t.Errorf("safeMime(%q) = (%q,%v), want (%q,%v)", c.file, mime, inline, c.mime, c.inline)
 		}

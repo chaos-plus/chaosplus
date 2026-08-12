@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
 
@@ -50,7 +52,7 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 		restored := make([]workflow.Event, 0, len(events))
 		for _, evt := range events {
 			var re RunEvent
-			if json.Unmarshal([]byte(evt.PayloadJSON), &re) == nil {
+			if json.Unmarshal([]byte(evt.PayloadJSON), &re) == nil && re.RunID == rd.ID && re.Seq > 0 {
 				if re.Seq > maxSeq {
 					maxSeq = re.Seq
 				}
@@ -68,15 +70,104 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 			}
 		}
 		run.seq = maxSeq
-		m.mu.Lock()
-		m.runs[rd.ID] = run
-		m.mu.Unlock()
-		slog.Info("rehydrated run", "run", rd.ID, "status", rd.Status, "events", len(run.events))
-		if rd.Status == string(RunPaused) {
+		if err := m.acquireLease(ctx, run); err != nil {
+			if errors.Is(err, store.ErrLeaseHeld) {
+				slog.Info("active run is owned by another control-plane instance", "run", rd.ID)
+				go m.waitForStoredLease(ctx, run, rd.Status, restored)
+				continue
+			}
+			slog.Warn("skip active run without lease", "run", rd.ID, "err", err)
 			continue
 		}
-		go m.resumeStoredRun(ctx, run, run.req, restored)
+		m.activateStoredRun(ctx, run, rd.Status, restored)
 	}
+}
+
+func (m *RunManager) waitForStoredLease(ctx context.Context, run *Run, status string, restored []workflow.Event) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := m.acquireLease(ctx, run); err != nil {
+				if !errors.Is(err, store.ErrLeaseHeld) {
+					slog.Warn("retry active run lease", "run", run.ID, "err", err)
+				}
+				continue
+			}
+			freshStatus, freshRestored, terminal, err := m.refreshStoredRun(ctx, run)
+			if err != nil {
+				slog.Warn("refresh run after lease takeover", "run", run.ID, "err", err)
+				m.releaseLease(run)
+				continue
+			}
+			if terminal {
+				m.releaseLease(run)
+				return
+			}
+			m.activateStoredRun(ctx, run, freshStatus, freshRestored)
+			return
+		}
+	}
+}
+
+func (m *RunManager) refreshStoredRun(ctx context.Context, run *Run) (string, []workflow.Event, bool, error) {
+	rd, err := m.st.GetRunDef(ctx, run.ID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	switch RunStatus(rd.Status) {
+	case RunCompleted, RunFailed, RunCancelled:
+		return rd.Status, nil, true, nil
+	}
+	events, err := m.st.ListEvents(ctx, rd.ID, 0, 100000)
+	if err != nil {
+		return "", nil, false, err
+	}
+	run.mu.Lock()
+	run.events = run.events[:0]
+	run.seq = 0
+	restored := make([]workflow.Event, 0, len(events))
+	for _, evt := range events {
+		var re RunEvent
+		if json.Unmarshal([]byte(evt.PayloadJSON), &re) != nil || re.RunID != rd.ID || re.Seq <= 0 {
+			continue
+		}
+		if re.Seq > run.seq {
+			run.seq = re.Seq
+		}
+		run.events = append(run.events, re)
+		if re.NodeID != "" {
+			output := re.Output
+			if re.Review != nil {
+				output, _ = json.Marshal(map[string]bool{"approved": re.Review.Approved})
+			}
+			restored = append(restored, workflow.Event{NodeID: re.NodeID, Status: re.Status,
+				Output: output, Error: re.Error, Attempt: re.Attempt, Artifacts: re.Artifacts})
+		}
+	}
+	run.status = RunStatus(rd.Status)
+	run.mu.Unlock()
+	return rd.Status, restored, false, nil
+}
+
+func (m *RunManager) activateStoredRun(ctx context.Context, run *Run, status string, restored []workflow.Event) {
+	m.mu.Lock()
+	if _, exists := m.runs[run.ID]; exists {
+		m.mu.Unlock()
+		m.releaseLease(run)
+		return
+	}
+	m.runs[run.ID] = run
+	m.mu.Unlock()
+	slog.Info("rehydrated run", "run", run.ID, "status", status, "events", len(run.events))
+	if status == string(RunPaused) {
+		m.releaseLease(run)
+		return
+	}
+	go m.resumeStoredRun(ctx, run, run.req, restored)
 }
 
 func (m *RunManager) resumeStoredRun(ctx context.Context, run *Run, req LaunchRequest, restored []workflow.Event) {
@@ -88,7 +179,10 @@ func (m *RunManager) resumeStoredRun(ctx context.Context, run *Run, req LaunchRe
 		if err.Error() != "no runner registered; set runnerId or start a daemon" {
 			slog.Error("resume stored run", "run", run.ID, "err", err)
 			run.setStatus(RunFailed)
-			_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunFailed))
+			if emitErr := m.emit(run, RunEvent{RunStatus: RunFailed}); emitErr != nil {
+				slog.Error("persist failed resumed run", "run", run.ID, "err", emitErr)
+			}
+			m.releaseLease(run)
 			return
 		}
 		select {

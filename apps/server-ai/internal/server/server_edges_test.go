@@ -76,9 +76,9 @@ func TestNewHandlerServesRunsAndChatRoutes(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("run manager: %v", err)
 	}
-	cs := NewChatService(st, nil, nil, m, "runner-1", t.TempDir())
-
-	srv := httptest.NewServer(NewHandler(m, nil, cs))
+	cs := NewChatService(st, nil, nil, t.TempDir())
+	workspaceModule := NewWorkspaceModule(st, m, cs, "runner-1", t.TempDir())
+	srv := httptest.NewServer(NewHandler(m, nil, cs, workspaceModule))
 	defer srv.Close()
 
 	for _, path := range []string{"/api/runs", "/api/agents", "/api/channels", "/api/work-items", "/api/okrs"} {
@@ -201,9 +201,10 @@ func TestExecuteWorkItemPausedRunLandsInReview(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("run manager: %v", err)
 	}
-	cs := NewChatService(st, nil, nil, m, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	mux := http.NewServeMux()
 	cs.register(mux)
+	NewWorkspaceModule(st, m, cs, "runner-1", t.TempDir()).RegisterREST(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -242,9 +243,10 @@ func TestTrackRunProgressProjectsWhileRunning(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("run manager: %v", err)
 	}
-	cs := NewChatService(st, nil, nil, m, "runner-1", t.TempDir())
+	cs := NewChatService(st, nil, nil, t.TempDir())
 	mux := http.NewServeMux()
 	cs.register(mux)
+	NewWorkspaceModule(st, m, cs, "runner-1", t.TempDir()).RegisterREST(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
