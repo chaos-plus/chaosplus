@@ -49,6 +49,7 @@ type RunEvent struct {
 	Error     string             `json:"error,omitempty"`
 	Attempt   int                `json:"attempt,omitempty"`
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
+	Notify    bool               `json:"notify,omitempty"` // §13 escalation tier reached
 	Consumes  []string           `json:"consumes,omitempty"`
 	Review    *ReviewInfo        `json:"review,omitempty"`
 	EventType string             `json:"eventType,omitempty"`
@@ -593,7 +594,7 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 			if err := m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
 				Status: ev.Status, Output: ev.Output, Error: ev.Error,
-				Attempt: ev.Attempt, Artifacts: ev.Artifacts, Consumes: consumes, Preview: ev.Preview,
+				Attempt: ev.Attempt, Artifacts: ev.Artifacts, Notify: ev.Notify, Consumes: consumes, Preview: ev.Preview,
 			}); err != nil {
 				m.stopOnPersistenceError(run, err)
 				return

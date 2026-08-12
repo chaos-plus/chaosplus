@@ -36,6 +36,7 @@ type Event struct {
 	Error     string             `json:"error,omitempty"`
 	Attempt   int                `json:"attempt,omitempty"`
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
+	Notify    bool               `json:"notify,omitempty"` // §13 escalation: retries crossed notifyThreshold
 	Preview   *struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
@@ -60,6 +61,7 @@ type nodeState struct {
 	// prevProduces is the previous attempt's produces (path -> sha256), used by
 	// the F.10 similarity check to pause "原地打转" retries.
 	prevProduces map[string]string
+	notified     bool // §13: this node already crossed retry.notifyThreshold
 }
 
 // Engine is a static-DAG scheduler (PRD §7.3). It is executor-agnostic: agent
@@ -450,7 +452,7 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 	if attempt < 0 {
 		attempt = 0
 	}
-	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: attempt}
+	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: attempt, Notify: st.notified}
 	if status == StatusCompleted && len(output) > 0 {
 		ev.Output = output
 		ev.Artifacts = append([]ProducedArtifact(nil), st.artifacts...)
@@ -530,6 +532,11 @@ func (e *Engine) scheduleRetry(ctx context.Context, st *nodeState, err error) bo
 	// more retries. attempt=1 has no baseline (similarityRatio returns 1).
 	if st.attempts > 1 && similarityRatio(producesMap(st.artifacts), st.prevProduces) < 0.08 {
 		return false // caller marks the node paused_for_human
+	}
+	// §13 escalation: once retries cross notifyThreshold, flag the retry event so
+	// subscribers (IM/UI) can notify the human without blocking execution.
+	if !st.notified && spec.NotifyThreshold > 0 && st.attempts >= spec.NotifyThreshold {
+		st.notified = true
 	}
 	e.mark(st.node.ID, StatusRetrying, nil, err.Error())
 	if i := st.attempts - 1; i < len(spec.BackoffSeconds) && spec.BackoffSeconds[i] > 0 {
