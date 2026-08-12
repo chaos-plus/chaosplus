@@ -541,16 +541,18 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 			runnerID = reg[0]
 		}
 		// Never dispatch onto a machine another tenant owns (PRD P10): a caller
-		// may supply runnerId explicitly, but only the run's own tenant/entity
-		// daemons are valid targets.
+		// may supply runnerId explicitly, but only the run's own tenant's
+		// daemons are valid targets. Entity is deliberately not compared — a
+		// tenant may register a runner under one entity and run under another.
 		if m.runnerScope != nil {
-			if tenantID, entityID, ok := m.runnerScope(runnerID); ok && (tenantID != run.TenantID || entityID != run.EntityID) {
+			if tenantID, _, ok := m.runnerScope(runnerID); ok && tenantID != run.TenantID {
 				cancel()
-				return fmt.Errorf("runner %s is not owned by this run's tenant/entity", runnerID)
+				return fmt.Errorf("runner %s is not owned by this run's tenant", runnerID)
 			}
 		}
 		base = NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID.String()).
 			WithMachinePicker(m.picker).
+			WithRunnerScope(run.TenantID, m.runnerScope).
 			WithAttemptOffsets(attemptOffsets(run.Events())).
 			WithHeartbeatTimeout(m.heartbeatTimeout)
 	}

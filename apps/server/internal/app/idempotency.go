@@ -114,9 +114,12 @@ func (app *App) useIdempotency(router chi.Router) {
 			rec := &recordingResponse{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 			if rec.status >= 200 && rec.status < 300 {
+				// Capture the underlying writer's header (the handler wrote into
+				// it, not into the recorder) so replay restores Content-Type,
+				// Location, Set-Cookie, CORS, etc. — not just status + body.
 				store.store(key, idempotencyEntry{
 					status:  rec.status,
-					header:  rec.header,
+					header:  rec.ResponseWriter.Header().Clone(),
 					body:    append([]byte(nil), rec.body.Bytes()...),
 					expires: time.Now().Add(idempotencyTTL),
 				})

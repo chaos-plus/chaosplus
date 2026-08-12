@@ -38,6 +38,9 @@ func TestIdempotencyReplaysFirstResponse(t *testing.T) {
 	if second.Code != first.Code || second.Body.String() != first.Body.String() {
 		t.Fatalf("replay diverged: got %d %q, want %d %q", second.Code, second.Body.String(), first.Code, first.Body.String())
 	}
+	if second.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("replay lost Content-Type header: got %q", second.Header().Get("Content-Type"))
+	}
 }
 
 // TestIdempotencySkipsReads verifies idempotency does not cache reads.

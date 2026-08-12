@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnergateway"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 // RunnerExecutor dispatches agent nodes to a real machine runner over NATS
@@ -32,12 +33,16 @@ type RunnerExecutor struct {
 	workspace string // cwd every agent spawns in (workspace root, PRD artifact paths resolve here)
 	runID     string
 	picker    MachinePicker // per-node machine selection (nil = always use runnerID)
-	idle      time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
-	max       time.Duration // per-spawn absolute cap; 0 = none
-	heartbeat time.Duration // runner liveness timeout; 0 = disabled
-	seq       int
-	attempts  map[string]int
-	mu        sync.Mutex
+	// runTenantID + runnerScope let a per-node pick reject machines another
+	// tenant owns (PRD P10): a pick may target any runner of the run's tenant.
+	runTenantID guid.ID
+	runnerScope func(runnerID string) (tenantID, entityID guid.ID, ok bool)
+	idle        time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
+	max         time.Duration // per-spawn absolute cap; 0 = none
+	heartbeat   time.Duration // runner liveness timeout; 0 = disabled
+	seq         int
+	attempts    map[string]int
+	mu          sync.Mutex
 }
 
 // NewRunnerExecutor wires an Executor to one runner link + workspace for a run.
@@ -50,6 +55,14 @@ func NewRunnerExecutor(link RunnerLink, runnerID, workspace, runID string) *Runn
 // using the default runnerID. This enables multi-machine workflow runs.
 func (r *RunnerExecutor) WithMachinePicker(p MachinePicker) *RunnerExecutor {
 	r.picker = p
+	return r
+}
+
+// WithRunnerScope binds the run's tenant and a runner-tenant resolver so a
+// per-node pick cannot dispatch onto a machine another tenant owns (PRD P10).
+func (r *RunnerExecutor) WithRunnerScope(tenantID guid.ID, scope func(runnerID string) (tenantID, entityID guid.ID, ok bool)) *RunnerExecutor {
+	r.runTenantID = tenantID
+	r.runnerScope = scope
 	return r
 }
 
@@ -93,6 +106,9 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	}
 
 	// Per-node machine selection: pick the best machine for this executor type.
+	// A pick must target a runner owned by the run's tenant (PRD P10); otherwise
+	// fall back to the default runner (which the top-level launch guard already
+	// scoped) rather than dispatching onto another tenant's machine.
 	runnerID := r.runnerID
 	if r.picker != nil {
 		execType := "mock"
@@ -100,7 +116,13 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 			execType = node.Agent.Executor
 		}
 		if picked := r.picker(execType); picked != "" {
-			runnerID = picked
+			if r.runnerScope != nil {
+				if tenantID, _, ok := r.runnerScope(picked); ok && tenantID == r.runTenantID {
+					runnerID = picked
+				}
+			} else {
+				runnerID = picked
+			}
 		}
 	}
 

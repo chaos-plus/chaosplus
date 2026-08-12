@@ -435,6 +435,10 @@ func producesFingerprint(m map[string]string) string {
 // oscillating A→B→A→B (§13, window 4).
 func (e *Engine) recordAttemptProduces(st *nodeState, artifacts []ProducedArtifact) {
 	if len(artifacts) == 0 {
+		// No produces this attempt: never let a previous attempt's artifacts
+		// leak into this attempt's completed event, and do not clobber the
+		// similarity baseline (an empty attempt is not a comparison point).
+		st.artifacts = nil
 		return
 	}
 	if len(st.artifacts) > 0 {
