@@ -57,6 +57,9 @@ type nodeState struct {
 	retryAt   int64 // unix ms when this node's retry backoff elapses; 0 = none
 	err       string
 	artifacts []ProducedArtifact
+	// prevProduces is the previous attempt's produces (path -> sha256), used by
+	// the F.10 similarity check to pause "原地打转" retries.
+	prevProduces map[string]string
 }
 
 // Engine is a static-DAG scheduler (PRD §7.3). It is executor-agnostic: agent
@@ -386,6 +389,52 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 	return nil
 }
 
+// producesMap indexes artifacts by path so consecutive attempts can be compared
+// by checksum (PRD F.10 similarity detection).
+func producesMap(artifacts []ProducedArtifact) map[string]string {
+	m := make(map[string]string, len(artifacts))
+	for _, a := range artifacts {
+		m[a.Path] = a.Checksum
+	}
+	return m
+}
+
+// recordAttemptProduces keeps the previous attempt's produces as the baseline
+// and installs the current attempt's produces, so scheduleRetry can detect a
+// node that keeps producing the same output across attempts ("原地打转").
+func (e *Engine) recordAttemptProduces(st *nodeState, artifacts []ProducedArtifact) {
+	if len(artifacts) == 0 {
+		return
+	}
+	if len(st.artifacts) > 0 {
+		st.prevProduces = producesMap(st.artifacts)
+	}
+	st.artifacts = artifacts
+}
+
+// similarityRatio returns the fraction of produces files whose checksum differs
+// between consecutive attempts (PRD F.10): changed / union. Empty union -> 1
+// (no baseline to compare), so callers only treat a low ratio as "原地打转".
+func similarityRatio(current, previous map[string]string) float64 {
+	if len(current) == 0 || len(previous) == 0 {
+		return 1
+	}
+	union := make(map[string]struct{}, len(current)+len(previous))
+	for p := range current {
+		union[p] = struct{}{}
+	}
+	for p := range previous {
+		union[p] = struct{}{}
+	}
+	changed := 0
+	for p := range union {
+		if current[p] != previous[p] {
+			changed++
+		}
+	}
+	return float64(changed) / float64(len(union))
+}
+
 // mark updates a node's status and appends a lifecycle event.
 func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr string) {
 	st := e.states[id]
@@ -475,6 +524,12 @@ func (e *Engine) scheduleRetry(ctx context.Context, st *nodeState, err error) bo
 	st.attempts++
 	if st.attempts >= spec.MaxAttempts {
 		return false // exhausted; caller emits the terminal failure
+	}
+	// PRD F.10: if this attempt produced almost the same files as the previous
+	// one, the agent is going in circles — pause for a human instead of burning
+	// more retries. attempt=1 has no baseline (similarityRatio returns 1).
+	if st.attempts > 1 && similarityRatio(producesMap(st.artifacts), st.prevProduces) < 0.08 {
+		return false // caller marks the node paused_for_human
 	}
 	e.mark(st.node.ID, StatusRetrying, nil, err.Error())
 	if i := st.attempts - 1; i < len(spec.BackoffSeconds) && spec.BackoffSeconds[i] > 0 {

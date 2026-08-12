@@ -55,10 +55,10 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 	if err != nil {
 		// Keep the partial produces the runner found even on a failed attempt and
 		// merge them into the run scope so the next attempt's input sees them as
-		// context — the F.10 similarity precursor. Failed events intentionally
+		// context — the F.10 similarity baseline. Failed events intentionally
 		// omit artifacts.
 		if len(result.Artifacts) > 0 {
-			st.artifacts = result.Artifacts
+			e.recordAttemptProduces(st, result.Artifacts)
 			for _, artifact := range result.Artifacts {
 				e.scope[artifact.ID] = map[string]any{
 					"path": artifact.Path, "type": artifact.Type,
@@ -70,7 +70,7 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 		return err
 	}
 	st.output = result.Output
-	st.artifacts = result.Artifacts
+	e.recordAttemptProduces(st, result.Artifacts)
 	for _, artifact := range result.Artifacts {
 		e.scope[artifact.ID] = map[string]any{
 			"path": artifact.Path, "type": artifact.Type,
