@@ -40,6 +40,7 @@ type Agent struct {
 	SystemPrompt string  `bun:"system_prompt,notnull" json:"systemPrompt"`
 	Description  string  `bun:"description,notnull" json:"description"`
 	Status       Status  `bun:"status,notnull" json:"status"`
+	SpecJSON     string  `bun:"spec_json,notnull" json:"specJson"`
 	HandoverDoc  string  `bun:"handover_doc,notnull" json:"handoverDoc"`
 	RetiredAt    int64   `bun:"retired_at,notnull" json:"retiredAt"`
 	CreatedAt    int64   `bun:"created_at,notnull" json:"createdAt"`

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
@@ -18,6 +19,7 @@ func NewService(repository Repository) *Service {
 
 func (s *Service) Create(ctx context.Context, input AgentCreateInput) (*Agent, error) {
 	value := &Agent{Name: input.Name, Kind: input.Kind, Runtime: input.Runtime, Model: input.Model, Provider: input.Provider, SystemPrompt: input.SystemPrompt, Description: input.Description, MachineID: input.MachineID, Status: StatusStopped}
+	value.SpecJSON = agentSpecJSON(value)
 	if err := validate(value); err != nil {
 		return nil, err
 	}
@@ -44,6 +46,19 @@ func (s *Service) IsAvailable(ctx context.Context, id guid.ID) (bool, error) {
 		return false, err
 	}
 	return value.Status != StatusRetired && value.DeletedAt == 0, nil
+}
+
+// agentSpecJSON materializes the agent's runtime-relevant fields into the
+// spec_json column (PRD §16 agent_specs.spec_json) so extended capabilities
+// (memory, skills, allowedMCPTools, actionPolicy) can be carried in future
+// versions without further column migrations.
+func agentSpecJSON(a *Agent) string {
+	b, _ := json.Marshal(map[string]any{
+		"name": a.Name, "kind": a.Kind, "runtime": a.Runtime, "model": a.Model,
+		"provider": a.Provider, "systemPrompt": a.SystemPrompt, "description": a.Description,
+		"machineId": a.MachineID,
+	})
+	return string(b)
 }
 
 func (s *Service) Update(ctx context.Context, id guid.ID, input AgentUpdateInput) (*Agent, error) {
@@ -81,6 +96,7 @@ func (s *Service) Update(ctx context.Context, id guid.ID, input AgentUpdateInput
 	if input.MachineID != nil {
 		value.MachineID = *input.MachineID
 	}
+	value.SpecJSON = agentSpecJSON(value)
 	if err := validate(value); err != nil {
 		return nil, err
 	}
