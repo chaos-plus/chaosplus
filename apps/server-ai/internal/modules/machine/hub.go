@@ -311,6 +311,22 @@ func (h *Hub) unregister(c *daemonConn, sub *nats.Subscription) {
 
 // ---- machine onboarding surface (unchanged API) ----
 
+// RunnerScope returns the tenant/entity a connected daemon was onboarded under.
+// Used to reject cross-tenant runner selection before dispatch.
+func (h *Hub) RunnerScope(runnerID string) (tenantID, entityID coreid.ID, ok bool) {
+	id, err := coreid.Parse(runnerID)
+	if err != nil {
+		return 0, 0, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c := h.conns[id]
+	if c == nil {
+		return 0, 0, false
+	}
+	return c.claims.TenantID, c.claims.EntityID, true
+}
+
 func (h *Hub) RegisteredRunners() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()

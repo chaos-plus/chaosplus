@@ -411,7 +411,9 @@ function workItemKind(type: string): "requirement" | "task" {
 
 export function machineConnectCommand(token: string): string {
   const origin = typeof window === "undefined" ? "http://127.0.0.1:8080" : window.location.origin;
-  return `bun run src/serve.ts --server ${origin}/api/machines/ws --token ${token}`;
+  // Pass the token via env (RUNNER_TOKEN) so it never lands on argv, where any
+  // local process could read it via /proc/<pid>/cmdline (PRD §17.2).
+  return `RUNNER_TOKEN=${token} bun run src/serve.ts --server ${origin}/api/machines/ws`;
 }
 
 export const controlApi = {

@@ -218,7 +218,11 @@ type RunManager struct {
 	sub              *nats.Subscription
 	baseFactory      func(runID guid.ID) Executor // test seam; nil -> RunnerExecutor
 	picker           MachinePicker                // per-node machine selector (nil = use runnerID)
-	processCtx       context.Context
+	// runnerScope, when set, reports the tenant/entity a runner id was onboarded
+	// under so a user-supplied runnerId cannot dispatch a run onto another
+	// tenant's machine (PRD P10).
+	runnerScope func(runnerID string) (tenantID, entityID guid.ID, ok bool)
+	processCtx  context.Context
 	holderID         guid.ID
 	nextID           func() (guid.ID, error)
 	leaseTTL         time.Duration
@@ -238,6 +242,12 @@ func NewRunManager(nc *nats.Conn, link RunnerLink, st *BunRepository, runnerID s
 // node in a workflow run is dispatched to the best machine for its executor type.
 func (m *RunManager) SetMachinePicker(p MachinePicker) {
 	m.picker = p
+}
+
+// SetRunnerScope wires a tenant/entity resolver for runner ids so a
+// user-supplied runnerId cannot target another tenant's machine.
+func (m *RunManager) SetRunnerScope(fn func(runnerID string) (tenantID, entityID guid.ID, ok bool)) {
+	m.runnerScope = fn
 }
 
 // Start subscribes chaos.run.*.evt and fans out each event to the matching
@@ -528,6 +538,15 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 				return fmt.Errorf("no runner registered; set runnerId or start a daemon")
 			}
 			runnerID = reg[0]
+		}
+		// Never dispatch onto a machine another tenant owns (PRD P10): a caller
+		// may supply runnerId explicitly, but only the run's own tenant/entity
+		// daemons are valid targets.
+		if m.runnerScope != nil {
+			if tenantID, entityID, ok := m.runnerScope(runnerID); ok && (tenantID != run.TenantID || entityID != run.EntityID) {
+				cancel()
+				return fmt.Errorf("runner %s is not owned by this run's tenant/entity", runnerID)
+			}
 		}
 		base = NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID.String()).
 			WithMachinePicker(m.picker).

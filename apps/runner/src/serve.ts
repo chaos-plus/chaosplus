@@ -22,10 +22,13 @@ function arg(name: string): string | undefined {
 }
 
 const SERVER = arg("--server") ?? "http://127.0.0.1:8081";
-const TOKEN = arg("--token");
+// Prefer the RUNNER_TOKEN environment variable: a token on argv is readable by
+// any local process via /proc/<pid>/cmdline (PRD §17.2). --token remains as a
+// documented fallback for one-off runs.
+const TOKEN = process.env.RUNNER_TOKEN ?? arg("--token");
 const NAME = arg("--name") ?? require("node:os").hostname();
 if (!TOKEN) {
-  console.error("usage: bun run src/serve.ts --server <url> --token <token> [--name <name>]");
+  console.error("usage: bun run src/serve.ts --server <url> --token <token> [--name <name>], or set RUNNER_TOKEN");
   process.exit(1);
 }
 

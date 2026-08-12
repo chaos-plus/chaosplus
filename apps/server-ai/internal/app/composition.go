@@ -82,6 +82,8 @@ func buildModules(config Config, dependencies sharedapp.ModuleDependencies) ([]a
 		artifact.NewWorkflowProjector(dependencies.NextID),
 	)
 	workflowModule.Manager().SetMachinePicker(machinePicker(hub))
+	// Reject dispatching a run onto a machine another tenant owns (PRD P10).
+	workflowModule.Manager().SetRunnerScope(hub.RunnerScope)
 
 	workspaceModules, err := workspace.NewModules(workspace.Dependencies{
 		Database:         dependencies.Writer,

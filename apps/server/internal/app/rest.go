@@ -76,6 +76,7 @@ func (app *App) StartRestServer() error {
 	router.Use(respx.Timing) // stamp request start time for response meta
 	router.Use(respx.Locale) // resolve request locale for message i18n
 	app.useRateLimit(router) // per-IP / per-account limiting (after RealIP + Locale)
+	app.useIdempotency(router) // client_request_id dedup for state-changing requests (PRD F.1 C-10)
 
 	// API version header on every response so clients can negotiate compatibility.
 	router.Use(func(next http.Handler) http.Handler {
