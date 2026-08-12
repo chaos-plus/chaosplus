@@ -3,6 +3,13 @@ import { BACKENDS, pickBackend } from "./backends";
 import { runMock } from "./backends/mock";
 import { AgentManager } from "./agents/manager";
 import type { AgentEvent, AgentTask } from "./types";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+async function mockCwd(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "chaosplus-runner-mock-"));
+}
 
 // Test-only backend that stays running until aborted, so we can exercise stop().
 async function* runSlow(task: AgentTask): AsyncGenerator<AgentEvent> {
@@ -18,7 +25,8 @@ BACKENDS.slow = runSlow;
 
 test("mock backend streams message, tool, then done:ok", async () => {
   const events = [];
-  for await (const event of runMock({ prompt: "hello", cwd: process.cwd() })) {
+  const cwd = await mockCwd();
+  for await (const event of runMock({ prompt: "hello", cwd })) {
     events.push(event);
   }
   expect(events.map((e) => e.type)).toEqual([
@@ -29,6 +37,10 @@ test("mock backend streams message, tool, then done:ok", async () => {
   ]);
   const done = events.at(-1);
   expect(done).toMatchObject({ type: "done", ok: true, exitCode: 0 });
+  expect(JSON.parse(await readFile(join(cwd, "output.json"), "utf8"))).toEqual({
+    ok: true,
+    summary: "mock task completed",
+  });
 });
 
 test("pickBackend resolves registered runtimes and rejects unknown", () => {
@@ -42,7 +54,11 @@ test("pickBackend resolves registered runtimes and rejects unknown", () => {
 
 test("manager runs an executor agent to completion and records events", async () => {
   const manager = new AgentManager();
-  const a = manager.create({ kind: "executor", runtime: "mock" });
+  const a = manager.create({
+    kind: "executor",
+    runtime: "mock",
+    cwd: await mockCwd(),
+  });
   await a.run("hello");
   expect(a.status).toBe("completed");
   expect(a.events.some((e) => e.type === "done" && e.ok)).toBe(true);
@@ -50,8 +66,8 @@ test("manager runs an executor agent to completion and records events", async ()
 
 test("manager hosts multiple agents concurrently", async () => {
   const manager = new AgentManager();
-  const a = manager.create({ runtime: "mock" });
-  const b = manager.create({ runtime: "mock" });
+  const a = manager.create({ runtime: "mock", cwd: await mockCwd() });
+  const b = manager.create({ runtime: "mock", cwd: await mockCwd() });
   await Promise.all([a.run("one"), b.run("two")]);
   expect(manager.list()).toHaveLength(2);
   expect(manager.get(a.spec.id)).toBe(a);
@@ -74,7 +90,7 @@ test("switchProvider updates provider, stops running session, keeps apiKey out o
 
 test("manager remove stops the session", async () => {
   const manager = new AgentManager();
-  const a = manager.create({ runtime: "mock" });
+  const a = manager.create({ runtime: "mock", cwd: await mockCwd() });
   a.run("x");
   expect(manager.remove(a.spec.id)).toBe(true);
   expect(manager.get(a.spec.id)).toBeUndefined();

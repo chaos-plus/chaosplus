@@ -60,3 +60,5 @@ Thumbs.db
 node_modules/
 apps/admin-ai/**/dist/
 bun.lock
+!apps/admin-ai/bun.lock
+apps/admin-ai/.turbo/

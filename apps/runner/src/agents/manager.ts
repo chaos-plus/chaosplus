@@ -12,6 +12,10 @@ export interface CreateAgentInput {
   model?: string;
   provider?: string;
   apiKey?: string;
+  allowedTools?: string[];
+  maxTurns?: number;
+  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
 }
 
 /** Registry of hosted agents — the runner's core service state. */
@@ -39,6 +43,10 @@ export class AgentManager {
       model: input.model,
       provider: input.provider,
       apiKey: input.apiKey,
+      allowedTools: input.allowedTools,
+      maxTurns: input.maxTurns,
+      permissionMode: input.permissionMode,
+      sandboxMode: input.sandboxMode,
     });
     this.sessions.set(session.spec.id, session);
     return session;

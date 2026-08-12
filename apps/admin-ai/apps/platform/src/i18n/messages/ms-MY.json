@@ -31,10 +31,25 @@
       "emptyHint": "No runs yet. Get started in three steps:"
     },
     "machines": {
-      "add": "＋ Tambah Mesin",
-      "wizardTitle": "Daftar mesin (token jangka panjang, putaran manual sahaja)",
+      "add": "Tambah mesin",
+      "wizardTitle": "Daftar mesin baharu",
       "copyCommand": "Salin arahan",
+      "refreshCommand": "Segarkan arahan",
       "confirm": "Sahkan",
+      "confirmed": "Mesin berjaya didaftarkan",
+      "confirmFailed": "Gagal mengesahkan mesin",
+      "issueFailed": "Gagal mencipta token pendaftaran",
+      "cancelFailed": "Gagal membatalkan pendaftaran",
+      "loadFailed": "Gagal memuatkan senarai mesin",
+      "empty": "Belum ada mesin yang didaftarkan",
+      "expiresIn": "Tamat tempoh dalam {seconds}s",
+      "onboarding": {
+        "waiting": "Menunggu mesin sasaran disambungkan",
+        "connected": "Mesin sasaran disambungkan. Pendaftaran boleh disahkan.",
+        "confirmed": "Mesin disahkan",
+        "expired": "Token pendaftaran telah tamat tempoh. Mulakan semula.",
+        "invalid": "Sambungan pendaftaran tidak lagi sah. Mulakan semula."
+      },
       "offline": "Luar talian",
       "address": "Alamat",
       "agentCount": "Ejen",
@@ -73,6 +88,69 @@
       "agentStopped": "Berhenti",
       "agentRetired": "Bersara"
     },
+    "runs": {
+      "title": "Pelaksanaan",
+      "workspace": "Direktori workspace",
+      "invalidJson": "JSON aliran kerja tidak sah. Semak sintaks dan cuba lagi.",
+      "launchFailed": "Gagal memulakan pelaksanaan: {error}",
+      "launch": "Mulakan pelaksanaan",
+      "preview": "Pratonton DAG",
+      "loading": "Memuatkan pelaksanaan…",
+      "loadFailed": "Gagal memuatkan pelaksanaan.",
+      "retry": "Cuba lagi",
+      "nodeCount": "{count} nod",
+      "empty": "Belum ada pelaksanaan. Masukkan WorkflowDef JSON di atas untuk memulakan satu."
+    },
+    "approvals": {
+      "title": "Kelulusan",
+      "description": "Pelaksanaan yang menunggu kelulusan manusia. Buka butiran untuk menyemak DAG dan konteks sebelum membuat keputusan.",
+      "loading": "Memuatkan kelulusan…",
+      "loadFailed": "Gagal memuatkan giliran kelulusan.",
+      "retry": "Cuba lagi",
+      "pending": "Menunggu",
+      "empty": "Tiada pelaksanaan yang menunggu kelulusan."
+    },
+    "runDetail": {
+      "loadFailed": "Gagal memuatkan butiran pelaksanaan",
+      "approved": "Kelulusan diterima",
+      "approveFailed": "Gagal meluluskan: {error}",
+      "detailRequired": "Terangkan isu",
+      "rejected": "Kelulusan ditolak",
+      "submitFailed": "Gagal menghantar",
+      "cancelConfirm": "Batalkan pelaksanaan ini? Pelaksanaan yang dibatalkan tidak boleh disambung semula.",
+      "paused": "Pelaksanaan dijeda",
+      "resumed": "Pelaksanaan disambung",
+      "cancelled": "Pelaksanaan dibatalkan",
+      "actionFailed": "Tindakan gagal",
+      "loading": "Memuatkan butiran pelaksanaan…",
+      "loadError": "Gagal memuatkan butiran pelaksanaan: {error}",
+      "retry": "Cuba lagi",
+      "pause": "Jeda",
+      "resume": "Sambung",
+      "cancelRun": "Batalkan pelaksanaan",
+      "refreshFailed": "Muat semula gagal: {error}",
+      "approvalWaiting": "Nod “{id}” menunggu kelulusan manusia",
+      "approvalHint": "Kelulusan meneruskan aliran kerja. Penolakan memerlukan maklum balas berstruktur untuk percubaan seterusnya.",
+      "submitting": "Menghantar…",
+      "approve": "Lulus",
+      "reject": "Tolak",
+      "rejectTitle": "Tolak kelulusan dan tambah maklum balas",
+      "category": "Kategori isu",
+      "categories": {
+        "功能缺陷": "Kecacatan fungsi",
+        "样式": "Reka bentuk visual",
+        "需求偏差": "Ketidakpadanan keperluan",
+        "其他": "Lain-lain"
+      },
+      "location": "Lokasi",
+      "locationPlaceholder": "Contohnya, login.tsx:42 atau Checkout",
+      "expected": "Hasil dijangka",
+      "expectedPlaceholder": "Contohnya, pergi ke Home selepas klik",
+      "detail": "Perihalan isu",
+      "detailPlaceholder": "Terangkan masalah dan cara menghasilkannya semula",
+      "cancel": "Batal",
+      "submitReject": "Hantar penolakan"
+    },
     "common": {
       "create": "Create",
       "save": "Save",
@@ -80,7 +158,8 @@
       "delete": "Delete",
       "detail": "Details",
       "execute": "Run",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "retry": "Cuba lagi"
     }
   }
 }

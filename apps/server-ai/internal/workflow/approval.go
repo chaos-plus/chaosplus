@@ -3,9 +3,13 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
+
+var ErrApprovalTimedOut = errors.New("human approval timed out and requires intervention")
 
 // MaxFeedbackFieldLen caps free-text feedback fields so a malicious or sloppy
 // approver cannot bloat the injected prompt or the persisted event log (L4).
@@ -163,7 +167,21 @@ func (a *ApprovalExecutor) RunAgent(ctx context.Context, node *Node, input json.
 }
 
 func (a *ApprovalExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
-	return a.broker.Wait(ctx, node.ID)
+	if node.HumanApproval == nil || node.HumanApproval.TimeoutMs <= 0 {
+		return a.broker.Wait(ctx, node.ID)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(node.HumanApproval.TimeoutMs)*time.Millisecond)
+	defer cancel()
+	decision, err := a.broker.Wait(waitCtx, node.ID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return decision, err
+	}
+	if node.HumanApproval.OnTimeout == "auto_reject" {
+		return Decision{OK: false, Reason: "approval timed out", Feedback: &Feedback{
+			Category: FeedbackOther, Detail: "审批超时，系统按工作流策略自动拒绝。",
+		}}, nil
+	}
+	return Decision{}, ErrApprovalTimedOut
 }
 
 var _ Executor = (*ApprovalExecutor)(nil)

@@ -5,21 +5,25 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/websec"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // local dev single-user
+	CheckOrigin: websec.OriginAllowed,
 }
 
 // wsCommand is the control→daemon command (mirrors the daemon's RunnerCommand).
@@ -84,11 +88,12 @@ type Hub struct {
 	machines *store.Store // nil-safe
 	seq      atomic.Int64
 
-	mu      sync.Mutex
-	conns   map[string]*daemonConn
-	subs    map[string]*nats.Subscription // machineID -> its chaos.runner.{id}.cmd sub
-	pending map[string]bool               // machineID connected with an unconfirmed one-time token
-	names   map[string]string
+	mu            sync.Mutex
+	conns         map[string]*daemonConn
+	subs          map[string]*nats.Subscription // machineID -> its chaos.runner.{id}.cmd sub
+	pending       map[string]bool               // machineID connected with an unconfirmed one-time token
+	pendingOwners map[string]string             // machineID -> issuing instance/entity during onboarding
+	names         map[string]string
 	// runtimes 是每台机上报的可用执行器(claude/codex/...),数字人表单据此给下拉。
 	runtimes map[string][]string
 	oses     map[string]string // 注册时上报的 OS/架构
@@ -96,21 +101,25 @@ type Hub struct {
 
 func NewHub(nc *nats.Conn, tokens *TokenStore, machines *store.Store) *Hub {
 	return &Hub{
-		nc:       nc,
-		tokens:   tokens,
-		machines: machines,
-		conns:    make(map[string]*daemonConn),
-		subs:     make(map[string]*nats.Subscription),
-		pending:  make(map[string]bool),
-		names:    make(map[string]string),
-		runtimes: make(map[string][]string),
-		oses:     make(map[string]string),
+		nc:            nc,
+		tokens:        tokens,
+		machines:      machines,
+		conns:         make(map[string]*daemonConn),
+		subs:          make(map[string]*nats.Subscription),
+		pending:       make(map[string]bool),
+		pendingOwners: make(map[string]string),
+		names:         make(map[string]string),
+		runtimes:      make(map[string][]string),
+		oses:          make(map[string]string),
 	}
 }
 
 const cmdSubjectFmt = "chaos.runner.%s.cmd"
 const evtSubjectFmt = "chaos.runner.%s.evt"
 const registerSubject = "chaos.runner.register"
+
+var ErrMachineNotConnected = errors.New("machine has not connected with the onboarding token")
+var ErrMachineNotFound = errors.New("machine not found")
 
 // HandleWS authenticates the ?token= and bridges the daemon onto NATS.
 func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +204,9 @@ func (h *Hub) serve(c *daemonConn, sub *nats.Subscription) {
 			if pr != nil {
 				ok := m.OK != nil && *m.OK
 				body, _ := json.Marshal(map[string]any{"ok": ok, "data": json.RawMessage(m.Data)})
-				pr.respond(body)
+				if err := pr.respond(body); err != nil {
+					slog.Debug("respond to runner request", "machine", c.machineID, "err", err)
+				}
 			}
 		case "event":
 			if m.Event != nil {
@@ -292,26 +303,36 @@ func (h *Hub) ListMachines(ctx context.Context) ([]store.Machine, error) {
 }
 
 func (h *Hub) Confirm(ctx context.Context, machineID, token string) error {
-	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
-		return err
+	if !h.CanAccess(ctx, machineID) {
+		return ErrMachineNotFound
 	}
 	// A confirmed machine is no longer pending — otherwise its disconnect would
 	// be misread as an unconfirmed-abandon and invalidate the long-term token.
 	// 地址取 daemon 实际连接来源(HandleWS 握手时记录),daemon 未连接则为空。
 	h.mu.Lock()
-	delete(h.pending, machineID)
-	address := ""
-	if c := h.conns[machineID]; c != nil {
-		address = c.addr
+	if h.conns[machineID] == nil || !h.pending[machineID] {
+		h.mu.Unlock()
+		return ErrMachineNotConnected
 	}
+	if err := h.tokens.MakeLongTerm(machineID, token); err != nil {
+		h.mu.Unlock()
+		return err
+	}
+	delete(h.pending, machineID)
+	address := h.conns[machineID].addr
 	h.mu.Unlock()
 	if h.machines != nil {
-		return h.machines.UpsertMachine(ctx, store.Machine{
+		if err := h.machines.UpsertMachine(ctx, store.Machine{
 			ID: machineID, InstanceID: "desktop", Address: address,
 			Status: "confirmed", TokenHash: hashToken(token),
 			OS: h.MachineOS(machineID),
-		})
+		}); err != nil {
+			return err
+		}
 	}
+	h.mu.Lock()
+	delete(h.pendingOwners, machineID)
+	h.mu.Unlock()
 	return nil
 }
 
@@ -347,11 +368,67 @@ func (h *Hub) GetToken(machineID string) (string, error) {
 	return h.tokens.GetToken(machineID)
 }
 
-func (h *Hub) IssueToken() (machineID, token string) {
-	// 接入即长期 token(用户确认):没有 300s 倒计时,daemon 随时可连接。
+func (h *Hub) IssueToken() (machineID, token string, expiresAt time.Time) {
+	return h.IssueTokenFor(context.Background())
+}
+
+// IssueTokenFor binds an onboarding flow to the caller's instance before the
+// machine is persisted. This prevents another tenant from cancelling or
+// claiming a pending machine by ID.
+func (h *Hub) IssueTokenFor(ctx context.Context) (machineID, token string, expiresAt time.Time) {
 	machineID = newMachineID()
-	at := h.tokens.IssueLongTerm(machineID)
-	return machineID, at.Token
+	at := h.tokens.Issue(machineID)
+	h.mu.Lock()
+	h.pendingOwners[machineID] = store.EntityOf(ctx)
+	h.mu.Unlock()
+	return machineID, at.Token, at.ExpiresAt
+}
+
+// CanAccess applies the same tenant visibility rule to pending in-memory
+// onboarding records and confirmed machines persisted in StateStore.
+func (h *Hub) CanAccess(ctx context.Context, machineID string) bool {
+	h.mu.Lock()
+	owner, pending := h.pendingOwners[machineID]
+	h.mu.Unlock()
+	if pending {
+		return owner == store.EntityOf(ctx)
+	}
+	if h.machines == nil {
+		return store.EntityOf(ctx) == ""
+	}
+	machines, err := h.machines.ListMachines(ctx)
+	if err != nil {
+		return false
+	}
+	for _, item := range machines {
+		if item.ID == machineID {
+			return true
+		}
+	}
+	return false
+}
+
+// OnboardingStatus returns the authoritative state for the 300-second
+// onboarding window. The raw token is accepted in the JSON request body by the
+// HTTP layer so it does not leak into access logs or browser history.
+func (h *Hub) OnboardingStatus(machineID, token string) (state string, expiresAt time.Time) {
+	at, err := h.tokens.Validate(token)
+	if errors.Is(err, ErrTokenExpired) {
+		return "expired", time.Time{}
+	}
+	if err != nil || at.MachineID != machineID {
+		return "invalid", time.Time{}
+	}
+	if at.LongTerm {
+		return "confirmed", time.Time{}
+	}
+	h.mu.Lock()
+	connected := h.conns[machineID] != nil && h.pending[machineID]
+	h.mu.Unlock()
+	if connected {
+		return "connected", at.ExpiresAt
+	}
+	return "waiting", at.ExpiresAt
 }
 
 func (h *Hub) RefreshToken(machineID string) (string, error) {
@@ -387,6 +464,9 @@ func (h *Hub) RefreshToken(machineID string) (string, error) {
 func (h *Hub) Cancel(machineID string) {
 	h.tokens.Invalidate(machineID)
 	h.Disconnect(machineID)
+	h.mu.Lock()
+	delete(h.pendingOwners, machineID)
+	h.mu.Unlock()
 	if h.machines != nil {
 		_ = h.machines.DeleteMachine(context.Background(), machineID)
 	}

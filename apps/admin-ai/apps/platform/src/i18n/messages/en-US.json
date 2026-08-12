@@ -31,10 +31,25 @@
       "emptyHint": "No runs yet. Get started in three steps:"
     },
     "machines": {
-      "add": "＋ Add Machine",
-      "wizardTitle": "Onboard a machine (long-term token, manual rotation only)",
+      "add": "Add machine",
+      "wizardTitle": "Onboard a machine",
       "copyCommand": "Copy command",
+      "refreshCommand": "Refresh command",
       "confirm": "Confirm",
+      "confirmed": "Machine onboarded",
+      "confirmFailed": "Could not confirm the machine",
+      "issueFailed": "Could not create an onboarding token",
+      "cancelFailed": "Could not cancel onboarding",
+      "loadFailed": "Could not load machines",
+      "empty": "No machines have been onboarded",
+      "expiresIn": "Expires in {seconds}s",
+      "onboarding": {
+        "waiting": "Waiting for the target machine to connect",
+        "connected": "Target machine connected. You can confirm onboarding.",
+        "confirmed": "Machine confirmed",
+        "expired": "Onboarding token expired. Start again.",
+        "invalid": "Onboarding connection is no longer valid. Start again."
+      },
       "offline": "Offline",
       "address": "Address",
       "agentCount": "Agents",
@@ -73,6 +88,69 @@
       "agentStopped": "Stopped",
       "agentRetired": "Retired"
     },
+    "runs": {
+      "title": "Runs",
+      "workspace": "Workspace directory",
+      "invalidJson": "The workflow JSON is invalid. Check the syntax and try again.",
+      "launchFailed": "Could not launch the run: {error}",
+      "launch": "Launch run",
+      "preview": "DAG preview",
+      "loading": "Loading runs…",
+      "loadFailed": "Could not load runs.",
+      "retry": "Retry",
+      "nodeCount": "{count} nodes",
+      "empty": "No runs yet. Enter a WorkflowDef JSON above to launch one."
+    },
+    "approvals": {
+      "title": "Approvals",
+      "description": "Runs waiting for human approval. Open a run to review its DAG and context before deciding.",
+      "loading": "Loading approvals…",
+      "loadFailed": "Could not load the approval queue.",
+      "retry": "Retry",
+      "pending": "Pending",
+      "empty": "No runs are waiting for approval."
+    },
+    "runDetail": {
+      "loadFailed": "Could not load run details",
+      "approved": "Approval accepted",
+      "approveFailed": "Could not approve: {error}",
+      "detailRequired": "Describe the issue",
+      "rejected": "Approval rejected",
+      "submitFailed": "Could not submit",
+      "cancelConfirm": "Cancel this run? A cancelled run cannot be resumed.",
+      "paused": "Run paused",
+      "resumed": "Run resumed",
+      "cancelled": "Run cancelled",
+      "actionFailed": "The action failed",
+      "loading": "Loading run details…",
+      "loadError": "Could not load run details: {error}",
+      "retry": "Retry",
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancelRun": "Cancel run",
+      "refreshFailed": "Refresh failed: {error}",
+      "approvalWaiting": "Node “{id}” is waiting for human approval",
+      "approvalHint": "Approving continues the workflow. Rejection requires structured feedback for the next attempt.",
+      "submitting": "Submitting…",
+      "approve": "Approve",
+      "reject": "Reject",
+      "rejectTitle": "Reject approval and add feedback",
+      "category": "Issue category",
+      "categories": {
+        "功能缺陷": "Functional defect",
+        "样式": "Visual design",
+        "需求偏差": "Requirement mismatch",
+        "其他": "Other"
+      },
+      "location": "Location",
+      "locationPlaceholder": "For example, login.tsx:42 or Checkout",
+      "expected": "Expected result",
+      "expectedPlaceholder": "For example, navigate to Home after clicking",
+      "detail": "Issue description",
+      "detailPlaceholder": "Describe what is wrong and how to reproduce it",
+      "cancel": "Cancel",
+      "submitReject": "Submit rejection"
+    },
     "common": {
       "create": "Create",
       "save": "Save",
@@ -80,7 +158,8 @@
       "delete": "Delete",
       "detail": "Details",
       "execute": "Run",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "retry": "Retry"
     }
   }
 }

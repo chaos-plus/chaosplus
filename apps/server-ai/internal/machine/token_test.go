@@ -15,7 +15,7 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Fatalf("validate = %+v, %v", v, err)
 	}
 	// 格式 xxxx.xxxx.xxxx.xxxx.xxxx.xxxx(24 字符 + 5 点)。
-	if len(at.Token) != 24+5 {
+	if len(at.Token) != 43 {
 		t.Fatalf("token format wrong: %q", at.Token)
 	}
 

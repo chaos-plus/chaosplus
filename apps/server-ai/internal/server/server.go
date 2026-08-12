@@ -14,11 +14,12 @@ import (
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/machine"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/websec"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin:     func(r *http.Request) bool { return true }, // local dev single-user
+	CheckOrigin:     websec.OriginAllowed,
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
@@ -37,9 +38,6 @@ var AuthToken string
 var authExemptPrefixes = []string{"/api/machines/ws", "/api/email/notification"}
 
 func authMiddleware(h http.Handler) http.Handler {
-	if AuthToken == "" {
-		return h
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Machine onboarding carries its own token; server-ai token is not required.
 		for _, prefix := range authExemptPrefixes {
@@ -47,6 +45,11 @@ func authMiddleware(h http.Handler) http.Handler {
 				h.ServeHTTP(w, r)
 				return
 			}
+		}
+		// PRD F.7 explicitly permits Get/List/Subscribe without a session token.
+		if readOnlyRequest(r) || AuthToken == "" {
+			h.ServeHTTP(w, r)
+			return
 		}
 		if !validAuth(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="server-ai"`)
@@ -84,14 +87,35 @@ func isWSPath(p string) bool {
 // NewHandler wires all server-ai HTTP routes.
 func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if m == nil || m.nc == nil || !m.nc.IsConnected() {
+			writeErr(w, http.StatusServiceUnavailable, "NATS is not connected")
+			return
+		}
+		if m.st != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := m.st.Ping(ctx); err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "state store is not ready")
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	})
 	if chat != nil {
 		chat.register(mux)
 	}
 
 	// machines — runner onboarding (PRD §5.3.1).
 	mux.HandleFunc("POST /api/machines/tokens", func(w http.ResponseWriter, r *http.Request) {
-		machineID, token := hub.IssueToken()
-		writeJSON(w, 201, map[string]any{"token": token, "machineId": machineID, "longTerm": true})
+		machineID, token, expiresAt := hub.IssueTokenFor(r.Context())
+		writeJSON(w, 201, map[string]any{
+			"token": token, "machineId": machineID, "longTerm": false,
+			"expiresAt": expiresAt.UnixMilli(),
+		})
 	})
 	mux.HandleFunc("GET /api/machines/ws", hub.HandleWS)
 	mux.HandleFunc("GET /api/machines", func(w http.ResponseWriter, r *http.Request) {
@@ -188,16 +212,43 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 400, err.Error())
 			return
 		}
-		if e := r.Header.Get("X-Entity"); e != "" && chat != nil {
+		if e := store.EntityOf(r.Context()); e != "" && chat != nil {
 			_ = chat.st.UpdateMachineEntity(r.Context(), id, e)
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
+	mux.HandleFunc("POST /api/machines/{id}/onboarding-status", func(w http.ResponseWriter, r *http.Request) {
+		if !hub.CanAccess(r.Context(), r.PathValue("id")) {
+			writeErr(w, http.StatusNotFound, "machine not found")
+			return
+		}
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || body.Token == "" {
+			writeErr(w, http.StatusBadRequest, "invalid onboarding status request")
+			return
+		}
+		state, expiresAt := hub.OnboardingStatus(r.PathValue("id"), body.Token)
+		response := map[string]any{"state": state}
+		if !expiresAt.IsZero() {
+			response["expiresAt"] = expiresAt.UnixMilli()
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
 	mux.HandleFunc("DELETE /api/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !hub.CanAccess(r.Context(), r.PathValue("id")) {
+			writeErr(w, http.StatusNotFound, "machine not found")
+			return
+		}
 		hub.Cancel(r.PathValue("id"))
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /api/machines/{id}/token", func(w http.ResponseWriter, r *http.Request) {
+		if !hub.CanAccess(r.Context(), r.PathValue("id")) {
+			writeErr(w, http.StatusNotFound, "machine not found")
+			return
+		}
 		// 只读返回当前 token(展示接入命令),不轮换、不踢守护进程。
 		token, err := hub.GetToken(r.PathValue("id"))
 		if err != nil {
@@ -208,6 +259,10 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		writeJSON(w, 200, map[string]any{"token": token})
 	})
 	mux.HandleFunc("POST /api/machines/{id}/refresh-token", func(w http.ResponseWriter, r *http.Request) {
+		if !hub.CanAccess(r.Context(), r.PathValue("id")) {
+			writeErr(w, http.StatusNotFound, "machine not found")
+			return
+		}
 		token, err := hub.RefreshToken(r.PathValue("id"))
 		if err != nil {
 			writeErr(w, 400, err.Error())
@@ -230,15 +285,66 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 400, "bad request: "+err.Error())
 			return
 		}
+		req.InstanceID = store.EntityOf(r.Context())
+		req.OwnerID = store.OwnerOf(r.Context())
 		// The run outlives the HTTP request: tie it to the process lifetime, not
 		// r.Context() (which cancels when this handler returns and would kill a
 		// run parked on a human-approval gate).
-		run, err := m.Launch(context.Background(), req)
+		run, err := m.Launch(m.Context(), req)
 		if err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}
 		writeJSON(w, 201, map[string]any{"runId": run.ID})
+	})
+	mux.HandleFunc("GET /api/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		if m.st == nil {
+			writeJSON(w, http.StatusOK, []store.Artifact{})
+			return
+		}
+		artifacts, err := m.st.ListArtifacts(r.Context(), store.EntityOf(r.Context()), r.URL.Query().Get("projectId"), r.URL.Query().Get("status"))
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to list artifacts")
+			return
+		}
+		writeJSON(w, http.StatusOK, artifacts)
+	})
+	mux.HandleFunc("POST /api/artifacts/{id}/force-valid", func(w http.ResponseWriter, r *http.Request) {
+		if m.st == nil {
+			writeErr(w, http.StatusServiceUnavailable, "store not available")
+			return
+		}
+		reviewer := store.OwnerOf(r.Context())
+		if reviewer == "" {
+			reviewer = "human"
+		}
+		artifact, err := m.st.GetArtifact(r.Context(), r.PathValue("id"), store.EntityOf(r.Context()))
+		if err != nil || artifact.Status == store.ArtifactOrphaned {
+			writeErr(w, http.StatusNotFound, "artifact not found or orphaned")
+			return
+		}
+		if err := m.st.ForceValidateArtifact(r.Context(), artifact.ID, reviewer); err != nil {
+			writeErr(w, http.StatusNotFound, "artifact not found")
+			return
+		}
+		artifact.Status, artifact.ForceValid = store.ArtifactValid, true
+		payload, _ := json.Marshal(artifact)
+		if err := m.st.Append(r.Context(), store.Event{
+			ID: "force-" + randHex(8), InstanceID: artifact.InstanceID, RunID: artifact.ProducerRunID,
+			Type: "ARTIFACT_FORCE_VALIDATED", IdempotencyKey: "force:" + artifact.ID + ":" + randHex(8), PayloadJSON: string(payload),
+		}); err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to persist force-valid audit event")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/artifacts/reconcile", func(w http.ResponseWriter, r *http.Request) {
+		report, err := m.ReconcileArtifacts(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "artifact reconciliation failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		type sum struct {
@@ -249,13 +355,14 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		out := []sum{}
 		seen := map[string]bool{}
-		for _, run := range m.List() {
+		instanceID := store.EntityOf(r.Context())
+		for _, run := range m.ListFor(instanceID) {
 			seen[run.ID] = true
 			out = append(out, sum{ID: run.ID, Status: run.Status(), Nodes: len(run.Def.Nodes), CreatedAt: run.created.Format("2006-01-02 15:04:05")})
 		}
 		// Persisted runs (PRD §15.1) via the merged RunDef persistence.
 		if m.st != nil {
-			if recs, err := m.st.LoadActiveRunDefinitions(r.Context()); err != nil {
+			if recs, err := m.st.ListRunDefinitions(r.Context(), instanceID, 500); err != nil {
 				slog.Warn("list persisted runs", "err", err)
 			} else {
 				for _, rec := range recs {
@@ -272,7 +379,8 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 	})
 	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		run, ok := m.Get(id)
+		instanceID := store.EntityOf(r.Context())
+		run, ok := m.GetFor(id, instanceID)
 		if ok {
 			// 返回 run 的静态 DAG(供前端 React Flow 渲染节点/边 + 实时状态)。
 			writeJSON(w, 200, map[string]any{"id": run.ID, "status": run.Status(), "def": run.Def})
@@ -280,7 +388,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		// 历史 run(重启后保留):从 workflow_runs 重建 DAG 快照(PRD §15.1)。
 		if m.st != nil {
-			if rec, err := m.st.GetRunDef(r.Context(), id); err == nil {
+			if rec, err := m.st.GetRunDef(r.Context(), id); err == nil && (instanceID == "" || rec.InstanceID == instanceID) {
 				var def workflow.WorkflowDef
 				if json.Unmarshal([]byte(rec.DefJSON), &def) == nil {
 					writeJSON(w, 200, map[string]any{"id": rec.ID, "status": RunStatus(rec.Status), "def": &def})
@@ -290,6 +398,39 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		writeErr(w, 404, "run not found")
 	})
+	mux.HandleFunc("POST /api/runs/{id}/pause", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := m.GetFor(r.PathValue("id"), store.EntityOf(r.Context())); !ok {
+			writeErr(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if err := m.Pause(r.PathValue("id")); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/runs/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := m.GetFor(r.PathValue("id"), store.EntityOf(r.Context())); !ok {
+			writeErr(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if err := m.Resume(r.PathValue("id")); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := m.GetFor(r.PathValue("id"), store.EntityOf(r.Context())); !ok {
+			writeErr(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if err := m.Cancel(r.PathValue("id")); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
 	// PRD D.1 仪表盘:活跃 run 状态分布 / runner 健康 / 待审批队列 / 今日成本。
 	// ── workflow definitions CRUD (PRD §16 workflows table) ──
 	mux.HandleFunc("GET /api/workflows", func(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +438,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeJSON(w, 200, []any{})
 			return
 		}
-		instanceID := r.Header.Get("X-Entity")
+		instanceID := store.EntityOf(r.Context())
 		list, err := chat.st.ListWorkflows(r.Context(), instanceID)
 		if err != nil {
 			writeErr(w, 500, err.Error())
@@ -335,7 +476,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		if err := chat.st.SaveWorkflow(r.Context(), store.WorkflowDefModel{
 			ID: body.ID, Version: body.Version, Name: body.Name,
-			DefJSON: defJSON, InstanceID: r.Header.Get("X-Entity"), OwnerID: r.Header.Get("X-Actor"),
+			DefJSON: defJSON, InstanceID: store.EntityOf(r.Context()), OwnerID: store.OwnerOf(r.Context()),
 		}); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -364,7 +505,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		}
 		byStatus := map[string]int{}
 		approvals := []pending{}
-		for _, run := range m.List() {
+		for _, run := range m.ListFor(store.EntityOf(r.Context())) {
 			byStatus[string(run.Status())]++
 			if run.Status() != RunWaitingApproval {
 				continue
@@ -441,7 +582,7 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 			writeErr(w, 400, "bad request: "+err.Error())
 			return
 		}
-		if _, ok := m.Get(id); !ok {
+		if _, ok := m.GetFor(id, store.EntityOf(r.Context())); !ok {
 			writeErr(w, 404, "run not found")
 			return
 		}
@@ -468,39 +609,64 @@ func NewHandler(m *RunManager, hub *machine.Hub, chat *ChatService) http.Handler
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
 	// Auth gate first, then entity/actor context injection.
-	return authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// M6 (round-3 review): in hardened mode the client-supplied X-Actor header
-		// is untrusted (identity must come from the session/token), so requests
-		// carrying it are rejected instead of honoring a self-declared actor.
-		if os.Getenv("CONTROL_AUTH_HARDENED") == "1" && r.Header.Get("X-Actor") != "" {
-			writeErr(w, 401, "unauthorized: X-Actor is untrusted when CONTROL_AUTH_HARDENED=1")
+	return securityMiddleware(authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hardened := os.Getenv("CONTROL_AUTH_HARDENED") == "1"
+		entityID, ownerID := r.Header.Get("X-Entity"), r.Header.Get("X-Actor")
+		if hardened && (entityID != "" || ownerID != "") && !trustedIdentityProxy(r) {
+			writeErr(w, 401, "unauthorized: identity headers require a trusted proxy")
 			return
 		}
-		ctx := r.Context()
-		if e := r.Header.Get("X-Entity"); e != "" {
-			ctx = store.WithEntity(ctx, e)
+		if hardened && entityID == "" {
+			entityID = "desktop"
 		}
-		if o := r.Header.Get("X-Actor"); o != "" {
-			ctx = store.WithOwner(ctx, o)
+		if hardened && ownerID == "" {
+			ownerID = "api-token"
+		}
+		ctx := r.Context()
+		if entityID != "" {
+			ctx = store.WithEntity(ctx, entityID)
+		}
+		if ownerID != "" {
+			ctx = store.WithOwner(ctx, ownerID)
 		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
-	}))
+	})))
 }
 
-// apiToken returns the configured API token ("" = auth disabled / near no-op).
-func apiToken() string {
-	return os.Getenv("CONTROL_API_TOKEN")
+func trustedIdentityProxy(r *http.Request) bool {
+	expected := os.Getenv("CONTROL_TRUSTED_PROXY_TOKEN")
+	provided := r.Header.Get("X-Control-Proxy-Token")
+	return expected != "" && provided != "" && subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
 // readOnlyRequest reports whether a request is read-only (F.7: Get*/List*/Subscribe).
 func readOnlyRequest(r *http.Request) bool {
+	if strings.HasSuffix(r.URL.Path, "/token") {
+		return false
+	}
 	return r.Method == http.MethodGet || r.Method == http.MethodHead
+}
+
+func securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleWS upgrades to WebSocket, replays buffered events, then streams live.
 func (m *RunManager) handleWS(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	run, ok := m.Get(id)
+	run, ok := m.GetFor(id, store.EntityOf(r.Context()))
 	if !ok {
 		writeErr(w, 404, "run not found")
 		return
@@ -509,7 +675,7 @@ func (m *RunManager) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	sub, hist, unsub := run.subscribe()
 	defer unsub()

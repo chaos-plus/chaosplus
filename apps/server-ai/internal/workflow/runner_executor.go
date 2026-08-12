@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -34,12 +35,13 @@ type RunnerExecutor struct {
 	idle      time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
 	max       time.Duration // per-spawn absolute cap; 0 = none
 	seq       int
+	attempts  map[string]int
 	mu        sync.Mutex
 }
 
 // NewRunnerExecutor wires an Executor to one runner link + workspace for a run.
 func NewRunnerExecutor(link RunnerLink, runnerID, workspace, runID string) *RunnerExecutor {
-	return &RunnerExecutor{link: link, runnerID: runnerID, workspace: workspace, runID: runID}
+	return &RunnerExecutor{link: link, runnerID: runnerID, workspace: workspace, runID: runID, attempts: make(map[string]int)}
 }
 
 // WithMachinePicker sets a per-node machine selector. When set, each RunAgent
@@ -47,6 +49,19 @@ func NewRunnerExecutor(link RunnerLink, runnerID, workspace, runID string) *Runn
 // using the default runnerID. This enables multi-machine workflow runs.
 func (r *RunnerExecutor) WithMachinePicker(p MachinePicker) *RunnerExecutor {
 	r.picker = p
+	return r
+}
+
+// WithAttemptOffsets seeds attempts reconstructed from persisted events. An
+// interrupted first attempt therefore resumes as attempt 2 with a new spawn ID.
+func (r *RunnerExecutor) WithAttemptOffsets(offsets map[string]int) *RunnerExecutor {
+	r.mu.Lock()
+	for nodeID, attempt := range offsets {
+		if attempt > r.attempts[nodeID] {
+			r.attempts[nodeID] = attempt
+		}
+	}
+	r.mu.Unlock()
 	return r
 }
 
@@ -62,6 +77,8 @@ func (r *RunnerExecutor) WithSpawnTimeout(idle, max time.Duration) *RunnerExecut
 func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
 	r.mu.Lock()
 	r.seq++
+	r.attempts[node.ID]++
+	attempt := r.attempts[node.ID]
 	spawnID := fmt.Sprintf("%s-%s-%d", r.runID, node.ID, r.seq)
 	r.mu.Unlock()
 
@@ -85,12 +102,14 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	res, err := r.link.SpawnAndWait(ctx, runnerID, gateway.Spawn{
 		RunID:        r.runID,
 		NodeID:       node.ID,
-		Attempt:      1,
+		Attempt:      attempt,
 		SpawnID:      spawnID,
 		ExecutorType: node.Agent.Executor,
 		Prompt:       prompt,
 		Cwd:          r.workspace,
 		SystemPrompt: node.Agent.SystemPrompt,
+		AllowedTools: append([]string(nil), node.Agent.AllowedTools...),
+		MaxTurns:     maxTurns(node.Agent),
 	}, r.idle, r.max)
 	if err != nil {
 		// On timeout, tell the runner to stop the stray session so it doesn't
@@ -115,7 +134,8 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 
 	// PRD §10/§11: validate output against outputSpec.produces BEFORE trusting
 	// the agent's self-claim. Required artifacts must exist and match declared type.
-	if err := r.validateProduces(ctx, node, runnerID, spawnID, out); err != nil {
+	artifacts, err := r.validateProduces(ctx, node, runnerID, spawnID, out)
+	if err != nil {
 		return AgentResult{}, fmt.Errorf("node %s: output validation: %w", node.ID, err)
 	}
 
@@ -123,10 +143,13 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	// trusted — run the real validator in the workspace; non-zero exit fails the
 	// node. Pass overrides the output with {"result":"passed"} so downstream
 	// condition/loop nodes see the validator's verdict, not the agent's words.
-	if v := validatorCmd(node); v != "" {
-		res, err := r.link.RunCmd(ctx, runnerID, spawnID, v, 120000)
+	for _, validator := range validatorCommands(node) {
+		res, err := r.link.RunCmd(ctx, runnerID, spawnID, validator.Command, validator.TimeoutMs)
 		if err != nil {
-			return AgentResult{}, fmt.Errorf("node %s: validator: %w", node.ID, err)
+			if validator.Required {
+				return AgentResult{}, fmt.Errorf("node %s: validator %q: %w", node.ID, validator.Ref, err)
+			}
+			continue
 		}
 		if res.ExitCode != 0 {
 			detail := strings.TrimSpace(res.Stderr)
@@ -136,24 +159,25 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 			if detail == "" {
 				detail = fmt.Sprintf("exit %d", res.ExitCode)
 			}
-			return AgentResult{}, fmt.Errorf("node %s: validator failed: %s", node.ID, sanitizeErrText(detail, r.workspace))
+			if validator.Required {
+				return AgentResult{}, fmt.Errorf("node %s: validator %q failed: %s", node.ID, validator.Ref, sanitizeErrText(detail, r.workspace))
+			}
+			continue
 		}
 		out, _ = json.Marshal(map[string]any{"result": "passed"})
 	}
-	return AgentResult{Output: out, Preview: res.Preview}, nil
+	return AgentResult{Output: out, Artifacts: artifacts, Preview: res.Preview}, nil
 }
 
 // validateProduces reads each required artifact declared in outputSpec.produces
 // and validates it exists and matches its declared type. This is the built-in
 // trust boundary — it runs unconditionally, before any optional cmd: validator.
-func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runnerID, spawnID string, main json.RawMessage) error {
+func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runnerID, spawnID string, main json.RawMessage) ([]ProducedArtifact, error) {
 	if node.Agent == nil || node.Agent.OutputSpec == nil || len(node.Agent.OutputSpec.Produces) == 0 {
-		return nil
+		return nil, nil
 	}
+	artifacts := make([]ProducedArtifact, 0, len(node.Agent.OutputSpec.Produces))
 	for _, p := range node.Agent.OutputSpec.Produces {
-		if !p.Required {
-			continue
-		}
 		path := p.Path
 		if path == "" {
 			path = p.ID
@@ -166,21 +190,60 @@ func (r *RunnerExecutor) validateProduces(ctx context.Context, node *Node, runne
 		} else {
 			b, err := r.link.ReadArtifact(ctx, runnerID, spawnID, path)
 			if err != nil {
-				return fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
+				if !p.Required {
+					continue
+				}
+				return nil, fmt.Errorf("required artifact %q (%s): %w", p.ID, path, err)
 			}
 			body = b
 		}
 		if len(body) == 0 {
-			return fmt.Errorf("required artifact %q (%s) is empty", p.ID, path)
+			if !p.Required {
+				continue
+			}
+			return nil, fmt.Errorf("required artifact %q (%s) is empty", p.ID, path)
 		}
 		switch p.Type {
-		case "json", "object", "array":
+		case "json":
 			if !json.Valid(body) {
-				return fmt.Errorf("required artifact %q (%s) declared as %s but is not valid JSON", p.ID, path, p.Type)
+				return nil, fmt.Errorf("artifact %q (%s) declared as %s but is not valid JSON", p.ID, path, p.Type)
+			}
+		case "object":
+			var value map[string]any
+			if json.Unmarshal(body, &value) != nil {
+				return nil, fmt.Errorf("artifact %q (%s) declared as object but is not a JSON object", p.ID, path)
+			}
+		case "array":
+			var value []any
+			if json.Unmarshal(body, &value) != nil {
+				return nil, fmt.Errorf("artifact %q (%s) declared as array but is not a JSON array", p.ID, path)
 			}
 		}
+		digest := sha256.Sum256(body)
+		id := p.ID
+		if id == "" {
+			id = path
+		}
+		artifacts = append(artifacts, ProducedArtifact{
+			ID: id, Path: path, Type: p.Type, Checksum: fmt.Sprintf("sha256:%x", digest[:]),
+			SizeBytes: int64(len(body)), RunnerID: runnerID, SpawnID: spawnID,
+		})
 	}
-	return nil
+	return artifacts, nil
+}
+
+func maxTurns(spec *ExecutorAgentSpec) int {
+	if spec == nil || spec.MaxContextTokens <= 0 {
+		return 0
+	}
+	turns := spec.MaxContextTokens / 4096
+	if turns < 1 {
+		return 1
+	}
+	if turns > 100 {
+		return 100
+	}
+	return turns
 }
 
 func (r *RunnerExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
@@ -230,6 +293,32 @@ func validatorCmd(node *Node) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(v, "cmd:"))
+}
+
+type validatorCommand struct {
+	Ref       string
+	Command   string
+	TimeoutMs int
+	Required  bool
+}
+
+func validatorCommands(node *Node) []validatorCommand {
+	commands := make([]validatorCommand, 0, 1)
+	if command := validatorCmd(node); command != "" {
+		commands = append(commands, validatorCommand{Ref: "outputValidator", Command: command, TimeoutMs: 120000, Required: true})
+	}
+	if node.Agent == nil {
+		return commands
+	}
+	for _, spec := range node.Agent.ValidatorSpecs {
+		command := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(spec.Ref), "cmd:"))
+		timeout := spec.TimeoutMs
+		if timeout <= 0 {
+			timeout = 120000
+		}
+		commands = append(commands, validatorCommand{Ref: spec.Ref, Command: command, TimeoutMs: timeout, Required: spec.Required})
+	}
+	return commands
 }
 
 // buildPrompt tells the agent what to produce and that its deliverable must

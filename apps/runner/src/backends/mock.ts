@@ -1,4 +1,6 @@
 import type { AgentEvent, AgentTask } from "../types";
+import { writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 /**
  * Deterministic backend with no API key. Doubles as the runner's runnable
@@ -16,5 +18,10 @@ export async function* runMock(task: AgentTask): AsyncGenerator<AgentEvent> {
     result: "// mock content",
   };
   yield { type: "message", text: "[mock] task complete (no real work done)" };
+  await writeFile(
+    resolve(task.cwd, "output.json"),
+    JSON.stringify({ ok: true, summary: "mock task completed" }, null, 2),
+    "utf8",
+  );
   yield { type: "done", ok: true, exitCode: 0 };
 }

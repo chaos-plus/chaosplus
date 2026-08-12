@@ -8,11 +8,22 @@ import (
 // AgentResult is the output of RunAgent: the node's JSON output + optional
 // inline preview for live rendering on canvas nodes (ComfyUI pattern).
 type AgentResult struct {
-	Output  json.RawMessage
-	Preview *struct {
+	Output    json.RawMessage
+	Artifacts []ProducedArtifact
+	Preview   *struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
 	}
+}
+
+type ProducedArtifact struct {
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Type      string `json:"type"`
+	Checksum  string `json:"checksum"`
+	SizeBytes int64  `json:"sizeBytes"`
+	RunnerID  string `json:"runnerId"`
+	SpawnID   string `json:"spawnId"`
 }
 
 // Executor runs agent nodes and decides human-approval gates. The engine is

@@ -154,6 +154,23 @@ func TestRunnerExecutorAppliesOutputValidator(t *testing.T) {
 	}
 }
 
+func TestRunnerExecutorAppliesValidatorSpecs(t *testing.T) {
+	node := agentNode("")
+	node.Agent.ValidatorSpecs = []ValidatorSpec{{Ref: "cmd:go test ./...", Layer: "automated", Required: true, TimeoutMs: 1234}}
+	fail := newLink(t, `{"ok":true}`, true, 1)
+	ex := NewRunnerExecutor(fail, "r1", t.TempDir(), "run-validator-spec").WithSpawnTimeout(5*time.Second, 20*time.Second)
+	if _, err := ex.RunAgent(context.Background(), node, nil); err == nil || !strings.Contains(err.Error(), "go test") {
+		t.Fatalf("required validatorSpecs failure must fail the node, got %v", err)
+	}
+
+	node.Agent.ValidatorSpecs[0].Required = false
+	optional := newLink(t, `{"ok":true}`, true, 1)
+	ex = NewRunnerExecutor(optional, "r1", t.TempDir(), "run-optional-validator").WithSpawnTimeout(5*time.Second, 20*time.Second)
+	if _, err := ex.RunAgent(context.Background(), node, nil); err != nil {
+		t.Fatalf("optional validator failure should be evidence-only: %v", err)
+	}
+}
+
 func TestValidatorCmdParsing(t *testing.T) {
 	if got := validatorCmd(agentNode("")); got != "" {
 		t.Errorf("no validator should yield empty, got %q", got)

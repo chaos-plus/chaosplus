@@ -59,7 +59,7 @@ func TestRunEventsWebSocketStreamsProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	_ = c.SetReadDeadline(time.Now().Add(15 * time.Second))
 	sawWaiting := false
@@ -153,7 +153,7 @@ func TestWebSocketOnUnknownRunFails(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/runs/run-nope/events"
 	c, res, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err == nil {
-		c.Close()
+		_ = c.Close()
 		t.Fatal("websocket on an unknown run should be rejected")
 	}
 	if res != nil && res.StatusCode == http.StatusOK {
@@ -289,7 +289,7 @@ func TestMachinesListCarriesAgentCountAndRuntimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())
@@ -336,7 +336,7 @@ func TestMachineDetailEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())

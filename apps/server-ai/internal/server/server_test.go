@@ -44,7 +44,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&launched); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 连 WS,应收到 waiting_approval 事件。
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/runs/" + launched.RunID + "/events"
@@ -52,7 +52,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
 	var gotReview bool
 	deadline := time.Now().Add(3 * time.Second)
@@ -80,7 +80,7 @@ func TestHTTPLaunchAndWS(t *testing.T) {
 	if r2.StatusCode != 200 {
 		t.Fatalf("approve status = %d, want 200", r2.StatusCode)
 	}
-	r2.Body.Close()
+	_ = r2.Body.Close()
 
 	// run 终态 completed。
 	deadline = time.Now().Add(3 * time.Second)
@@ -158,14 +158,14 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&launched); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/runs/" + launched.RunID + "/events"
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
 	sawRetry, sawReview, sawRejectedFeedback, sentReject := false, false, false, false
 	seqCount := map[int]int{}
@@ -195,10 +195,10 @@ func TestHTTPRetryAndRejectionFeedback(t *testing.T) {
 			if r2.StatusCode != 200 {
 				var eb map[string]any
 				_ = json.NewDecoder(r2.Body).Decode(&eb)
-				r2.Body.Close()
+				_ = r2.Body.Close()
 				t.Fatalf("reject status = %d, want 200 (body=%v)", r2.StatusCode, eb)
 			}
-			r2.Body.Close()
+			_ = r2.Body.Close()
 		}
 		if ev.Review != nil && !ev.Review.Approved && ev.Review.Feedback != nil && ev.Review.Feedback.Detail == "缺空值校验" {
 			sawRejectedFeedback = true
@@ -247,7 +247,7 @@ func TestHTTPBearerEnforcement(t *testing.T) {
 	defer tsA.Close()
 	r1, _ := http.Post(tsA.URL+"/api/runs", "application/json",
 		strings.NewReader(`{"workflowJSON":`+testDefRaw+`,"workspace":"ws"}`))
-	r1.Body.Close()
+	_ = r1.Body.Close()
 	if r1.StatusCode != 201 {
 		t.Fatalf("no-token config: POST /api/runs = %d, want 201 (near no-op)", r1.StatusCode)
 	}
@@ -261,14 +261,14 @@ func TestHTTPBearerEnforcement(t *testing.T) {
 
 	r2, _ := http.Post(tsB.URL+"/api/runs", "application/json",
 		strings.NewReader(`{"workflowJSON":`+testDefRaw+`,"workspace":"ws"}`))
-	r2.Body.Close()
+	_ = r2.Body.Close()
 	if r2.StatusCode != 401 {
 		t.Fatalf("configured: POST without token = %d, want 401", r2.StatusCode)
 	}
 	reqG, _ := http.NewRequest("GET", tsB.URL+"/api/runs", nil)
 	reqG.Header.Set("Authorization", "Bearer s3cret")
 	r3, _ := http.DefaultClient.Do(reqG)
-	r3.Body.Close()
+	_ = r3.Body.Close()
 	if r3.StatusCode != 200 {
 		t.Fatalf("configured: GET /api/runs with token = %d, want 200", r3.StatusCode)
 	}
@@ -278,7 +278,7 @@ func TestHTTPBearerEnforcement(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer s3cret")
 	r4, _ := http.DefaultClient.Do(req)
-	r4.Body.Close()
+	_ = r4.Body.Close()
 	if r4.StatusCode != 201 {
 		t.Fatalf("configured: POST with token = %d, want 201", r4.StatusCode)
 	}
@@ -288,7 +288,7 @@ func TestHTTPBearerEnforcement(t *testing.T) {
 	reqBad.Header.Set("Content-Type", "application/json")
 	reqBad.Header.Set("Authorization", "Bearer wrong")
 	r5, _ := http.DefaultClient.Do(reqBad)
-	r5.Body.Close()
+	_ = r5.Body.Close()
 	if r5.StatusCode != 401 {
 		t.Fatalf("configured: POST with wrong token = %d, want 401", r5.StatusCode)
 	}
@@ -304,14 +304,14 @@ func TestHTTPErrors(t *testing.T) {
 	r, _ := http.Post(ts.URL+"/api/runs", "application/json",
 		strings.NewReader(`{"workflowJSON":{"id":"","version":"","nodes":[]},"workspace":"ws"}`))
 	if r.StatusCode == 201 {
-		r.Body.Close()
+		_ = r.Body.Close()
 		t.Fatal("invalid workflow should not launch")
 	}
 	if r.StatusCode == 500 {
-		r.Body.Close()
+		_ = r.Body.Close()
 		t.Fatalf("invalid input must be 4xx, got %d", r.StatusCode)
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	// 未知 run 的审批 → 404。
 	req, _ := http.NewRequest("POST", ts.URL+"/api/runs/nope/approvals/x", strings.NewReader(`{"approve":true}`))
@@ -323,7 +323,7 @@ func TestHTTPErrors(t *testing.T) {
 	if resp.StatusCode != 404 {
 		t.Fatalf("unknown run approve = %d, want 404", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// GET / → 200 且含页面标记。
 	get, err := http.Get(ts.URL + "/")
@@ -335,7 +335,7 @@ func TestHTTPErrors(t *testing.T) {
 	}
 	buf := make([]byte, 512)
 	n, _ := get.Body.Read(buf)
-	get.Body.Close()
+	_ = get.Body.Close()
 	if !strings.Contains(string(buf[:n]), "chaos.plus") {
 		t.Error("GET / does not serve the UI page")
 	}

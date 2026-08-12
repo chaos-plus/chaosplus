@@ -357,6 +357,9 @@ describe("Chaosplus IAM API client", () => {
         email: "registered@example.com",
         password: "correct registration password",
         display_name: "Registered User",
+        captcha_type: "text",
+        captcha_id: "captcha-1",
+        captcha_answer: "ABCD",
       })
     ).toEqual({ accepted: true })
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
@@ -370,6 +373,9 @@ describe("Chaosplus IAM API client", () => {
       email: "registered@example.com",
       password: "correct registration password",
       display_name: "Registered User",
+      captcha_type: "text",
+      captcha_id: "captcha-1",
+      captcha_answer: "ABCD",
     })
   })
 

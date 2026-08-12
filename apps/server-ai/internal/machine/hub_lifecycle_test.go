@@ -32,15 +32,27 @@ func TestMachineOnboardingLifecycle(t *testing.T) {
 	hub, _, st, ts := newHubWithStore(t)
 	ctx := context.Background()
 
-	machineID, token := hub.IssueToken()
+	machineID, token, expiresAt := hub.IssueToken()
 	if machineID == "" || token == "" {
 		t.Fatal("IssueToken returned empty values")
+	}
+	if remaining := time.Until(expiresAt); remaining < TokenTTL-time.Second || remaining > TokenTTL+time.Second {
+		t.Fatalf("onboarding token lifetime = %v, want %v", remaining, TokenTTL)
+	}
+	if err := hub.Confirm(ctx, machineID, token); err != ErrMachineNotConnected {
+		t.Fatalf("confirm before connection = %v, want %v", err, ErrMachineNotConnected)
+	}
+	if state, _ := hub.OnboardingStatus(machineID, token); state != "waiting" {
+		t.Fatalf("initial onboarding state = %q, want waiting", state)
 	}
 
 	ws := dialDaemon(t, ts, token)
 	var ready map[string]any
 	if err := ws.ReadJSON(&ready); err != nil {
 		t.Fatalf("read ready: %v", err)
+	}
+	if state, _ := hub.OnboardingStatus(machineID, token); state != "connected" {
+		t.Fatalf("connected onboarding state = %q, want connected", state)
 	}
 	_ = ws.WriteJSON(map[string]any{"type": "register", "meta": map[string]string{"name": "box"}})
 
@@ -72,6 +84,9 @@ func TestMachineOnboardingLifecycle(t *testing.T) {
 	// 确认 → 落库为 confirmed。
 	if err := hub.Confirm(ctx, machineID, token); err != nil {
 		t.Fatalf("confirm: %v", err)
+	}
+	if state, _ := hub.OnboardingStatus(machineID, token); state != "confirmed" {
+		t.Fatalf("confirmed onboarding state = %q, want confirmed", state)
 	}
 	list, err := hub.ListMachines(ctx)
 	if err != nil {

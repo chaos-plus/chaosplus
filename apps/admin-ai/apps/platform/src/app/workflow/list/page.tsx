@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/set-state-in-effect, react-refresh/only-export-components */
+/* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "@workspace/ui/components/button";

@@ -12,8 +12,8 @@ export default defineConfig({
     alias: {
       // 与源站一致：@/* → apps/web 根（源 tsconfig paths "@/*": ["./*"]），
       // 让迁移文件的 @/lib、@/components、@/hooks 零改动。src/ 仅放 Vite bootstrap。
-      "@": path.resolve(__dirname, "."),
-      "@workspace/ui": path.resolve(__dirname, "../../packages/ui/src"),
+      "@": path.resolve(import.meta.dirname, "."),
+      "@workspace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
     },
   },
   server: {

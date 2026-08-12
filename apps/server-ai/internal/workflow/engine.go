@@ -3,9 +3,15 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrRunInterrupted is the lifecycle-control cancellation cause used by the
+// server when pausing or cancelling a run. Ordinary context cancellation keeps
+// its existing failure semantics.
+var ErrRunInterrupted = errors.New("run interrupted by lifecycle control")
 
 // Status is a node's terminal/live state within a run.
 type Status string
@@ -18,17 +24,19 @@ const (
 	StatusSkipped         Status = "skipped"
 	StatusWaitingApproval Status = "waiting_approval" // human_approval gate is blocked on a human
 	StatusRetrying        Status = "retrying"         // an attempt failed but a retry is scheduled (F.2 NODE_RETRY_SCHEDULED); not terminal
+	StatusPausedForHuman  Status = "paused_for_human" // bounded autonomy exhausted or governance timeout
 )
 
 // Event is one node lifecycle event in run order (PRD event log §15.1).
 type Event struct {
-	Seq     int             `json:"seq"`
-	NodeID  string          `json:"nodeId"`
-	Status  Status          `json:"status"`
-	Output  json.RawMessage `json:"output,omitempty"`
-	Error   string          `json:"error,omitempty"`
-	Attempt int             `json:"attempt,omitempty"`
-	Preview *struct {
+	Seq       int                `json:"seq"`
+	NodeID    string             `json:"nodeId"`
+	Status    Status             `json:"status"`
+	Output    json.RawMessage    `json:"output,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	Attempt   int                `json:"attempt,omitempty"`
+	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
+	Preview   *struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
 	} `json:"preview,omitempty"`
@@ -42,12 +50,13 @@ type nodeState struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
 	}
-	branch   string // condition result
-	active   []int  // indices of active out-edges (condition routing)
-	approved bool   // human_approval outcome
-	attempts int
-	retryAt  int64 // unix ms when this node's retry backoff elapses; 0 = none
-	err      string
+	branch    string // condition result
+	active    []int  // indices of active out-edges (condition routing)
+	approved  bool   // human_approval outcome
+	attempts  int
+	retryAt   int64 // unix ms when this node's retry backoff elapses; 0 = none
+	err       string
+	artifacts []ProducedArtifact
 }
 
 // Engine is a static-DAG scheduler (PRD §7.3). It is executor-agnostic: agent
@@ -105,6 +114,68 @@ func NewEngine(def *WorkflowDef, exec Executor) (*Engine, error) {
 		}
 	}
 	return e, nil
+}
+
+// Restore rebuilds scheduler state from the authoritative node event stream.
+// Completed/failed/skipped nodes stay terminal; a node interrupted while
+// running, retrying, or waiting for approval becomes pending and is resumed.
+func (e *Engine) Restore(events []Event) error {
+	for _, ev := range events {
+		st := e.states[ev.NodeID]
+		if st == nil {
+			continue
+		}
+		if ev.Attempt > st.attempts {
+			st.attempts = ev.Attempt
+		}
+		switch ev.Status {
+		case StatusCompleted:
+			st.status = StatusCompleted
+			st.output = append(json.RawMessage(nil), ev.Output...)
+			st.artifacts = append([]ProducedArtifact(nil), ev.Artifacts...)
+			if st.node.Type == NodeCondition && len(ev.Output) > 0 {
+				var output struct {
+					Branch string `json:"branch"`
+				}
+				if err := json.Unmarshal(ev.Output, &output); err != nil {
+					return fmt.Errorf("restore condition %q: %w", ev.NodeID, err)
+				}
+				st.branch = output.Branch
+				matched := false
+				for i, edge := range e.out[ev.NodeID] {
+					if edge.BranchKey != "" && edge.BranchKey == st.branch {
+						st.active = append(st.active, i)
+						matched = true
+					}
+				}
+				if !matched {
+					for i, edge := range e.out[ev.NodeID] {
+						if edge.Condition == EdgeAlways && edge.BranchKey == "" {
+							st.active = append(st.active, i)
+						}
+					}
+				}
+			}
+			if st.node.Type == NodeHumanApproval && len(ev.Output) > 0 {
+				var output struct {
+					Approved bool `json:"approved"`
+				}
+				if json.Unmarshal(ev.Output, &output) == nil {
+					st.approved = output.Approved
+				}
+			}
+		case StatusFailed, StatusSkipped:
+			st.status = ev.Status
+			st.err = ev.Error
+		case StatusRunning, StatusRetrying, StatusWaitingApproval, StatusPausedForHuman:
+			st.status = StatusPending
+			st.err = ev.Error
+			if st.node.Type == NodeAgent && ev.Status != StatusWaitingApproval && ev.Attempt+1 > st.attempts {
+				st.attempts = ev.Attempt + 1
+			}
+		}
+	}
+	return nil
 }
 
 // reachable returns node IDs reachable from start following out-edges.
@@ -280,6 +351,17 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 		err = fmt.Errorf("workflow %s: node %q unknown type %q", e.def.ID, id, st.node.Type)
 	}
 	if err != nil {
+		// Pause/cancel/restart interrupts an in-flight node. Leave its latest event
+		// as running so Restore schedules a fresh attempt; do not persist a false
+		// business failure caused only by lifecycle control.
+		if errors.Is(context.Cause(ctx), ErrRunInterrupted) {
+			return context.Cause(ctx)
+		}
+		if errors.Is(err, ErrApprovalTimedOut) {
+			st.err = err.Error()
+			e.mark(id, StatusPausedForHuman, nil, err.Error())
+			return nil
+		}
 		// n8n-style onError: "continue" passes a stub output downstream
 		// instead of failing the run. Node output = {"error":..., "nodeId":..., "continued":true}.
 		if st.node.OnError == "continue" {
@@ -292,6 +374,10 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 		st.err = err.Error()
 		if e.scheduleRetry(ctx, st, err) {
 			return nil // transient failure; node reset to pending for re-run
+		}
+		if st.node.Type == NodeAgent && st.node.Agent != nil && st.node.Agent.Retry != nil {
+			e.mark(id, StatusPausedForHuman, nil, err.Error())
+			return nil
 		}
 		// Terminal failure: no retries left (or the run was cancelled during
 		// backoff). A single NODE_FAILED, not one per attempt.
@@ -318,6 +404,7 @@ func (e *Engine) mark(id string, status Status, output json.RawMessage, errStr s
 	ev := Event{Seq: e.seq, NodeID: id, Status: status, Error: errStr, Attempt: attempt}
 	if status == StatusCompleted && len(output) > 0 {
 		ev.Output = output
+		ev.Artifacts = append([]ProducedArtifact(nil), st.artifacts...)
 	}
 	if st.preview != nil {
 		ev.Preview = st.preview

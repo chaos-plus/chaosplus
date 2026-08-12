@@ -45,6 +45,8 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
         model: cmd.spawn.model,
         provider: cmd.spawn.provider,
         apiKey: cmd.spawn.apiKey,
+        allowedTools: cmd.spawn.allowedTools,
+        maxTurns: cmd.spawn.maxTurns,
       });
       sessions.set(cmd.spawn.spawnId, agent.spec.id);
       spawnCwd.set(cmd.spawn.spawnId, cmd.spawn.cwd);

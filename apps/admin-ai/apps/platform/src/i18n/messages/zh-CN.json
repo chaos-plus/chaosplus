@@ -31,10 +31,25 @@
       "emptyHint": "还没有任何执行记录,按三步开始:"
     },
     "machines": {
-      "add": "＋ 添加机器",
-      "wizardTitle": "接入新机器(长期令牌,仅手动轮换)",
+      "add": "添加机器",
+      "wizardTitle": "接入新机器",
       "copyCommand": "复制命令",
+      "refreshCommand": "刷新命令",
       "confirm": "确认接入",
+      "confirmed": "机器已接入",
+      "confirmFailed": "确认接入失败",
+      "issueFailed": "创建接入令牌失败",
+      "cancelFailed": "取消接入失败",
+      "loadFailed": "机器列表加载失败",
+      "empty": "还没有接入任何机器",
+      "expiresIn": "{seconds} 秒后过期",
+      "onboarding": {
+        "waiting": "等待目标机器连接",
+        "connected": "目标机器已连接，可以确认接入",
+        "confirmed": "机器已确认",
+        "expired": "接入令牌已过期，请重新开始",
+        "invalid": "接入连接已失效，请重新开始"
+      },
       "offline": "离线",
       "address": "地址",
       "agentCount": "托管数字人",
@@ -73,6 +88,69 @@
       "agentStopped": "已停止",
       "agentRetired": "已注销"
     },
+    "runs": {
+      "title": "运行",
+      "workspace": "Workspace 目录",
+      "invalidJson": "工作流 JSON 不合法，请检查语法后重试。",
+      "launchFailed": "发起 Run 失败：{error}",
+      "launch": "发起 Run",
+      "preview": "DAG 预览",
+      "loading": "加载运行记录…",
+      "loadFailed": "运行记录加载失败。",
+      "retry": "重试",
+      "nodeCount": "{count} 个节点",
+      "empty": "还没有 Run，填写上面的 WorkflowDef JSON 发起一个。"
+    },
+    "approvals": {
+      "title": "审批",
+      "description": "等待人工审批的 Run。进入详情后可查看 DAG 和上下文并作出决定。",
+      "loading": "加载审批队列…",
+      "loadFailed": "审批队列加载失败。",
+      "retry": "重试",
+      "pending": "待审批",
+      "empty": "暂无待审批 Run。"
+    },
+    "runDetail": {
+      "loadFailed": "运行详情加载失败",
+      "approved": "审批已通过",
+      "approveFailed": "通过审批失败：{error}",
+      "detailRequired": "请填写问题描述",
+      "rejected": "审批已拒绝",
+      "submitFailed": "提交失败",
+      "cancelConfirm": "确定取消此运行吗？取消后不能恢复。",
+      "paused": "运行已暂停",
+      "resumed": "运行已恢复",
+      "cancelled": "运行已取消",
+      "actionFailed": "操作失败",
+      "loading": "加载运行详情…",
+      "loadError": "运行详情加载失败：{error}",
+      "retry": "重试",
+      "pause": "暂停",
+      "resume": "恢复",
+      "cancelRun": "取消运行",
+      "refreshFailed": "刷新失败：{error}",
+      "approvalWaiting": "审批节点“{id}”等待人工确认",
+      "approvalHint": "通过后工作流继续；拒绝时需填写结构化反馈，供下一次执行改进。",
+      "submitting": "提交中…",
+      "approve": "通过",
+      "reject": "拒绝",
+      "rejectTitle": "拒绝审批并填写反馈",
+      "category": "问题类别",
+      "categories": {
+        "功能缺陷": "功能缺陷",
+        "样式": "样式",
+        "需求偏差": "需求偏差",
+        "其他": "其他"
+      },
+      "location": "位置",
+      "locationPlaceholder": "如：login.tsx:42 或结算页",
+      "expected": "期望结果",
+      "expectedPlaceholder": "如：点击后跳转首页",
+      "detail": "问题描述",
+      "detailPlaceholder": "具体哪里不对、如何复现",
+      "cancel": "取消",
+      "submitReject": "提交拒绝"
+    },
     "common": {
       "create": "创建",
       "save": "保存",
@@ -80,7 +158,8 @@
       "delete": "删除",
       "detail": "详情",
       "execute": "执行",
-      "loading": "加载中…"
+      "loading": "加载中…",
+      "retry": "重试"
     }
   }
 }

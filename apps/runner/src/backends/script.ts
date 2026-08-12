@@ -7,7 +7,7 @@ function interpreter(script: string): { cmd: string; args: string[]; stdin?: str
   const firstLine = script.split("\n")[0]?.trim();
   if (firstLine?.startsWith("#!")) {
     const parts = firstLine.slice(2).split(/\s+/);
-    return { cmd: parts[0], args: [...parts.slice(1), "-c", script] };
+    return { cmd: parts[0] ?? "bash", args: [...parts.slice(1), "-c", script] };
   }
   // Only check the body (after shebang) for ESM patterns to avoid
   // false-positives on #!/bin/sh scripts containing "async"/"import".
@@ -29,7 +29,10 @@ export async function* runScript(task: AgentTask): AsyncGenerator<AgentEvent> {
   yield { type: "session", status: "running" };
 
   const { cmd, args, stdin } = interpreter(task.prompt);
-  const env = { ...process.env, ...task.env };
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...process.env, ...task.env })) {
+    if (value !== undefined) env[key] = value;
+  }
 
   try {
     const { stdout, stderr, exitCode } = await runWithAbort(cmd, args, stdin, {

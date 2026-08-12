@@ -66,7 +66,7 @@ func TestNewHandlerServesRunsAndChatRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())
@@ -88,7 +88,7 @@ func TestNewHandlerServesRunsAndChatRoutes(t *testing.T) {
 		}
 		body := make([]byte, 4)
 		n, _ := res.Body.Read(body)
-		res.Body.Close()
+		_ = res.Body.Close()
 		if res.StatusCode != 200 {
 			t.Errorf("GET %s = %d", path, res.StatusCode)
 		}
@@ -144,7 +144,7 @@ func TestUploadAttachmentRejectsNonMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 400 {
 		t.Fatalf("non-multipart upload should 400, got %d", res.StatusCode)
 	}
@@ -158,7 +158,7 @@ func TestUploadAttachmentRejectsNonMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post2: %v", err)
 	}
-	res2.Body.Close()
+	_ = res2.Body.Close()
 	if res2.StatusCode != 400 {
 		t.Fatalf("multipart without file should 400, got %d", res2.StatusCode)
 	}
@@ -175,7 +175,7 @@ func TestOkrUpdateRejectsMalformedBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 400 {
 		t.Fatalf("malformed OKR body should 400, got %d", res.StatusCode)
 	}
@@ -187,7 +187,7 @@ func TestExecuteWorkItemPausedRunLandsInReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())
@@ -224,7 +224,7 @@ func TestTrackRunProgressProjectsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(context.Background())

@@ -6,13 +6,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,10 +50,14 @@ func loadSMTPFromLocalConfig() {
 		return
 	}
 	if os.Getenv("SMTP_HOST") == "" {
-		os.Setenv("SMTP_HOST", cfg.SMTP.Addr)
+		if err := os.Setenv("SMTP_HOST", cfg.SMTP.Addr); err != nil {
+			slog.Warn("set SMTP_HOST from local config", "err", err)
+		}
 	}
 	if os.Getenv("SMTP_FROM") == "" && cfg.SMTP.From != "" {
-		os.Setenv("SMTP_FROM", cfg.SMTP.From)
+		if err := os.Setenv("SMTP_FROM", cfg.SMTP.From); err != nil {
+			slog.Warn("set SMTP_FROM from local config", "err", err)
+		}
 	}
 }
 
@@ -59,6 +66,10 @@ func main() {
 	// Auth: read API token from env (NOT argv — /proc/<pid>/cmdline is world-readable).
 	// Empty = desktop/localhost mode with no auth gate.
 	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")
+	httpAddr := envOr("CONTROL_HTTP_ADDR", "127.0.0.1:"+envOr("CONTROL_HTTP_PORT", "8081"))
+	if err := validateRuntimeConfig(httpAddr); err != nil {
+		log.Fatal(err)
+	}
 	// M4 (round-3 review): auth defaults to fail-open (desktop near no-op); on a
 	// shared/networked host that forgets CONTROL_API_TOKEN this silently exposes
 	// the API — warn loudly so it is not deployed open by accident.
@@ -67,8 +78,14 @@ func main() {
 	}
 
 	url := envOr("CONTROL_NATS_URL", "nats://127.0.0.1:4222")
-	nc, err := nats.Connect(url, nats.Name("chaosplus-server-ai"), nats.Timeout(5*time.Second),
-		nats.NoEcho()) // prevent self-receive of published run events
+	natsOpts := []nats.Option{nats.Timeout(5 * time.Second)}
+	if token := os.Getenv("CONTROL_NATS_TOKEN"); token != "" {
+		natsOpts = append(natsOpts, nats.Token(token))
+	}
+	nc, err := nats.Connect(url, append(natsOpts,
+		nats.Name("chaosplus-server-ai"),
+		nats.NoEcho(), // prevent self-receive of published run events
+	)...)
 	if err != nil {
 		log.Fatalf("connect NATS %s: %v", url, err)
 	}
@@ -78,7 +95,7 @@ func main() {
 	// register/event messages that the gateway (on the NoEcho conn) subscribes
 	// to — a NoEcho conn cannot receive messages it published itself, so sharing
 	// `nc` would silently make the gateway never see runner registrations.
-	ncBridge, err := nats.Connect(url, nats.Name("chaosplus-server-ai-bridge"), nats.Timeout(5*time.Second))
+	ncBridge, err := nats.Connect(url, append(natsOpts, nats.Name("chaosplus-server-ai-bridge"))...)
 	if err != nil {
 		log.Fatalf("connect NATS bridge %s: %v", url, err)
 	}
@@ -97,7 +114,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("open store: %v", err)
 		}
-		defer st.Close()
+		defer func() { _ = st.Close() }()
 		// Crash recovery: runs left mid-flight by a dead process are surfaced via
 		// LoadActiveRunDefinitions; no terminal flip here (merged base design).
 		g.OnEvent(func(ev gateway.RunnerEvent) {
@@ -142,13 +159,18 @@ func main() {
 	if err := rm.Start(ctx); err != nil {
 		log.Fatalf("run manager: %v", err)
 	}
-	if n, err := st.ReconcileStaleRunning(ctx); err != nil {
-		slog.Warn("reconcile stale work items", "err", err)
-	} else if n > 0 {
-		slog.Info("reconciled work items stuck in_progress from a previous process", "count", n)
+	if st != nil {
+		if n, err := st.ReconcileStaleRunning(ctx); err != nil {
+			slog.Warn("reconcile stale work items", "err", err)
+		} else if n > 0 {
+			slog.Info("reconciled work items stuck in_progress from a previous process", "count", n)
+		}
 	}
 	// Rehydrate runs from store so UI shows history across restarts (§15.1).
 	if st != nil {
+		if err := st.RebuildCoreProjectionsIfEmpty(ctx); err != nil {
+			log.Fatalf("rebuild core projections: %v", err)
+		}
 		rm.LoadFromStore(ctx)
 	}
 
@@ -156,15 +178,27 @@ func main() {
 	if st != nil {
 		chat = server.NewChatService(st, link, g, rm, envOr("CONTROL_RUNNER_ID", ""), envOr("CHAT_WORKSPACE_ROOT", defaultWorkspaceRoot()))
 	}
-	httpAddr := ":" + envOr("CONTROL_HTTP_PORT", "8081")
-	hs := &http.Server{Addr: httpAddr, Handler: server.NewHandler(rm, hub, chat)}
+	hs := &http.Server{
+		Addr:              httpAddr,
+		Handler:           server.NewHandler(rm, hub, chat),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 	go func() {
 		log.Printf("server-ai HTTP listening on %s", httpAddr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("http server: %v", err)
 		}
 	}()
-	defer hs.Shutdown(context.Background())
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := hs.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP shutdown: %v", err)
+		}
+	}()
 
 	log.Printf("server-ai listening on NATS %s", url)
 	<-ctx.Done()
@@ -176,6 +210,40 @@ func envOr(key, def string) string {
 		return v
 	}
 	return fmt.Sprint(def)
+}
+
+func validateRuntimeConfig(httpAddr string) error {
+	if server.AuthToken == "" && !isLoopbackListenAddr(httpAddr) {
+		return errors.New("CONTROL_API_TOKEN is required when CONTROL_HTTP_ADDR is not loopback")
+	}
+	if !strings.EqualFold(os.Getenv("CONTROL_ENV"), "production") {
+		return nil
+	}
+	missing := make([]string, 0, 4)
+	for _, key := range []string{"CONTROL_API_TOKEN", "CONTROL_DB_DSN", "EMAIL_WEBHOOK_SECRET", "CONTROL_AUTH_HARDENED"} {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if value := os.Getenv("CONTROL_AUTH_HARDENED"); value != "" && value != "1" {
+		return errors.New("production configuration requires CONTROL_AUTH_HARDENED=1")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("production configuration requires %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // defaultWorkspaceRoot returns the CHAT_WORKSPACE_ROOT default:

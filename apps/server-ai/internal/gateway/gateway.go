@@ -22,17 +22,19 @@ const (
 
 // Spawn mirrors the daemon's SpawnCommand (AgentTask + run identity).
 type Spawn struct {
-	RunID        string `json:"runId"`
-	NodeID       string `json:"nodeId"`
-	Attempt      int    `json:"attempt"`
-	SpawnID      string `json:"spawnId"`
-	ExecutorType string `json:"executorType"`
-	Prompt       string `json:"prompt"`
-	Cwd          string `json:"cwd"`
-	SystemPrompt string `json:"systemPrompt,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	APIKey       string `json:"apiKey,omitempty"`
+	RunID        string   `json:"runId"`
+	NodeID       string   `json:"nodeId"`
+	Attempt      int      `json:"attempt"`
+	SpawnID      string   `json:"spawnId"`
+	ExecutorType string   `json:"executorType"`
+	Prompt       string   `json:"prompt"`
+	Cwd          string   `json:"cwd"`
+	SystemPrompt string   `json:"systemPrompt,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	Provider     string   `json:"provider,omitempty"`
+	APIKey       string   `json:"apiKey,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty"`
+	MaxTurns     int      `json:"maxTurns,omitempty"`
 }
 
 type runnerCmd struct {

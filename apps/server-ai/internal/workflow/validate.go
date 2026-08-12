@@ -1,7 +1,11 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // Graph bounds (M5): a workflow beyond these is rejected at validation so a
@@ -28,6 +32,11 @@ func (d *WorkflowDef) Validate() error {
 	}
 	if d.Version == "" {
 		return fmt.Errorf("workflow: missing version")
+	}
+	if len(d.ContextSchema) > 0 {
+		if _, err := compileContextSchema(d.ContextSchema); err != nil {
+			return fmt.Errorf("workflow %s: invalid contextSchema: %w", d.ID, err)
+		}
 	}
 
 	nodes := make(map[string]*Node, len(d.Nodes))
@@ -134,6 +143,43 @@ func validateNodeFields(wfID, id string, n *Node) error {
 		if n.Agent == nil {
 			return fmt.Errorf("workflow %s: node %q (agent) missing agent spec", wfID, id)
 		}
+		if n.Agent.Executor == "" {
+			return fmt.Errorf("workflow %s: node %q (agent) missing executor", wfID, id)
+		}
+		// These fields are part of the public contract but the current runner
+		// protocol cannot enforce them yet. Reject them at authoring time instead
+		// of silently weakening an approved agent spec.
+		if len(n.Agent.ForbiddenActions) > 0 {
+			return fmt.Errorf("workflow %s: node %q forbiddenActions is not supported by this runner; refusing to run without enforcement", wfID, id)
+		}
+		if len(n.Agent.AllowedMCPTools) > 0 {
+			return fmt.Errorf("workflow %s: node %q allowedMCPTools is not supported by this runner; refusing to run without enforcement", wfID, id)
+		}
+		if len(n.Agent.RequiredSkills) > 0 {
+			return fmt.Errorf("workflow %s: node %q requiredSkills is not supported by this runner; refusing to run without injection", wfID, id)
+		}
+		if len(n.Agent.AllowedTools) > 0 && n.Agent.Executor != "claude" && n.Agent.Executor != "codex" {
+			return fmt.Errorf("workflow %s: node %q allowedTools cannot be enforced by executor %q", wfID, id, n.Agent.Executor)
+		}
+		if n.Agent.Hooks != nil {
+			return fmt.Errorf("workflow %s: node %q hooks are not supported by this runner; refusing to skip them", wfID, id)
+		}
+		if n.Agent.InputSpec != nil && n.Agent.InputSpec.InputValidator != nil {
+			return fmt.Errorf("workflow %s: node %q inputValidator is not supported before spawn; refusing to skip it", wfID, id)
+		}
+		if n.Agent.OutputSpec != nil && n.Agent.OutputSpec.OutputValidator != nil {
+			if err := validateCommandRef(*n.Agent.OutputSpec.OutputValidator); err != nil {
+				return fmt.Errorf("workflow %s: node %q outputValidator: %w", wfID, id, err)
+			}
+		}
+		for i, validator := range n.Agent.ValidatorSpecs {
+			if validator.Layer != "automated" {
+				return fmt.Errorf("workflow %s: node %q validatorSpecs[%d] layer %q is not supported inline; use a human_approval or agent node", wfID, id, i, validator.Layer)
+			}
+			if err := validateCommandRef(validator.Ref); err != nil {
+				return fmt.Errorf("workflow %s: node %q validatorSpecs[%d]: %w", wfID, id, i, err)
+			}
+		}
 		if r := n.Agent.Retry; r != nil {
 			if r.MaxAttempts < 1 || r.MaxAttempts > maxRetryAttempts {
 				return fmt.Errorf("workflow %s: node %q retry.maxAttempts must be in [1,%d] (got %d)", wfID, id, maxRetryAttempts, r.MaxAttempts)
@@ -147,6 +193,15 @@ func validateNodeFields(wfID, id string, n *Node) error {
 	case NodeHumanApproval:
 		if n.HumanApproval == nil {
 			return fmt.Errorf("workflow %s: node %q (human_approval) missing humanApproval spec", wfID, id)
+		}
+		if n.HumanApproval.TimeoutMs < 0 {
+			return fmt.Errorf("workflow %s: node %q humanApproval.timeoutMs must be non-negative", wfID, id)
+		}
+		if n.HumanApproval.OnTimeout != "pause" && n.HumanApproval.OnTimeout != "auto_reject" {
+			return fmt.Errorf("workflow %s: node %q humanApproval.onTimeout must be pause or auto_reject", wfID, id)
+		}
+		if n.HumanApproval.OnReject != "pause" && n.HumanApproval.OnReject != "retry" {
+			return fmt.Errorf("workflow %s: node %q humanApproval.onReject must be pause or retry", wfID, id)
 		}
 	case NodeCondition:
 		if n.Condition == nil || len(n.Condition.Expr) == 0 {
@@ -186,11 +241,54 @@ func validateNodeFields(wfID, id string, n *Node) error {
 		if err := sub.Validate(); err != nil {
 			return fmt.Errorf("workflow %s: group %q: %w", wfID, id, err)
 		}
-	case NodeJoin, NodeSubworkflow:
-		// join is edge-defined; subworkflow is reserved for v1 (schema accepts,
-		// scheduler rejects at run time).
+	case NodeSubworkflow:
+		return fmt.Errorf("workflow %s: node %q uses unsupported subworkflow; resolve it before submission", wfID, id)
+	case NodeJoin:
+		// join is edge-defined.
 	default:
 		return fmt.Errorf("workflow %s: node %q unknown type %q", wfID, id, n.Type)
+	}
+	return nil
+}
+
+func validateCommandRef(ref string) error {
+	if !strings.HasPrefix(strings.TrimSpace(ref), "cmd:") || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "cmd:")) == "" {
+		return fmt.Errorf("only non-empty cmd: validators are supported")
+	}
+	return nil
+}
+
+func compileContextSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, err
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("context-schema.json", document); err != nil {
+		return nil, err
+	}
+	return compiler.Compile("context-schema.json")
+}
+
+// ValidateContext checks StartRun context_json against WorkflowDef.contextSchema.
+// An absent schema accepts any valid JSON value; an absent context is `{}`.
+func (d *WorkflowDef) ValidateContext(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("context is not valid JSON: %w", err)
+	}
+	if len(d.ContextSchema) == 0 {
+		return nil
+	}
+	schema, err := compileContextSchema(d.ContextSchema)
+	if err != nil {
+		return fmt.Errorf("compile contextSchema: %w", err)
+	}
+	if err := schema.Validate(value); err != nil {
+		return fmt.Errorf("context does not match contextSchema: %w", err)
 	}
 	return nil
 }

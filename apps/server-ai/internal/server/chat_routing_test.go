@@ -54,7 +54,7 @@ func TestRouteAgentMentionBeatsScoreAndBusyBreaksTies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	be1 := &store.AgentSpec{ID: "ag-be1", Name: "be-one", Runtime: "claude", SystemPrompt: "你是后端开发,负责 Go/API/数据库。"}
 	be2 := &store.AgentSpec{ID: "ag-be2", Name: "be-two", Runtime: "claude", SystemPrompt: "你是后端开发,负责 Go/API/数据库。"}
@@ -320,7 +320,7 @@ func TestDissolveChannelOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 403 {
 		t.Fatalf("non-owner dissolve should 403, got %d", res.StatusCode)
 	}
@@ -335,7 +335,7 @@ func TestDissolveChannelOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	res2.Body.Close()
+	_ = res2.Body.Close()
 	if res2.StatusCode != 200 {
 		t.Fatalf("owner dissolve: %d", res2.StatusCode)
 	}
@@ -352,7 +352,7 @@ func TestDissolveChannelOwnerOnly(t *testing.T) {
 	// 不存在的频道 404。
 	req3, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/ch-nope", nil)
 	res3, _ := http.DefaultClient.Do(req3)
-	res3.Body.Close()
+	_ = res3.Body.Close()
 	if res3.StatusCode != 404 {
 		t.Fatalf("unknown channel should 404, got %d", res3.StatusCode)
 	}
@@ -370,7 +370,7 @@ func TestChannelCanBeRecreatedAfterDissolve(t *testing.T) {
 	req, _ := http.NewRequest("DELETE", srv.URL+"/api/channels/"+first.ID, nil)
 	req.Header.Set("X-Actor", "human")
 	res, _ := http.DefaultClient.Do(req)
-	res.Body.Close()
+	_ = res.Body.Close()
 
 	var second store.Channel
 	doJSON(t, "POST", srv.URL+"/api/channels", map[string]any{"name": "reuse"}, &second)
@@ -395,7 +395,7 @@ func TestChannelEventsWSRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	ch := &store.Channel{ID: "ch-ws", Name: "ws-test", OwnerID: "human"}
 	if err := st.CreateChannel(ctx, ch); err != nil {
@@ -413,7 +413,7 @@ func TestChannelEventsWSRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial ws: %v", err)
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
 
 	// 先收到回放(空)或直接收到实时消息。
@@ -422,7 +422,7 @@ func TestChannelEventsWSRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post message: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	var got store.ChannelMessage
 	if err := ws.ReadJSON(&got); err != nil {

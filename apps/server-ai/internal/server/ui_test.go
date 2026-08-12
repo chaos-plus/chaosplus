@@ -20,7 +20,7 @@ func TestUIServesPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	for _, want := range []string{"chaos.plus", "approve", "WebSocket"} {
 		if !strings.Contains(string(body), want) {

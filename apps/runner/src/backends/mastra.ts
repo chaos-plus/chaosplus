@@ -20,6 +20,7 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
 
   try {
     const agent = new Agent({
+      id: "executor",
       name: "executor",
       instructions: task.systemPrompt ?? "Complete the task. Your final output must be valid JSON.",
       model: task.model ?? "anthropic/claude-fable-5",
@@ -39,7 +40,7 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
     }
 
     // Report tool usage if available
-    const steps = (result as { steps?: Array<{ text?: string; toolCalls?: Array<{ toolName: string; args: unknown }> }> }).steps;
+    const steps = (result as unknown as { steps?: Array<{ text?: string; toolCalls?: Array<{ toolName: string; args: unknown }> }> }).steps;
     if (steps) {
       for (const step of steps) {
         if (step.toolCalls) {
@@ -51,8 +52,9 @@ export async function* runMastra(task: AgentTask): AsyncGenerator<AgentEvent> {
     }
 
     // Mastra reports cost on the result object
-    const costUsd = typeof (result as { experimental_totalCostUsd?: number }).experimental_totalCostUsd === "number"
-      ? (result as { experimental_totalCostUsd: number }).experimental_totalCostUsd
+    const resultWithCost = result as unknown as { experimental_totalCostUsd?: number };
+    const costUsd = typeof resultWithCost.experimental_totalCostUsd === "number"
+      ? resultWithCost.experimental_totalCostUsd
       : undefined;
 
     yield { type: "done", ok: true, exitCode: 0, costUsd };

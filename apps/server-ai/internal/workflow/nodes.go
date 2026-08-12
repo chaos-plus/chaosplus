@@ -32,6 +32,12 @@ func (e *Engine) buildScope(contextJSON json.RawMessage) (map[string]any, error)
 				scope[id] = out
 			}
 		}
+		for _, artifact := range st.artifacts {
+			scope[artifact.ID] = map[string]any{
+				"path": artifact.Path, "type": artifact.Type,
+				"checksum": artifact.Checksum, "sizeBytes": artifact.SizeBytes,
+			}
+		}
 	}
 	return scope, nil
 }
@@ -51,6 +57,13 @@ func (e *Engine) execAgent(ctx context.Context, st *nodeState) error {
 		return err
 	}
 	st.output = result.Output
+	st.artifacts = result.Artifacts
+	for _, artifact := range result.Artifacts {
+		e.scope[artifact.ID] = map[string]any{
+			"path": artifact.Path, "type": artifact.Type,
+			"checksum": artifact.Checksum, "sizeBytes": artifact.SizeBytes,
+		}
+	}
 	st.preview = result.Preview
 	st.err = ""
 	// The node consumed its rejection feedback successfully; drop it so a later

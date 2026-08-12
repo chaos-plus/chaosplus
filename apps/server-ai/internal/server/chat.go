@@ -111,7 +111,7 @@ func (cs *ChatService) channelEventsWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ch, unsub := cs.hub.subscribe(channelID)
 	defer unsub()
@@ -1138,7 +1138,7 @@ func (cs *ChatService) storeUpload(w http.ResponseWriter, r *http.Request, owner
 		writeErr(w, 400, "file field required")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	root := os.Getenv("ARTIFACT_ROOT")
 	if root == "" {
 		root = filepath.Join(cs.wsRoot, "attachments")
@@ -1158,7 +1158,9 @@ func (cs *ChatService) storeUpload(w http.ResponseWriter, r *http.Request, owner
 		return
 	}
 	n, err := io.Copy(dst, file)
-	dst.Close()
+	if closeErr := dst.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		_ = os.Remove(path) // 半截文件不留在磁盘上
 		slog.Error("write attachment", "err", err)

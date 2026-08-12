@@ -1,6 +1,10 @@
 package workflow
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestValidateApprovalEdges(t *testing.T) {
 	base := testApprovalDef() // trigger -> approval -> agent
@@ -20,6 +24,64 @@ func TestValidateApprovalEdges(t *testing.T) {
 	terminal.Edges = terminal.Edges[:1]
 	if err := terminal.Validate(); err != nil {
 		t.Fatalf("terminal approval node should validate: %v", err)
+	}
+}
+
+func TestValidateContextSchema(t *testing.T) {
+	def := testApprovalDef()
+	def.ContextSchema = json.RawMessage(`{
+		"type":"object",
+		"required":["ticket"],
+		"additionalProperties":false,
+		"properties":{"ticket":{"type":"string","minLength":1}}
+	}`)
+	if err := def.Validate(); err != nil {
+		t.Fatalf("valid context schema: %v", err)
+	}
+	if err := def.ValidateContext(json.RawMessage(`{"ticket":"CP-42"}`)); err != nil {
+		t.Fatalf("matching context: %v", err)
+	}
+	if err := def.ValidateContext(json.RawMessage(`{"ticket":42}`)); err == nil || !strings.Contains(err.Error(), "contextSchema") {
+		t.Fatalf("mismatching context should fail with contextSchema detail, got %v", err)
+	}
+
+	def.ContextSchema = json.RawMessage(`{"type":"not-a-json-schema-type"}`)
+	if err := def.Validate(); err == nil {
+		t.Fatal("invalid contextSchema must fail definition validation")
+	}
+}
+
+func TestValidateFailsClosedForUnsupportedAgentConstraints(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ExecutorAgentSpec)
+	}{
+		{"forbidden actions", func(a *ExecutorAgentSpec) { a.ForbiddenActions = []string{"git push --force"} }},
+		{"MCP tools", func(a *ExecutorAgentSpec) { a.AllowedMCPTools = []string{"github.search"} }},
+		{"required skills", func(a *ExecutorAgentSpec) { a.RequiredSkills = []string{"security-review"} }},
+		{"hooks", func(a *ExecutorAgentSpec) { command := "cmd:true"; a.Hooks = &HooksSpec{Pre: &command} }},
+		{"input validator", func(a *ExecutorAgentSpec) {
+			validator := "cmd:true"
+			a.InputSpec = &InputSpec{InputValidator: &validator}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := testApprovalDef()
+			tt.mutate(def.Nodes[2].Agent)
+			if err := def.Validate(); err == nil {
+				t.Fatal("unsupported constraint must be rejected, never ignored")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsSubworkflowAtSubmission(t *testing.T) {
+	def := &WorkflowDef{ID: "parent", Version: "1", Nodes: []Node{{
+		ID: "child", Type: NodeSubworkflow, Subworkflow: &SubworkflowSpec{Ref: "workflow:child"},
+	}}}
+	if err := def.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported subworkflow") {
+		t.Fatalf("subworkflow must fail before runtime, got %v", err)
 	}
 }
 

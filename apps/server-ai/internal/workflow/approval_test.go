@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -24,6 +25,21 @@ func TestApprovalBrokerWaitResolve(t *testing.T) {
 	}
 	if d, ok := b.Decision("n1"); !ok || !d.OK {
 		t.Errorf("decision = %+v, want ok=true", d)
+	}
+}
+
+func TestApprovalExecutorTimeoutPolicies(t *testing.T) {
+	base := &MockExecutor{}
+	pause := NewApprovalExecutor(base, NewApprovalBroker())
+	_, err := pause.Approve(context.Background(), &Node{ID: "pause", HumanApproval: &HumanApprovalSpec{TimeoutMs: 10, OnTimeout: "pause"}})
+	if !errors.Is(err, ErrApprovalTimedOut) {
+		t.Fatalf("pause timeout = %v, want ErrApprovalTimedOut", err)
+	}
+
+	autoReject := NewApprovalExecutor(base, NewApprovalBroker())
+	decision, err := autoReject.Approve(context.Background(), &Node{ID: "reject", HumanApproval: &HumanApprovalSpec{TimeoutMs: 10, OnTimeout: "auto_reject"}})
+	if err != nil || decision.OK || decision.Feedback == nil || decision.Feedback.Category != FeedbackOther {
+		t.Fatalf("auto-reject timeout = (%+v, %v)", decision, err)
 	}
 }
 

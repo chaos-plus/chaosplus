@@ -70,7 +70,7 @@ func doJSON(t *testing.T, method, url string, body any, out any) int {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if out != nil {
 		_ = json.NewDecoder(res.Body).Decode(out)
 	}
@@ -234,7 +234,7 @@ func TestAttachmentUploadServeAndList(t *testing.T) {
 	}
 	var att store.Attachment
 	_ = json.NewDecoder(res.Body).Decode(&att)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 201 || att.ID == "" || att.Filename != "note.txt" || att.SizeBytes != 15 {
 		t.Fatalf("upload wrong: %d %+v", res.StatusCode, att)
 	}
@@ -246,7 +246,7 @@ func TestAttachmentUploadServeAndList(t *testing.T) {
 	}
 	body := make([]byte, 64)
 	n, _ := dl.Body.Read(body)
-	dl.Body.Close()
+	_ = dl.Body.Close()
 	if string(body[:n]) != "attachment body" {
 		t.Fatalf("content mismatch: %q", body[:n])
 	}
@@ -407,7 +407,7 @@ func TestAttachmentServingIgnoresClientMimeAndHardensHeaders(t *testing.T) {
 	}
 	var att store.Attachment
 	_ = json.NewDecoder(res.Body).Decode(&att)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if att.Mime == "text/html" {
 		t.Fatalf("client-declared text/html must not be stored verbatim: %+v", att)
 	}
@@ -416,7 +416,7 @@ func TestAttachmentServingIgnoresClientMimeAndHardensHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
-	defer dl.Body.Close()
+	defer func() { _ = dl.Body.Close() }()
 	if ct := dl.Header.Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("html must not be served as text/html, got %q", ct)
 	}
@@ -433,12 +433,18 @@ func TestAttachmentServingIgnoresClientMimeAndHardensHeaders(t *testing.T) {
 	ifw, _ := imw.CreateFormFile("file", "pic.png")
 	_, _ = ifw.Write([]byte("\x89PNG\r\n\x1a\n"))
 	_ = imw.Close()
-	ires, _ := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", imw.FormDataContentType(), &ibuf)
+	ires, err := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", imw.FormDataContentType(), &ibuf)
+	if err != nil {
+		t.Fatalf("upload png: %v", err)
+	}
 	var iatt store.Attachment
 	_ = json.NewDecoder(ires.Body).Decode(&iatt)
-	ires.Body.Close()
-	idl, _ := http.Get(srv.URL + "/api/attachments/" + iatt.ID)
-	defer idl.Body.Close()
+	_ = ires.Body.Close()
+	idl, err := http.Get(srv.URL + "/api/attachments/" + iatt.ID)
+	if err != nil {
+		t.Fatalf("download png: %v", err)
+	}
+	defer func() { _ = idl.Body.Close() }()
 	if idl.Header.Get("Content-Type") != "image/png" {
 		t.Errorf("png should serve as image/png, got %q", idl.Header.Get("Content-Type"))
 	}
@@ -503,7 +509,7 @@ func TestUploadRejectsOversizeBody(t *testing.T) {
 
 	res, err := http.Post(srv.URL+"/api/work-items/"+it.ID+"/attachments", mw.FormDataContentType(), &buf)
 	if err == nil {
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		if res.StatusCode == 201 {
 			t.Fatal("oversize upload must be rejected")
 		}
@@ -521,7 +527,7 @@ func TestUpdateWorkItemRejectsMalformedBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 400 {
 		t.Fatalf("malformed PUT should 400, got %d", res.StatusCode)
 	}
@@ -572,7 +578,7 @@ func TestChannelAttachmentUploadAndList(t *testing.T) {
 	}
 	var att store.Attachment
 	_ = json.NewDecoder(res.Body).Decode(&att)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 201 || att.OwnerType != "channel" || att.OwnerID != ch.ID || att.Mime != "image/png" {
 		t.Fatalf("channel attachment wrong: %d %+v", res.StatusCode, att)
 	}

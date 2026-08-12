@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect, react-refresh/only-export-components */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import {
@@ -24,6 +23,7 @@ import { loadWorkflows, saveWorkflow, type SavedWorkflow } from "../../../lib/wo
 import { controlApi } from "../../../lib/control-api";
 
 const nodeTypes = { flow: FlowNode };
+const INTERNAL_NODE_KEYS = new Set(["label", "status", "type", "defaults"]);
 
 /** Empty canvas default: one trigger node. */
 function emptyCanvas(): { nodes: Node[]; edges: Edge[] } {
@@ -98,7 +98,7 @@ export default function EditorPage() {
       setNodes(n); setEdges(e);
     }
     return () => { cancelled = true; };
-  }, [wfId]);
+  }, [wfId, setEdges, setNodes]);
 
   const onConnect = useCallback((conn: Connection) => setEdges((eds) => addEdge(conn, eds)), [setEdges]);
 
@@ -135,10 +135,7 @@ export default function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedNode]);
-
-  // Internal keys: not serialized into WorkflowDef
-  const INTERNAL = new Set(["label", "status", "type", "defaults"]);
+  }, [selectedNode, setEdges, setNodes]);
 
   // Serialize canvas → WorkflowDef JSON. Merges node template defaults
   // with any property-panel edits (which write to top-level data keys).
@@ -151,7 +148,7 @@ export default function EditorPage() {
       Object.assign(d, defs);
       // Overlay all property-panel edits (top-level keys except internals)
       for (const [k, v] of Object.entries(data)) {
-        if (INTERNAL.has(k) || v === undefined) continue;
+        if (INTERNAL_NODE_KEYS.has(k) || v === undefined) continue;
         if (typeof v === "object" && v !== null && k in (defs as object)) {
           d[k] = { ...((defs as Record<string, unknown>)[k] as Record<string, unknown> ?? {}), ...(v as Record<string, unknown>) };
         } else {

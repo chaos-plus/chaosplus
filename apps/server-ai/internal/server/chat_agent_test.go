@@ -20,7 +20,7 @@ func TestStoreTypeForMapsEventsToPRDTypes(t *testing.T) {
 		{"review approved", RunEvent{NodeID: "ap", Review: &ReviewInfo{Approved: true}}, "REVIEW_APPROVED"},
 		{"review rejected", RunEvent{NodeID: "ap", Review: &ReviewInfo{Approved: false}}, "REVIEW_REJECTED"},
 		{"review requested", RunEvent{NodeID: "ap", Status: workflow.StatusWaitingApproval}, "REVIEW_REQUESTED"},
-		{"node completed", RunEvent{NodeID: "n1", Status: workflow.StatusCompleted}, "NODE_completed"},
+		{"node completed", RunEvent{NodeID: "n1", Status: workflow.StatusCompleted}, "NODE_COMPLETED"},
 		{"node retrying", RunEvent{NodeID: "n1", Status: workflow.StatusRetrying}, "NODE_RETRY_SCHEDULED"},
 	}
 	for _, c := range cases {

@@ -214,6 +214,16 @@ type Approvers struct {
 	Member []string
 }
 
+func (a Approvers) MarshalJSON() ([]byte, error) {
+	if a.Any {
+		return json.Marshal("any_human")
+	}
+	if a.Member == nil {
+		return json.Marshal([]string{})
+	}
+	return json.Marshal(a.Member)
+}
+
 // UnmarshalJSON accepts either the string "any_human" or a string array.
 func (a *Approvers) UnmarshalJSON(b []byte) error {
 	var s string

@@ -10,7 +10,7 @@ import (
 )
 
 // PRD §13 / F.3 / F.5: an agent node with retry.maxAttempts re-runs after a
-// failure (with backoff), and only stays failed once attempts are exhausted.
+// failure (with backoff), then pauses for a human once attempts are exhausted.
 func TestEngineRetriesAgentOnFailure(t *testing.T) {
 	def := mustDef(t, `{
 	  "id":"rt","version":"1","name":"retry",
@@ -60,7 +60,7 @@ func TestEngineRetriesAgentOnFailure(t *testing.T) {
 	}
 }
 
-func TestEngineRetryExhaustsToFailed(t *testing.T) {
+func TestEngineRetryExhaustsToPausedForHuman(t *testing.T) {
 	def := mustDef(t, `{
 	  "id":"rt2","version":"1","name":"retryfail",
 	  "nodes":[
@@ -87,8 +87,8 @@ func TestEngineRetryExhaustsToFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := statusOf(evs, "a"); got != StatusFailed {
-		t.Fatalf("node a = %s, want failed after exhausting retries", got)
+	if got := statusOf(evs, "a"); got != StatusPausedForHuman {
+		t.Fatalf("node a = %s, want paused_for_human after exhausting retries", got)
 	}
 	if calls != 2 {
 		t.Fatalf("node a ran %d times, want maxAttempts=2", calls)

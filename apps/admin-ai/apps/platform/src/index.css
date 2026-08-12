@@ -26,7 +26,7 @@
   --destructive: #ef4444;
   --border: #334155;
   --input: #334155;
-  --ring: #1e293b;
+  --ring: #4ade80;
   --sidebar: #0f172a;
   --sidebar-foreground: #f8fafc;
   --sidebar-primary: #1e293b;
@@ -34,5 +34,5 @@
   --sidebar-accent: #22c55e;
   --sidebar-accent-foreground: #052e16;
   --sidebar-border: #334155;
-  --sidebar-ring: #1e293b;
+  --sidebar-ring: #4ade80;
 }

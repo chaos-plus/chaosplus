@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,7 @@ const (
 	RunCompleted       RunStatus = "completed"
 	RunFailed          RunStatus = "failed"
 	RunPaused          RunStatus = "paused"
+	RunCancelled       RunStatus = "cancelled"
 )
 
 // ReviewInfo carries a human-approval resolution in the event stream.
@@ -49,15 +51,30 @@ type RunEvent struct {
 	NodeID string          `json:"nodeId,omitempty"`
 	Status workflow.Status `json:"status"`
 	// RunStatus is set only on run-level lifecycle events (RUN_STARTED/…).
-	RunStatus RunStatus       `json:"runStatus,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Attempt   int             `json:"attempt,omitempty"`
-	Review    *ReviewInfo     `json:"review,omitempty"`
+	RunStatus RunStatus                   `json:"runStatus,omitempty"`
+	Output    json.RawMessage             `json:"output,omitempty"`
+	Error     string                      `json:"error,omitempty"`
+	Attempt   int                         `json:"attempt,omitempty"`
+	Artifacts []workflow.ProducedArtifact `json:"artifacts,omitempty"`
+	Review    *ReviewInfo                 `json:"review,omitempty"`
+	EventType string                      `json:"eventType,omitempty"`
+	Snapshot  *RunSnapshot                `json:"snapshot,omitempty"`
 	Preview   *struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
 	} `json:"preview,omitempty"`
+}
+
+// RunSnapshot makes RUN_STARTED self-contained so workflow_runs can be rebuilt
+// from the append-only event log (PRD §15.1 World Reconstruction Test).
+type RunSnapshot struct {
+	Workflow   json.RawMessage `json:"workflow"`
+	Context    json.RawMessage `json:"context"`
+	Workspace  string          `json:"workspace"`
+	RunnerID   string          `json:"runnerId,omitempty"`
+	InstanceID string          `json:"instanceId"`
+	ProjectID  string          `json:"projectId"`
+	CreatedAt  int64           `json:"createdAt"`
 }
 
 // RunSubscriber receives live events for one run (a WS connection's channel).
@@ -65,10 +82,13 @@ type RunSubscriber chan RunEvent
 
 // Run is one in-memory workflow run (PRD workflow_runs table deferred).
 type Run struct {
-	ID      string
-	Def     *workflow.WorkflowDef
-	Broker  *workflow.ApprovalBroker
-	created time.Time
+	ID         string
+	Def        *workflow.WorkflowDef
+	Broker     *workflow.ApprovalBroker
+	InstanceID string
+	ProjectID  string
+	Workspace  string
+	created    time.Time
 
 	mu     sync.Mutex
 	status RunStatus
@@ -76,6 +96,8 @@ type Run struct {
 	subs   map[RunSubscriber]struct{}
 	seq    int
 	cancel context.CancelFunc
+	done   chan struct{}
+	req    LaunchRequest
 }
 
 func (r *Run) publish(ev RunEvent) {
@@ -152,6 +174,9 @@ type LaunchRequest struct {
 	Workspace    string          `json:"workspace"`
 	Context      json.RawMessage `json:"context"`
 	RunnerID     string          `json:"runnerId"`
+	ProjectID    string          `json:"projectId,omitempty"`
+	InstanceID   string          `json:"-"`
+	OwnerID      string          `json:"-"`
 }
 
 // RunManager owns live runs and the NATS fan-out to their WS subscribers.
@@ -167,6 +192,7 @@ type RunManager struct {
 	sub         *nats.Subscription
 	baseFactory func(runID string) workflow.Executor // test seam; nil → RunnerExecutor
 	picker      workflow.MachinePicker               // per-node machine selector (nil = use runnerID)
+	processCtx  context.Context
 }
 
 func NewRunManager(nc *nats.Conn, link workflow.RunnerLink, st *store.Store, runnerID string) *RunManager {
@@ -182,6 +208,9 @@ func (m *RunManager) SetMachinePicker(p workflow.MachinePicker) {
 // Start subscribes chaos.run.*.evt and fans out each event to the matching
 // run's subscribers. Safe to call once.
 func (m *RunManager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	m.processCtx = ctx
+	m.mu.Unlock()
 	sub, err := m.nc.Subscribe(runSubjectPrefix+">", func(msg *nats.Msg) {
 		var ev RunEvent
 		if err := json.Unmarshal(msg.Data, &ev); err != nil {
@@ -202,11 +231,23 @@ func (m *RunManager) Start(ctx context.Context) error {
 		return fmt.Errorf("subscribe run events: %w", err)
 	}
 	m.sub = sub
+	if m.st != nil && m.link != nil {
+		go m.reconcileLoop(ctx)
+	}
 	go func() {
 		<-ctx.Done()
 		_ = sub.Unsubscribe()
 	}()
 	return nil
+}
+
+func (m *RunManager) Context() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.processCtx != nil {
+		return m.processCtx
+	}
+	return context.Background()
 }
 
 func (m *RunManager) List() []*Run {
@@ -219,11 +260,33 @@ func (m *RunManager) List() []*Run {
 	return out
 }
 
+func (m *RunManager) ListFor(instanceID string) []*Run {
+	all := m.List()
+	if instanceID == "" {
+		return all
+	}
+	out := make([]*Run, 0, len(all))
+	for _, run := range all {
+		if run.InstanceID == instanceID {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
 func (m *RunManager) Get(id string) (*Run, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.runs[id]
 	return r, ok
+}
+
+func (m *RunManager) GetFor(id, instanceID string) (*Run, bool) {
+	run, ok := m.Get(id)
+	if !ok || (instanceID != "" && run.InstanceID != instanceID) {
+		return nil, false
+	}
+	return run, true
 }
 
 // randRunSuffix returns a short random hex so run IDs stay unique across restarts.
@@ -280,20 +343,49 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 	if err := def.Validate(); err != nil {
 		return nil, fmt.Errorf("validate workflow: %w", err)
 	}
+	if len(req.Context) == 0 {
+		req.Context = json.RawMessage(`{}`)
+	}
+	if err := def.ValidateContext(req.Context); err != nil {
+		return nil, fmt.Errorf("validate workflow context: %w", err)
+	}
 	run := m.newRun(&def)
 	if req.Workspace == "" {
 		req.Workspace = filepath.Join(os.TempDir(), "run-"+run.ID)
 	}
+	if req.InstanceID == "" {
+		req.InstanceID = "desktop"
+	}
+	if req.ProjectID == "" {
+		req.ProjectID = req.Workspace
+	}
+	run.InstanceID = req.InstanceID
+	run.ProjectID = req.ProjectID
+	run.Workspace = req.Workspace
+	run.req = req
 	// Persist the run definition so it survives restarts (PRD §15.1).
 	if m.st != nil {
 		defJSON, _ := json.Marshal(&def)
 		_ = m.st.SaveRunDefinition(context.Background(), store.RunDef{
 			ID: run.ID, DefJSON: string(defJSON), Status: string(RunRunning),
+			ContextJSON: string(req.Context), Workspace: req.Workspace, RunnerID: req.RunnerID,
+			InstanceID: req.InstanceID, ProjectID: req.ProjectID,
 		})
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	if err := m.startEngine(ctx, run, req, nil); err != nil {
+		m.failPersistedRun(run.ID)
+		return nil, err
+	}
+	return run, nil
+}
+
+func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchRequest, restored []workflow.Event) error {
+	runCtx, cancelCause := context.WithCancelCause(ctx)
+	cancel := func() { cancelCause(workflow.ErrRunInterrupted) }
+	done := make(chan struct{})
 	run.mu.Lock()
 	run.cancel = cancel
+	run.done = done
 	run.mu.Unlock()
 	broker := run.Broker
 	broker.OnDecision = func(nodeID string, d workflow.Decision) {
@@ -316,25 +408,40 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			reg := m.link.RegisteredRunners()
 			if len(reg) == 0 {
 				cancel()
-				m.failPersistedRun(run.ID)
-				return nil, fmt.Errorf("no runner registered; set runnerId or start a daemon")
+				return fmt.Errorf("no runner registered; set runnerId or start a daemon")
 			}
 			runnerID = reg[0]
 		}
 		base = workflow.NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID).
-			WithMachinePicker(m.picker)
+			WithMachinePicker(m.picker).
+			WithAttemptOffsets(attemptOffsets(run.Events()))
 	}
 	exec := workflow.NewApprovalExecutor(base, broker)
 
-	eng, err := workflow.NewEngine(&def, exec)
+	eng, err := workflow.NewEngine(run.Def, exec)
 	if err != nil {
 		cancel()
-		m.failPersistedRun(run.ID)
-		return nil, err
+		return err
 	}
-	m.emit(run, RunEvent{RunStatus: RunRunning})
+	if len(restored) > 0 {
+		if err := eng.Restore(restored); err != nil {
+			cancel()
+			return err
+		}
+	}
+	defJSON, _ := json.Marshal(run.Def)
+	eventType := "RUN_STARTED"
+	var snapshot *RunSnapshot
+	if len(restored) > 0 {
+		eventType = "RUN_RESUMED"
+	} else {
+		snapshot = &RunSnapshot{Workflow: defJSON, Context: req.Context, Workspace: req.Workspace,
+			RunnerID: req.RunnerID, InstanceID: req.InstanceID, ProjectID: req.ProjectID, CreatedAt: run.created.UnixMilli()}
+	}
+	m.emit(run, RunEvent{RunStatus: RunRunning, EventType: eventType, Snapshot: snapshot})
 	go func() {
-		defer cancel()
+		defer cancelCause(nil)
+		defer close(done)
 		eng.OnEvent = func(ev workflow.Event) {
 			if ev.Status == workflow.StatusWaitingApproval {
 				run.setStatus(RunWaitingApproval)
@@ -342,14 +449,23 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 					_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunWaitingApproval))
 				}
 			}
+			if ev.Status == workflow.StatusPausedForHuman {
+				run.setStatus(RunPaused)
+				if m.st != nil {
+					_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(RunPaused))
+				}
+			}
 			m.emit(run, RunEvent{
 				Seq: ev.Seq, NodeID: ev.NodeID,
 				Status: ev.Status, Output: ev.Output, Error: ev.Error,
-				Attempt: ev.Attempt, Preview: ev.Preview,
+				Attempt: ev.Attempt, Artifacts: ev.Artifacts, Preview: ev.Preview,
 			})
 		}
 		_, err := eng.Run(runCtx, req.Context)
-		final := m.finalStatus(run, err)
+		final := run.Status()
+		if final != RunPaused && final != RunCancelled {
+			final = m.finalStatus(run, err)
+		}
 		run.setStatus(final)
 		// Run-level terminal event (F.2 RUN_COMPLETED/FAILED/PAUSED).
 		m.emit(run, RunEvent{RunStatus: run.Status()})
@@ -358,7 +474,21 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 			_ = m.st.UpdateRunStatus(context.Background(), run.ID, string(final))
 		}
 	}()
-	return run, nil
+	return nil
+}
+
+func attemptOffsets(events []RunEvent) map[string]int {
+	offsets := make(map[string]int)
+	for _, event := range events {
+		if event.NodeID == "" {
+			continue
+		}
+		attempt := event.Attempt + 1
+		if attempt > offsets[event.NodeID] {
+			offsets[event.NodeID] = attempt
+		}
+	}
+	return offsets
 }
 
 // finalStatus derives the terminal run status from the engine result and the
@@ -421,6 +551,74 @@ func (m *RunManager) Approve(runID, nodeID string, ok bool, reason string, fb *w
 	return run.Broker.Resolve(nodeID, ok, reason, fb)
 }
 
+func (m *RunManager) Pause(runID string) error {
+	run, ok := m.Get(runID)
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	status := run.Status()
+	if status != RunRunning && status != RunWaitingApproval {
+		return fmt.Errorf("run %s cannot pause from %s", runID, status)
+	}
+	run.setStatus(RunPaused)
+	run.mu.Lock()
+	cancel := run.cancel
+	run.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+func (m *RunManager) Cancel(runID string) error {
+	run, ok := m.Get(runID)
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	status := run.Status()
+	if status == RunCompleted || status == RunFailed || status == RunCancelled {
+		return fmt.Errorf("run %s cannot cancel from %s", runID, status)
+	}
+	run.setStatus(RunCancelled)
+	run.mu.Lock()
+	cancel := run.cancel
+	run.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+func (m *RunManager) Resume(runID string) error {
+	run, ok := m.Get(runID)
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	if run.Status() != RunPaused {
+		return fmt.Errorf("run %s cannot resume from %s", runID, run.Status())
+	}
+	run.mu.Lock()
+	done := run.done
+	run.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		default:
+			return fmt.Errorf("run %s is still pausing", runID)
+		}
+	}
+	restored := make([]workflow.Event, 0)
+	for _, event := range run.Events() {
+		if event.NodeID != "" && event.Review == nil {
+			restored = append(restored, workflow.Event{NodeID: event.NodeID, Status: event.Status,
+				Output: event.Output, Error: event.Error, Attempt: event.Attempt, Artifacts: event.Artifacts})
+		}
+	}
+	run.Broker = workflow.NewApprovalBroker()
+	run.setStatus(RunRunning)
+	return m.startEngine(m.Context(), run, run.req, restored)
+}
+
 // emit delivers an event to the run's subscribers, publishes it to NATS
 // (cluster fan-out), and persists it to the StateStore when configured.
 // Local delivery happens FIRST so the NATS echo of this same instance finds the
@@ -430,6 +628,7 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 	ev.RunID = run.ID
 	run.publish(ev)
 	m.persistNodeExecution(run, ev)
+	m.persistArtifacts(run, ev)
 	data, _ := json.Marshal(ev)
 	if err := m.nc.Publish(runSubjectPrefix+run.ID+".evt", data); err != nil {
 		slog.Warn("publish run event", "err", err)
@@ -439,7 +638,7 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 		payload, _ := json.Marshal(ev)
 		if err := m.st.Append(context.Background(), store.Event{
 			ID:             fmt.Sprintf("%s-%d", run.ID, ev.Seq),
-			InstanceID:     "desktop",
+			InstanceID:     run.InstanceID,
 			RunID:          run.ID,
 			Type:           typ,
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, typ, ev.Seq),
@@ -449,6 +648,59 @@ func (m *RunManager) emit(run *Run, ev RunEvent) {
 			slog.Error("persist run event", "run", run.ID, "seq", ev.Seq, "type", typ, "err", err)
 		}
 	}
+}
+
+func (m *RunManager) persistArtifacts(run *Run, ev RunEvent) {
+	if m.st == nil || len(ev.Artifacts) == 0 {
+		return
+	}
+	node := nodeByID(run.Def, ev.NodeID)
+	consumes := []string{}
+	if node != nil && node.Agent != nil && node.Agent.InputSpec != nil {
+		for _, consume := range node.Agent.InputSpec.Consumes {
+			consumes = append(consumes, consume.ID)
+		}
+	}
+	deps, err := m.st.ResolveArtifacts(context.Background(), run.InstanceID, run.ProjectID, consumes)
+	if err != nil {
+		slog.Warn("resolve artifact dependencies", "run", run.ID, "node", ev.NodeID, "err", err)
+		return
+	}
+	for _, produced := range ev.Artifacts {
+		id := artifactIdentity(run.InstanceID, run.ProjectID, produced.Path)
+		artifact := store.Artifact{
+			ID: id, InstanceID: run.InstanceID, ProjectID: run.ProjectID,
+			LogicalID: produced.ID, LogicalPath: produced.Path, Type: produced.Type,
+			Checksum: produced.Checksum, SizeBytes: produced.SizeBytes, Status: store.ArtifactValid,
+			ProducerRunID: run.ID, ProducerNode: ev.NodeID, Attempt: ev.Attempt + 1,
+			RunnerID: produced.RunnerID, SpawnID: produced.SpawnID,
+		}
+		if err := m.st.UpsertArtifact(context.Background(), artifact, deps); err != nil {
+			slog.Error("persist artifact", "run", run.ID, "node", ev.NodeID, "artifact", produced.ID, "err", err)
+			continue
+		}
+		edges := make([]store.ArtifactDep, 0, len(deps))
+		for _, dep := range deps {
+			edges = append(edges, store.ArtifactDep{ArtifactID: artifact.ID, DependsOnID: dep.ID, InputChecksum: dep.Checksum})
+		}
+		payload, _ := json.Marshal(struct {
+			Artifact     store.Artifact      `json:"artifact"`
+			Dependencies []store.ArtifactDep `json:"dependencies"`
+		}{Artifact: artifact, Dependencies: edges})
+		if err := m.st.Append(context.Background(), store.Event{
+			ID: fmt.Sprintf("artifact-%s-%d", id, time.Now().UnixNano()), InstanceID: run.InstanceID,
+			RunID: run.ID, Type: "ARTIFACT_PRODUCED",
+			IdempotencyKey: fmt.Sprintf("%s:%s:%d:%s:%s", run.ID, ev.NodeID, ev.Attempt, id, produced.Checksum),
+			PayloadJSON:    string(payload),
+		}); err != nil {
+			slog.Error("persist artifact event", "artifact", id, "err", err)
+		}
+	}
+}
+
+func artifactIdentity(instanceID, projectID, logicalPath string) string {
+	digest := sha256.Sum256([]byte(instanceID + "\x00" + projectID + "\x00" + logicalPath))
+	return fmt.Sprintf("art-%x", digest[:12])
 }
 
 // failPersistedRun marks a run failed in the store after a launch error, so a
@@ -520,6 +772,9 @@ func (m *RunManager) recordReviewProjection(run *Run, nodeID string, d workflow.
 }
 
 func storeTypeFor(ev RunEvent) string {
+	if ev.EventType != "" {
+		return ev.EventType
+	}
 	// Run-level lifecycle events (F.2 RUN_STARTED/COMPLETED/FAILED/PAUSED).
 	if ev.RunStatus != "" {
 		switch ev.RunStatus {
@@ -531,6 +786,8 @@ func storeTypeFor(ev RunEvent) string {
 			return "RUN_FAILED"
 		case RunPaused, RunWaitingApproval:
 			return "RUN_PAUSED"
+		case RunCancelled:
+			return "RUN_CANCELLED"
 		}
 	}
 	switch {
@@ -547,7 +804,20 @@ func storeTypeFor(ev RunEvent) string {
 		// F.2: a failed attempt with a retry scheduled is NODE_RETRY_SCHEDULED,
 		// not a terminal NODE_FAILED — consumers must not treat it as failure.
 		return "NODE_RETRY_SCHEDULED"
+	case ev.Status == workflow.StatusPausedForHuman:
+		return "NODE_PAUSED_FOR_HUMAN"
 	default:
-		return "NODE_" + string(ev.Status)
+		switch ev.Status {
+		case workflow.StatusRunning:
+			return "NODE_STARTED"
+		case workflow.StatusCompleted:
+			return "NODE_COMPLETED"
+		case workflow.StatusFailed:
+			return "NODE_FAILED"
+		case workflow.StatusSkipped:
+			return "NODE_SKIPPED"
+		default:
+			return "NODE_EVENT"
+		}
 	}
 }

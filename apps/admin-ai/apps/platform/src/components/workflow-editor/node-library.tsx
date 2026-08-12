@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/set-state-in-effect, react-refresh/only-export-components */
+/* eslint-disable react-refresh/only-export-components */
 import type { DragEvent } from "react";
 
 export interface NodeTemplate {

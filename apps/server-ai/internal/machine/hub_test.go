@@ -55,7 +55,7 @@ func TestHubHandshakeInvalidToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("invalid token status = %d, want 401", resp.StatusCode)
 	}
@@ -70,7 +70,7 @@ func TestHubBridgeSpawn(t *testing.T) {
 	defer stop()
 
 	g := gateway.New(nc)
-	go g.Start(ctx)
+	go func() { _ = g.Start(ctx) }()
 	time.Sleep(150 * time.Millisecond)
 
 	tokens := NewTokenStore()

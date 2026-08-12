@@ -5,10 +5,9 @@ package machine
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"math/big"
-	"strings"
 	"sync"
 	"time"
 )
@@ -71,7 +70,8 @@ func (t *TokenStore) Validate(token string) (*AccessToken, error) {
 		delete(t.byMachine[at.MachineID], key)
 		return nil, ErrTokenExpired
 	}
-	return at, nil
+	copy := *at
+	return &copy, nil
 }
 
 // IssueLongTerm creates a long-lived token for an already-confirmed machine
@@ -91,17 +91,23 @@ func (t *TokenStore) IssueLongTerm(machineID string) AccessToken {
 
 // MakeLongTerm promotes a valid one-time token to long-term (confirm flow).
 func (t *TokenStore) MakeLongTerm(machineID, token string) error {
-	at, err := t.Validate(token)
-	if err != nil {
-		return err
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := hashToken(token)
+	at, ok := t.byHash[key]
+	if !ok {
+		return ErrTokenInvalid
+	}
+	if !at.LongTerm && time.Now().After(at.ExpiresAt) {
+		delete(t.byHash, key)
+		delete(t.byMachine[at.MachineID], key)
+		return ErrTokenExpired
 	}
 	if at.MachineID != machineID {
 		return ErrTokenInvalid
 	}
-	t.mu.Lock()
 	at.LongTerm = true
 	at.ExpiresAt = time.Time{}
-	t.mu.Unlock()
 	return nil
 }
 
@@ -152,23 +158,12 @@ func hashToken(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-// randomToken produces a bias-free bearer token (~143 bit entropy: 24 chars from
-// a 62-char alphabet, grouped xxxx.xxxx.xxxx.xxxx.xxxx.xxxx). crypto/rand.Int
-// picks each char uniformly — no % 取模偏差; entropy exceeds the 128-bit bearer
-// standard, so collisions are negligible.
+// randomToken returns a 256-bit opaque bearer token as unpadded base64url. This
+// matches PRD F.7 while remaining shell/URL safe for the onboarding command.
 func randomToken() string {
-	var sb strings.Builder
-	for i := 0; i < 24; i++ {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			panic(err) // crypto/rand failure is unrecoverable
-		}
-		sb.WriteByte(charset[n.Int64()])
-		if i%4 == 3 && i != 23 {
-			sb.WriteByte('.')
-		}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		panic(err) // crypto/rand failure is unrecoverable
 	}
-	return sb.String()
+	return base64.RawURLEncoding.EncodeToString(raw)
 }

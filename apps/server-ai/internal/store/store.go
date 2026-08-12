@@ -22,6 +22,13 @@ type Store struct {
 	db *bun.DB
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store is not initialized")
+	}
+	return s.db.PingContext(ctx)
+}
+
 // Open opens a SQLite datasource, runs migrations, returns the Store.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	ds := bunx.Datasource{Type: "sqlite", Dsn: dsn, Writable: true}
@@ -85,6 +92,11 @@ type RunDef struct {
 	Status        string `bun:"status,notnull,default:'running'"`
 	CreatedAt     int64  `bun:"created_at,notnull"`
 	UpdatedAt     int64  `bun:"updated_at,notnull"`
+	ContextJSON   string `bun:"context_json,notnull,default:'{}'"`
+	Workspace     string `bun:"workspace,notnull,default:''"`
+	RunnerID      string `bun:"runner_id,notnull,default:''"`
+	InstanceID    string `bun:"instance_id,notnull,default:''"`
+	ProjectID     string `bun:"project_id,notnull,default:''"`
 }
 
 // SaveRunDefinition upserts a workflow run (INSERT OR REPLACE).
@@ -97,7 +109,13 @@ func (s *Store) SaveRunDefinition(ctx context.Context, rd RunDef) error {
 		rd.Status = "running"
 	}
 	_, err := s.db.NewInsert().Model(&rd).On("CONFLICT (id) DO UPDATE").
+		Set("def_json = EXCLUDED.def_json").
 		Set("status = EXCLUDED.status").
+		Set("context_json = EXCLUDED.context_json").
+		Set("workspace = EXCLUDED.workspace").
+		Set("runner_id = EXCLUDED.runner_id").
+		Set("instance_id = EXCLUDED.instance_id").
+		Set("project_id = EXCLUDED.project_id").
 		Set("updated_at = EXCLUDED.updated_at").
 		Exec(ctx)
 	return err
@@ -107,10 +125,27 @@ func (s *Store) SaveRunDefinition(ctx context.Context, rd RunDef) error {
 func (s *Store) LoadActiveRunDefinitions(ctx context.Context) ([]RunDef, error) {
 	var out []RunDef
 	if err := s.db.NewSelect().Model(&out).
-		Where("status NOT IN ('completed','failed')").
+		Where("status NOT IN ('completed','failed','cancelled')").
 		Order("created_at DESC").
 		Scan(ctx); err != nil {
 		return nil, fmt.Errorf("store load active run definitions: %w", err)
+	}
+	return out, nil
+}
+
+// ListRunDefinitions returns persisted run history, scoped to an instance when
+// supplied. Unlike LoadActiveRunDefinitions it includes terminal runs.
+func (s *Store) ListRunDefinitions(ctx context.Context, instanceID string, limit int) ([]RunDef, error) {
+	var out []RunDef
+	q := s.db.NewSelect().Model(&out)
+	if instanceID != "" {
+		q = q.Where("instance_id = ?", instanceID)
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Order("created_at DESC").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("store list run definitions: %w", err)
 	}
 	return out, nil
 }
@@ -133,7 +168,7 @@ type WorkflowDefModel struct {
 	Name          string `bun:"name,notnull" json:"name"`
 	DefJSON       string `bun:"def_json,notnull" json:"-"`
 	DefRaw        any    `bun:"-" json:"def,omitempty"`
-	InstanceID    string `bun:"instance_id,notnull" json:"instanceId"`
+	InstanceID    string `bun:"instance_id,pk,notnull" json:"instanceId"`
 	OwnerID       string `bun:"owner_id,notnull" json:"ownerId"`
 	CreatedAt     int64  `bun:"created_at,notnull" json:"createdAt"`
 	UpdatedAt     int64  `bun:"updated_at,notnull" json:"updatedAt"`
@@ -149,7 +184,7 @@ func (s *Store) SaveWorkflow(ctx context.Context, m WorkflowDefModel) error {
 	if m.Version == "" {
 		m.Version = "1"
 	}
-	_, err := s.db.NewInsert().Model(&m).On("CONFLICT (id, version) DO UPDATE").
+	_, err := s.db.NewInsert().Model(&m).On("CONFLICT (instance_id, id, version) DO UPDATE").
 		Set("name = EXCLUDED.name").
 		Set("def_json = EXCLUDED.def_json").
 		Set("updated_at = EXCLUDED.updated_at").
@@ -173,7 +208,11 @@ func (s *Store) ListWorkflows(ctx context.Context, instanceID string) ([]Workflo
 // GetWorkflow fetches one workflow by id+version.
 func (s *Store) GetWorkflow(ctx context.Context, id, version string) (*WorkflowDefModel, error) {
 	m := &WorkflowDefModel{}
-	if err := s.db.NewSelect().Model(m).Where("id = ? AND version = ?", id, version).Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(m).Where("id = ? AND version = ?", id, version)
+	if entityID := EntityOf(ctx); entityID != "" {
+		q = q.Where("instance_id = ?", entityID)
+	}
+	if err := q.Scan(ctx); err != nil {
 		return nil, fmt.Errorf("store get workflow %s@%s: %w", id, version, err)
 	}
 	return m, nil
@@ -181,7 +220,11 @@ func (s *Store) GetWorkflow(ctx context.Context, id, version string) (*WorkflowD
 
 // DeleteWorkflow removes all versions of a workflow.
 func (s *Store) DeleteWorkflow(ctx context.Context, id string) error {
-	_, err := s.db.NewDelete().Model((*WorkflowDefModel)(nil)).Where("id = ?", id).Exec(ctx)
+	q := s.db.NewDelete().Model((*WorkflowDefModel)(nil)).Where("id = ?", id)
+	if entityID := EntityOf(ctx); entityID != "" {
+		q = q.Where("instance_id = ?", entityID)
+	}
+	_, err := q.Exec(ctx)
 	return err
 }
 

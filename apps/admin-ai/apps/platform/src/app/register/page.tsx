@@ -50,7 +50,8 @@ export default function RegisterPage() {
   }
 
   useEffect(() => {
-    void loadCaptcha()
+    const timer = window.setTimeout(() => void loadCaptcha(), 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   const captchaAnswer = (): string => {
