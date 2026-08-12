@@ -11,6 +11,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -39,19 +40,19 @@ var (
 )
 
 type AccessRequest struct {
-	ID               string     `json:"id"`
-	TenantID         string     `json:"tenant_id"`
-	RequesterID      string     `json:"requester_id"`
-	RoleID           string     `json:"role_id"`
+	ID               guid.ID    `json:"id"`
+	TenantID         guid.ID    `json:"tenant_id"`
+	RequesterID      guid.ID    `json:"requester_id"`
+	RoleID           guid.ID    `json:"role_id"`
 	RoleName         string     `json:"role_name"`
 	Reason           string     `json:"reason"`
 	Status           string     `json:"status"`
 	AccessExpiresAt  time.Time  `json:"access_expires_at"`
 	RequestExpiresAt time.Time  `json:"request_expires_at"`
-	DecidedBy        string     `json:"decided_by,omitempty"`
+	DecidedBy        guid.ID    `json:"decided_by,omitempty"`
 	DecisionNote     string     `json:"decision_note,omitempty"`
 	DecidedAt        *time.Time `json:"decided_at,omitempty"`
-	RevokedBy        string     `json:"revoked_by,omitempty"`
+	RevokedBy        guid.ID    `json:"revoked_by,omitempty"`
 	RevokeReason     string     `json:"revoke_reason,omitempty"`
 	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
@@ -59,27 +60,27 @@ type AccessRequest struct {
 }
 
 type RequestableRole struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          guid.ID `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
 }
 
 type CreateAccessRequest struct {
-	RoleID          string
+	RoleID          guid.ID
 	Reason          string
 	AccessExpiresAt time.Time
 }
 
 type RoleGrantStore struct {
-	Grant                    func(context.Context, bun.IDB, string, string, string, string, string, time.Time, time.Time) error
-	Revoke                   func(context.Context, bun.IDB, string, string) (bool, error)
-	RemovePermanent          func(context.Context, bun.IDB, string, string, string, int64) (bool, error)
-	RemoveGroupMembership    func(context.Context, bun.IDB, string, string, string) (bool, error)
-	RemovePositionMembership func(context.Context, bun.IDB, string, string, string) (bool, error)
-	RemoveEntityRoleBinding  func(context.Context, bun.IDB, string, string, string, string) (bool, error)
+	Grant                    func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID, guid.ID, guid.ID, time.Time, time.Time) error
+	Revoke                   func(context.Context, bun.IDB, guid.ID, guid.ID) (bool, error)
+	RemovePermanent          func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID, int64) (bool, error)
+	RemoveGroupMembership    func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID) (bool, error)
+	RemovePositionMembership func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID) (bool, error)
+	RemoveEntityRoleBinding  func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID, guid.ID) (bool, error)
 }
 
-type IDGenerator func() (string, error)
+type IDGenerator func() (guid.ID, error)
 
 type Service struct {
 	db      *bun.DB
@@ -92,32 +93,32 @@ type Service struct {
 
 type accessRequestRow struct {
 	bun.BaseModel    `bun:"table:iam_access_requests"`
-	TenantID         string `bun:"tenant_id,pk"`
-	ID               string `bun:"id,pk"`
-	RequesterID      string `bun:"requester_id"`
-	RoleID           string `bun:"role_id"`
-	RoleName         string `bun:"role_name"`
-	Reason           string `bun:"reason"`
-	SnapshotJSON     string `bun:"snapshot_json"`
-	Status           string `bun:"status"`
-	AccessExpiresAt  int64  `bun:"access_expires_at"`
-	RequestExpiresAt int64  `bun:"request_expires_at"`
-	DecidedBy        string `bun:"decided_by"`
-	DecisionNote     string `bun:"decision_note"`
-	DecidedAt        int64  `bun:"decided_at"`
-	RevokedBy        string `bun:"revoked_by"`
-	RevokeReason     string `bun:"revoke_reason"`
-	RevokedAt        int64  `bun:"revoked_at"`
-	CreatedAt        int64  `bun:"created_at"`
-	UpdatedAt        int64  `bun:"updated_at"`
+	TenantID         guid.ID `bun:"tenant_id,pk"`
+	ID               guid.ID `bun:"id,pk"`
+	RequesterID      guid.ID `bun:"requester_id"`
+	RoleID           guid.ID `bun:"role_id"`
+	RoleName         string  `bun:"role_name"`
+	Reason           string  `bun:"reason"`
+	SnapshotJSON     string  `bun:"snapshot_json"`
+	Status           string  `bun:"status"`
+	AccessExpiresAt  int64   `bun:"access_expires_at"`
+	RequestExpiresAt int64   `bun:"request_expires_at"`
+	DecidedBy        guid.ID `bun:"decided_by"`
+	DecisionNote     string  `bun:"decision_note"`
+	DecidedAt        int64   `bun:"decided_at"`
+	RevokedBy        guid.ID `bun:"revoked_by"`
+	RevokeReason     string  `bun:"revoke_reason"`
+	RevokedAt        int64   `bun:"revoked_at"`
+	CreatedAt        int64   `bun:"created_at"`
+	UpdatedAt        int64   `bun:"updated_at"`
 }
 
 type requestSnapshot struct {
-	Version         int    `json:"version"`
-	RequesterID     string `json:"requester_id"`
-	RoleID          string `json:"role_id"`
-	RoleName        string `json:"role_name"`
-	AccessExpiresAt string `json:"access_expires_at"`
+	Version         int     `json:"version"`
+	RequesterID     guid.ID `json:"requester_id"`
+	RoleID          guid.ID `json:"role_id"`
+	RoleName        string  `json:"role_name"`
+	AccessExpiresAt string  `json:"access_expires_at"`
 }
 
 func NewService(db *bun.DB, audit auditx.Appender, grants RoleGrantStore, nextID IDGenerator) *Service {
@@ -133,8 +134,8 @@ func NewService(db *bun.DB, audit auditx.Appender, grants RoleGrantStore, nextID
 	return &Service{db: db, audit: audit, grants: grants, nextID: nextID, dialect: dialect, now: time.Now}
 }
 
-func (s *Service) RequestableRoles(ctx context.Context, tenantID string) ([]RequestableRole, error) {
-	if !validID(tenantID, 128) {
+func (s *Service) RequestableRoles(ctx context.Context, tenantID guid.ID) ([]RequestableRole, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalid
 	}
 	roles := make([]RequestableRole, 0)
@@ -144,18 +145,15 @@ func (s *Service) RequestableRoles(ctx context.Context, tenantID string) ([]Requ
 	return roles, nil
 }
 
-func (s *Service) Create(ctx context.Context, tenantID, requesterID string, input CreateAccessRequest) (AccessRequest, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	requesterID = strings.TrimSpace(requesterID)
-	input.RoleID = strings.TrimSpace(input.RoleID)
+func (s *Service) Create(ctx context.Context, tenantID, requesterID guid.ID, input CreateAccessRequest) (AccessRequest, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
 	now := s.now().UTC()
-	if !validID(tenantID, 128) || !validID(requesterID, 255) || !validID(input.RoleID, 32) || len(input.Reason) < 3 || len(input.Reason) > 500 ||
+	if tenantID.Zero() || requesterID.Zero() || input.RoleID.Zero() || len(input.Reason) < 3 || len(input.Reason) > 500 ||
 		!input.AccessExpiresAt.After(now) || input.AccessExpiresAt.After(now.Add(maxAccessDuration)) {
 		return AccessRequest{}, ErrInvalid
 	}
 	id, err := s.nextID()
-	if err != nil || !validID(id, 64) {
+	if err != nil || id.Zero() {
 		return AccessRequest{}, fmt.Errorf("generate access request id: %w", errors.Join(err, ErrInvalid))
 	}
 	var row accessRequestRow
@@ -207,13 +205,13 @@ func (s *Service) Create(ctx context.Context, tenantID, requesterID string, inpu
 	return requestFromRow(row, now), nil
 }
 
-func (s *Service) List(ctx context.Context, tenantID, requesterID string) ([]AccessRequest, error) {
-	if !validID(tenantID, 128) || requesterID != "" && !validID(requesterID, 255) {
+func (s *Service) List(ctx context.Context, tenantID, requesterID guid.ID) ([]AccessRequest, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalid
 	}
 	rows := make([]accessRequestRow, 0)
 	query := s.db.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID)
-	if requesterID != "" {
+	if !requesterID.Zero() {
 		query = query.Where("requester_id = ?", requesterID)
 	}
 	if err := query.Order("created_at DESC", "id DESC").Limit(200).Scan(ctx); err != nil {
@@ -227,17 +225,17 @@ func (s *Service) List(ctx context.Context, tenantID, requesterID string) ([]Acc
 	return items, nil
 }
 
-func (s *Service) Approve(ctx context.Context, tenantID, requestID, actorID, note string) (AccessRequest, error) {
+func (s *Service) Approve(ctx context.Context, tenantID, requestID, actorID guid.ID, note string) (AccessRequest, error) {
 	return s.decide(ctx, tenantID, requestID, actorID, note, StatusApproved)
 }
 
-func (s *Service) Reject(ctx context.Context, tenantID, requestID, actorID, note string) (AccessRequest, error) {
+func (s *Service) Reject(ctx context.Context, tenantID, requestID, actorID guid.ID, note string) (AccessRequest, error) {
 	return s.decide(ctx, tenantID, requestID, actorID, note, StatusRejected)
 }
 
-func (s *Service) decide(ctx context.Context, tenantID, requestID, actorID, note, decision string) (AccessRequest, error) {
-	tenantID, requestID, actorID, note = strings.TrimSpace(tenantID), strings.TrimSpace(requestID), strings.TrimSpace(actorID), strings.TrimSpace(note)
-	if !validID(tenantID, 128) || !validID(requestID, 64) || !validID(actorID, 255) || len(note) > 500 || decision != StatusApproved && decision != StatusRejected {
+func (s *Service) decide(ctx context.Context, tenantID, requestID, actorID guid.ID, note, decision string) (AccessRequest, error) {
+	note = strings.TrimSpace(note)
+	if tenantID.Zero() || requestID.Zero() || actorID.Zero() || len(note) > 500 || decision != StatusApproved && decision != StatusRejected {
 		return AccessRequest{}, ErrInvalid
 	}
 	now := s.now().UTC()
@@ -300,17 +298,17 @@ func (s *Service) decide(ctx context.Context, tenantID, requestID, actorID, note
 	return requestFromRow(updated, now), nil
 }
 
-func (s *Service) Withdraw(ctx context.Context, tenantID, requestID, requesterID, reason string) (AccessRequest, error) {
+func (s *Service) Withdraw(ctx context.Context, tenantID, requestID, requesterID guid.ID, reason string) (AccessRequest, error) {
 	return s.revoke(ctx, tenantID, requestID, requesterID, reason, true)
 }
 
-func (s *Service) Revoke(ctx context.Context, tenantID, requestID, actorID, reason string) (AccessRequest, error) {
+func (s *Service) Revoke(ctx context.Context, tenantID, requestID, actorID guid.ID, reason string) (AccessRequest, error) {
 	return s.revoke(ctx, tenantID, requestID, actorID, reason, false)
 }
 
-func (s *Service) revoke(ctx context.Context, tenantID, requestID, actorID, reason string, requesterOnly bool) (AccessRequest, error) {
-	tenantID, requestID, actorID, reason = strings.TrimSpace(tenantID), strings.TrimSpace(requestID), strings.TrimSpace(actorID), strings.TrimSpace(reason)
-	if !validID(tenantID, 128) || !validID(requestID, 64) || !validID(actorID, 255) || len(reason) > 500 {
+func (s *Service) revoke(ctx context.Context, tenantID, requestID, actorID guid.ID, reason string, requesterOnly bool) (AccessRequest, error) {
+	reason = strings.TrimSpace(reason)
+	if tenantID.Zero() || requestID.Zero() || actorID.Zero() || len(reason) > 500 {
 		return AccessRequest{}, ErrInvalid
 	}
 	now := s.now().UTC()
@@ -375,7 +373,7 @@ func (s *Service) revoke(ctx context.Context, tenantID, requestID, actorID, reas
 	return requestFromRow(updated, now), nil
 }
 
-func getAccessRequestRow(ctx context.Context, db bun.IDB, tenantID, id string) (accessRequestRow, error) {
+func getAccessRequestRow(ctx context.Context, db bun.IDB, tenantID, id guid.ID) (accessRequestRow, error) {
 	var row accessRequestRow
 	if err := db.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -386,7 +384,7 @@ func getAccessRequestRow(ctx context.Context, db bun.IDB, tenantID, id string) (
 	return row, nil
 }
 
-func getRequestableRole(ctx context.Context, db bun.IDB, tenantID, roleID string) (RequestableRole, error) {
+func getRequestableRole(ctx context.Context, db bun.IDB, tenantID, roleID guid.ID) (RequestableRole, error) {
 	var role RequestableRole
 	if err := db.NewSelect().Table("iam_roles").Column("id", "name", "description").Where("tenant_id = ? AND id = ?", tenantID, roleID).Scan(ctx, &role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -397,20 +395,20 @@ func getRequestableRole(ctx context.Context, db bun.IDB, tenantID, roleID string
 	return role, nil
 }
 
-func activeTenantMember(ctx context.Context, db bun.IDB, tenantID, principalID string) (bool, error) {
+func activeTenantMember(ctx context.Context, db bun.IDB, tenantID, principalID guid.ID) (bool, error) {
 	var count int
 	if err := db.NewSelect().TableExpr("iam_tenant_members AS members").ColumnExpr("COUNT(*)").
 		Join("JOIN iam_tenants AS tenants ON tenants.id = members.tenant_id AND tenants.status = 'active'").
-		Where("members.tenant_id = ? AND members.user_subject = ? AND members.status = 'active'", tenantID, principalID).Scan(ctx, &count); err != nil {
+		Where("members.tenant_id = ? AND members.principal_id = ? AND members.status = 'active'", tenantID, principalID).Scan(ctx, &count); err != nil {
 		return false, fmt.Errorf("check access requester membership: %w", err)
 	}
 	return count == 1, nil
 }
 
-func roleAlreadyGranted(ctx context.Context, db bun.IDB, tenantID, roleID, principalID string, now int64) (bool, error) {
+func roleAlreadyGranted(ctx context.Context, db bun.IDB, tenantID, roleID, principalID guid.ID, now int64) (bool, error) {
 	var count int
 	if err := db.NewRaw(`SELECT COUNT(*) FROM (
-		SELECT role_id FROM iam_role_members WHERE tenant_id = ? AND role_id = ? AND user_subject = ?
+		SELECT role_id FROM iam_role_members WHERE tenant_id = ? AND role_id = ? AND principal_id = ?
 		UNION ALL
 		SELECT role_id FROM iam_temporary_role_grants WHERE tenant_id = ? AND role_id = ? AND principal_id = ? AND starts_at <= ? AND ends_at > ?
 	) AS grants`, tenantID, roleID, principalID, tenantID, roleID, principalID, now, now).Scan(ctx, &count); err != nil {
@@ -439,9 +437,4 @@ func requestFromRow(row accessRequestRow, now time.Time) AccessRequest {
 		item.RevokedAt = &value
 	}
 	return item
-}
-
-func validID(value string, limit int) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= limit
 }

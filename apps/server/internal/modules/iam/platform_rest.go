@@ -58,7 +58,11 @@ func registerPlatformREST(a huma.API, svc *Service, registrar *authz.Registrar) 
 		Summary: "Grant or restrict platform authorization for a principal", Tags: []string{"iam"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "platform", Verb: "administer"}, func(ctx context.Context, in *putPlatformAdministratorInput) (*respx.Body[PlatformAdministratorView], error) {
-		administrator, err := svc.SetPlatformAdministrator(ctx, in.PrincipalID, in.Body.FullAdministrator, in.Body.Permissions)
+		principalID, err := requireID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		administrator, err := svc.SetPlatformAdministrator(ctx, principalID, in.Body.FullAdministrator, in.Body.Permissions)
 		if err != nil {
 			return nil, platformAPIError("put platform administrator", err)
 		}
@@ -70,7 +74,11 @@ func registerPlatformREST(a huma.API, svc *Service, registrar *authz.Registrar) 
 		Summary: "Revoke every platform grant for a principal", Tags: []string{"iam"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "platform", Verb: "administer"}, func(ctx context.Context, in *platformPrincipalInput) (*respx.Body[MutationResult], error) {
-		changed, err := svc.DeletePlatformAdministrator(ctx, in.PrincipalID)
+		principalID, err := requireID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		changed, err := svc.DeletePlatformAdministrator(ctx, principalID)
 		if err != nil {
 			return nil, platformAPIError("delete platform administrator", err)
 		}
@@ -99,7 +107,7 @@ func platformAdministratorFromDomain(administrator iamdomain.PlatformAdministrat
 		permissions = []string{}
 	}
 	return PlatformAdministratorView{
-		PrincipalID: administrator.PrincipalID, FullAdministrator: administrator.FullAdministrator,
+		PrincipalID: administrator.PrincipalID.String(), FullAdministrator: administrator.FullAdministrator,
 		Permissions: permissions, CreatedAt: administrator.CreatedAt,
 	}
 }

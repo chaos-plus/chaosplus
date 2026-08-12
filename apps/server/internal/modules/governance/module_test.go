@@ -16,7 +16,7 @@ func TestGovernanceModuleLifecycleAndDeclarations(t *testing.T) {
 	fixture := newGovernanceFixture(t)
 	registry := authz.DefaultRegistry()
 	registrar := authz.NewDeclarationOnlyRegistrar(registry)
-	module := NewModule(fixture.db, registrar, governanceAuditAppender(fixture.db), governanceRoleGrantStore(), func() (string, error) { return "module-request", nil })
+	module := NewModule(fixture.db, registrar, governanceAuditAppender(fixture.db), governanceRoleGrantStore(), newTestIDGenerator())
 	require.NoError(t, module.Migrate(t.Context()))
 	_, api := humatest.New(t)
 	module.RegisterREST(api)

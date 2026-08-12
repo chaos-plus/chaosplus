@@ -1,7 +1,11 @@
 // Package authn stores the authenticated local subject in request context.
 package authn
 
-import "context"
+import (
+	"context"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+)
 
 type contextKey struct{}
 
@@ -24,4 +28,28 @@ func SubjectFromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return claims.Subject, true
+}
+
+func TenantIDFromContext(ctx context.Context) guid.ID {
+	claims, _ := FromContext(ctx)
+	if claims == nil {
+		return 0
+	}
+	return claims.TenantID
+}
+
+func EntityIDFromContext(ctx context.Context) guid.ID {
+	claims, _ := FromContext(ctx)
+	if claims == nil {
+		return 0
+	}
+	return claims.EntityID
+}
+
+func PrincipalIDFromContext(ctx context.Context) guid.ID {
+	claims, _ := FromContext(ctx)
+	if claims == nil {
+		return 0
+	}
+	return claims.PrincipalID
 }

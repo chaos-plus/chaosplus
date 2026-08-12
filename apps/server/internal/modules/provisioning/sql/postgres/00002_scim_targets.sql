@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_scim_targets (
-    id VARCHAR(128) PRIMARY KEY,
-    tenant_id VARCHAR(128) NOT NULL REFERENCES iam_tenants(id) ON DELETE CASCADE,
+    id BIGINT PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES iam_tenants(id) ON DELETE CASCADE,
     name VARCHAR(128) NOT NULL,
     name_key VARCHAR(128) NOT NULL,
     base_url VARCHAR(1024) NOT NULL,
@@ -15,9 +15,9 @@ CREATE TABLE iam_scim_targets (
 CREATE INDEX idx_iam_scim_targets_tenant ON iam_scim_targets (tenant_id, status, name_key, id);
 
 CREATE TABLE iam_scim_target_resources (
-    target_id VARCHAR(128) NOT NULL REFERENCES iam_scim_targets(id) ON DELETE CASCADE,
+    target_id BIGINT NOT NULL REFERENCES iam_scim_targets(id) ON DELETE CASCADE,
     resource_type VARCHAR(16) NOT NULL CHECK (resource_type IN ('User', 'Group')),
-    resource_id VARCHAR(128) NOT NULL,
+    resource_id BIGINT NOT NULL,
     external_id VARCHAR(512) NOT NULL DEFAULT '',
     version BIGINT NOT NULL DEFAULT 1 CHECK (version >= 1),
     created_at BIGINT NOT NULL,

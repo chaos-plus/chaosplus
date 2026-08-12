@@ -18,6 +18,7 @@ import (
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/hotp"
 	"github.com/pquerna/otp/totp"
@@ -42,7 +43,7 @@ var (
 
 type mfaEnrollmentRow struct {
 	bun.BaseModel    `bun:"table:iam_mfa_enrollments"`
-	PrincipalID      string `bun:"principal_id,pk"`
+	PrincipalID      guid.ID `bun:"principal_id,pk"`
 	SecretCiphertext string
 	CreatedAt        int64
 	ExpiresAt        int64
@@ -50,8 +51,8 @@ type mfaEnrollmentRow struct {
 
 type recoveryCodeRow struct {
 	bun.BaseModel `bun:"table:iam_recovery_codes"`
-	PrincipalID   string `bun:"principal_id,pk"`
-	CodeHash      string `bun:"code_hash,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
+	CodeHash      string  `bun:"code_hash,pk"`
 	CreatedAt     int64
 	UsedAt        int64
 }
@@ -59,7 +60,7 @@ type recoveryCodeRow struct {
 type mfaChallengeRow struct {
 	bun.BaseModel `bun:"table:iam_mfa_challenges"`
 	IDHash        string `bun:"id_hash,pk"`
-	PrincipalID   string
+	PrincipalID   guid.ID
 	ReturnURL     string
 	CreatedAt     int64
 	ExpiresAt     int64
@@ -81,8 +82,8 @@ func parseMFAKey(encoded string) ([]byte, error) {
 	return nil, errors.New("authn MFA encryption key must be base64-encoded 32 bytes")
 }
 
-func (s *WebService) encryptMFASecret(principalID, secret string) (string, error) {
-	return s.encryptAuthnData("v1", principalID, []byte(secret))
+func (s *WebService) encryptMFASecret(principalID guid.ID, secret string) (string, error) {
+	return s.encryptAuthnData("v1", principalID.String(), []byte(secret))
 }
 
 func (s *WebService) encryptAuthnData(purpose, associatedData string, plain []byte) (string, error) {
@@ -102,8 +103,8 @@ func (s *WebService) encryptAuthnData(purpose, associatedData string, plain []by
 	return mfaCipherVersion + "." + base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-func (s *WebService) decryptMFASecret(principalID, encoded string) (string, error) {
-	plain, err := s.decryptAuthnData("v1", principalID, encoded)
+func (s *WebService) decryptMFASecret(principalID guid.ID, encoded string) (string, error) {
+	plain, err := s.decryptAuthnData("v1", principalID.String(), encoded)
 	return string(plain), err
 }
 
@@ -138,10 +139,10 @@ func (s *WebService) MFAStatus(ctx context.Context, authorization, cookieHeader 
 		return authnext.MFAStatus{}, err
 	}
 	var credential credentialRow
-	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ?", claims.Subject).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ?", claims.PrincipalID).Scan(ctx); err != nil {
 		return authnext.MFAStatus{}, fmt.Errorf("load MFA status: %w", err)
 	}
-	remaining, err := s.db.NewSelect().Model((*recoveryCodeRow)(nil)).Where("principal_id = ? AND used_at = 0", claims.Subject).Count(ctx)
+	remaining, err := s.db.NewSelect().Model((*recoveryCodeRow)(nil)).Where("principal_id = ? AND used_at = 0", claims.PrincipalID).Count(ctx)
 	if err != nil {
 		return authnext.MFAStatus{}, fmt.Errorf("count recovery codes: %w", err)
 	}
@@ -153,10 +154,10 @@ func (s *WebService) BeginTOTPEnrollment(ctx context.Context, authorization, coo
 	if err != nil {
 		return authnext.MFAEnrollment{}, err
 	}
-	if err := s.ensureRecoveryCooldownExpired(ctx, claims.Subject); err != nil {
+	if err := s.ensureRecoveryCooldownExpired(ctx, claims.PrincipalID); err != nil {
 		return authnext.MFAEnrollment{}, err
 	}
-	principal, credential, err := s.verifyCurrentPassword(ctx, claims.Subject, currentPassword)
+	principal, credential, err := s.verifyCurrentPassword(ctx, claims.PrincipalID, currentPassword)
 	if err != nil {
 		return authnext.MFAEnrollment{}, err
 	}
@@ -167,20 +168,20 @@ func (s *WebService) BeginTOTPEnrollment(ctx context.Context, authorization, coo
 	if err != nil {
 		return authnext.MFAEnrollment{}, fmt.Errorf("generate TOTP secret: %w", err)
 	}
-	ciphertext, err := s.encryptMFASecret(claims.Subject, key.Secret())
+	ciphertext, err := s.encryptMFASecret(claims.PrincipalID, key.Secret())
 	if err != nil {
 		return authnext.MFAEnrollment{}, err
 	}
 	now := s.now().UTC()
-	row := mfaEnrollmentRow{PrincipalID: claims.Subject, SecretCiphertext: ciphertext, CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(s.cfg.MFA.EnrollmentTTL).UnixMilli()}
+	row := mfaEnrollmentRow{PrincipalID: claims.PrincipalID, SecretCiphertext: ciphertext, CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(s.cfg.MFA.EnrollmentTTL).UnixMilli()}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewDelete().Model((*mfaEnrollmentRow)(nil)).Where("principal_id = ?", claims.Subject).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*mfaEnrollmentRow)(nil)).Where("principal_id = ?", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
 		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
 			return err
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "mfa_enrollment_started", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "mfa_enrollment_started", "success")
 	})
 	if err != nil {
 		return authnext.MFAEnrollment{}, fmt.Errorf("store TOTP enrollment: %w", err)
@@ -197,13 +198,13 @@ func (s *WebService) ConfirmTOTPEnrollment(ctx context.Context, authorization, c
 	var recoveryCodes []string
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var enrollment mfaEnrollmentRow
-		if err := tx.NewSelect().Model(&enrollment).Where("principal_id = ? AND expires_at > ?", claims.Subject, now.UnixMilli()).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(&enrollment).Where("principal_id = ? AND expires_at > ?", claims.PrincipalID, now.UnixMilli()).Scan(ctx); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrMFAEnrollment
 			}
 			return err
 		}
-		secret, err := s.decryptMFASecret(claims.Subject, enrollment.SecretCiphertext)
+		secret, err := s.decryptMFASecret(claims.PrincipalID, enrollment.SecretCiphertext)
 		if err != nil {
 			return err
 		}
@@ -211,26 +212,26 @@ func (s *WebService) ConfirmTOTPEnrollment(ctx context.Context, authorization, c
 		if !valid {
 			return ErrInvalidMFA
 		}
-		recoveryCodes, err = s.replaceRecoveryCodes(ctx, tx, claims.Subject, now)
+		recoveryCodes, err = s.replaceRecoveryCodes(ctx, tx, claims.PrincipalID, now)
 		if err != nil {
 			return err
 		}
 		result, err := tx.NewUpdate().Model((*credentialRow)(nil)).Set("totp_secret = ?", enrollment.SecretCiphertext).
 			Set("mfa_required = ?", true).Set("totp_last_used_step = ?", step).Set("updated_at = ?", now.UnixMilli()).
-			Where("principal_id = ? AND mfa_required = ?", claims.Subject, false).Exec(ctx)
+			Where("principal_id = ? AND mfa_required = ?", claims.PrincipalID, false).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return ErrMFAAlreadyOn
 		}
-		if _, err := tx.NewDelete().Model((*mfaEnrollmentRow)(nil)).Where("principal_id = ?", claims.Subject).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*mfaEnrollmentRow)(nil)).Where("principal_id = ?", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
-		if err := s.revokeOtherAuthentication(ctx, tx, claims.Subject, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
+		if err := s.revokeOtherAuthentication(ctx, tx, claims.PrincipalID, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
 			return err
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "mfa_enabled", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "mfa_enabled", "success")
 	})
 	if err != nil {
 		return authnext.MFAConfirmation{}, fmt.Errorf("confirm TOTP enrollment: %w", err)
@@ -244,7 +245,7 @@ func (s *WebService) VerifyLoginMFA(ctx context.Context, challengeID, code strin
 	}
 	now := s.now().UTC()
 	var result authnext.LoginResult
-	var principalID string
+	var principalID guid.ID
 	invalidCode := false
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var challenge mfaChallengeRow
@@ -307,7 +308,7 @@ func (s *WebService) RegenerateRecoveryCodes(ctx context.Context, authorization,
 	if err != nil {
 		return authnext.MFAConfirmation{}, err
 	}
-	_, credential, err := s.verifyCurrentPassword(ctx, claims.Subject, currentPassword)
+	_, credential, err := s.verifyCurrentPassword(ctx, claims.PrincipalID, currentPassword)
 	if err != nil {
 		return authnext.MFAConfirmation{}, err
 	}
@@ -318,7 +319,7 @@ func (s *WebService) RegenerateRecoveryCodes(ctx context.Context, authorization,
 	var codes []string
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var current credentialRow
-		if err := tx.NewSelect().Model(&current).Where("principal_id = ? AND mfa_required = ?", claims.Subject, true).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(&current).Where("principal_id = ? AND mfa_required = ?", claims.PrincipalID, true).Scan(ctx); err != nil {
 			return ErrMFANotEnabled
 		}
 		if valid, err := passwordx.Verify(current.PasswordHash, currentPassword); err != nil || !valid {
@@ -331,14 +332,14 @@ func (s *WebService) RegenerateRecoveryCodes(ctx context.Context, authorization,
 		if !valid {
 			return ErrInvalidMFA
 		}
-		codes, err = s.replaceRecoveryCodes(ctx, tx, claims.Subject, now)
+		codes, err = s.replaceRecoveryCodes(ctx, tx, claims.PrincipalID, now)
 		if err != nil {
 			return err
 		}
-		if err := s.revokeOtherAuthentication(ctx, tx, claims.Subject, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
+		if err := s.revokeOtherAuthentication(ctx, tx, claims.PrincipalID, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
 			return err
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "mfa_recovery_regenerated", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "mfa_recovery_regenerated", "success")
 	})
 	if err != nil {
 		return authnext.MFAConfirmation{}, fmt.Errorf("regenerate recovery codes: %w", err)
@@ -351,7 +352,7 @@ func (s *WebService) DisableTOTP(ctx context.Context, authorization, cookieHeade
 	if err != nil {
 		return err
 	}
-	_, credential, err := s.verifyCurrentPassword(ctx, claims.Subject, currentPassword)
+	_, credential, err := s.verifyCurrentPassword(ctx, claims.PrincipalID, currentPassword)
 	if err != nil {
 		return err
 	}
@@ -361,7 +362,7 @@ func (s *WebService) DisableTOTP(ctx context.Context, authorization, cookieHeade
 	now := s.now().UTC()
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var current credentialRow
-		if err := tx.NewSelect().Model(&current).Where("principal_id = ? AND mfa_required = ?", claims.Subject, true).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(&current).Where("principal_id = ? AND mfa_required = ?", claims.PrincipalID, true).Scan(ctx); err != nil {
 			return ErrMFANotEnabled
 		}
 		if valid, err := passwordx.Verify(current.PasswordHash, currentPassword); err != nil || !valid {
@@ -375,18 +376,18 @@ func (s *WebService) DisableTOTP(ctx context.Context, authorization, cookieHeade
 			return ErrInvalidMFA
 		}
 		if _, err := tx.NewUpdate().Model((*credentialRow)(nil)).Set("totp_secret = ''").Set("mfa_required = ?", false).
-			Set("totp_last_used_step = 0").Set("updated_at = ?", now.UnixMilli()).Where("principal_id = ?", claims.Subject).Exec(ctx); err != nil {
+			Set("totp_last_used_step = 0").Set("updated_at = ?", now.UnixMilli()).Where("principal_id = ?", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
 		for _, model := range []any{(*mfaEnrollmentRow)(nil), (*recoveryCodeRow)(nil), (*mfaChallengeRow)(nil)} {
-			if _, err := tx.NewDelete().Model(model).Where("principal_id = ?", claims.Subject).Exec(ctx); err != nil {
+			if _, err := tx.NewDelete().Model(model).Where("principal_id = ?", claims.PrincipalID).Exec(ctx); err != nil {
 				return err
 			}
 		}
-		if err := s.revokeOtherAuthentication(ctx, tx, claims.Subject, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
+		if err := s.revokeOtherAuthentication(ctx, tx, claims.PrincipalID, currentSessionHash(cookieHeader, s.web.CookieName), now.UnixMilli()); err != nil {
 			return err
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "mfa_disabled", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "mfa_disabled", "success")
 	})
 	if err != nil {
 		return fmt.Errorf("disable TOTP: %w", err)
@@ -394,7 +395,7 @@ func (s *WebService) DisableTOTP(ctx context.Context, authorization, cookieHeade
 	return nil
 }
 
-func (s *WebService) createLoginChallenge(ctx context.Context, principalID, returnURL string, now time.Time) (authnext.LoginResult, error) {
+func (s *WebService) createLoginChallenge(ctx context.Context, principalID guid.ID, returnURL string, now time.Time) (authnext.LoginResult, error) {
 	challengeID, err := randomToken(32)
 	if err != nil {
 		return authnext.LoginResult{}, err
@@ -414,7 +415,7 @@ func (s *WebService) createLoginChallenge(ctx context.Context, principalID, retu
 	return authnext.LoginResult{Status: "mfa_required", ReturnURL: returnURL, ChallengeID: challengeID, ExpiresAt: &expiresAt, Methods: []string{"totp", "recovery_code"}}, nil
 }
 
-func (s *WebService) verifyCurrentPassword(ctx context.Context, principalID, password string) (principalRow, credentialRow, error) {
+func (s *WebService) verifyCurrentPassword(ctx context.Context, principalID guid.ID, password string) (principalRow, credentialRow, error) {
 	var principal principalRow
 	if err := s.db.NewSelect().Model(&principal).Where("id = ? AND status = 'active'", principalID).Scan(ctx); err != nil {
 		return principalRow{}, credentialRow{}, authnext.ErrInvalidCredentials
@@ -479,7 +480,7 @@ func validateTOTP(code, secret string, now time.Time) (int64, bool) {
 	return 0, false
 }
 
-func (s *WebService) replaceRecoveryCodes(ctx context.Context, tx bun.Tx, principalID string, now time.Time) ([]string, error) {
+func (s *WebService) replaceRecoveryCodes(ctx context.Context, tx bun.Tx, principalID guid.ID, now time.Time) ([]string, error) {
 	if _, err := tx.NewDelete().Model((*recoveryCodeRow)(nil)).Where("principal_id = ?", principalID).Exec(ctx); err != nil {
 		return nil, err
 	}
@@ -518,17 +519,17 @@ func normalizeRecoveryCode(code string) string {
 
 func (s *WebService) recoveryCodeHash(code string) string {
 	mac := hmac.New(sha256.New, s.mfaPurposeKey("recovery:v1"))
-	_, _ = mac.Write([]byte("chaosplus:mfa:recovery:v1\x00" + code))
+	_, _ = mac.Write([]byte("platform:mfa:recovery:v1\x00" + code))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (s *WebService) mfaPurposeKey(purpose string) []byte {
 	mac := hmac.New(sha256.New, s.mfaKey)
-	_, _ = mac.Write([]byte("chaosplus:mfa:key:" + purpose))
+	_, _ = mac.Write([]byte("platform:mfa:key:" + purpose))
 	return mac.Sum(nil)
 }
 
-func (s *WebService) insertSession(ctx context.Context, db bun.IDB, principalID string, now time.Time, assurance authnext.Assurance) (string, error) {
+func (s *WebService) insertSession(ctx context.Context, db bun.IDB, principalID guid.ID, now time.Time, assurance authnext.Assurance) (string, error) {
 	token, err := randomToken(32)
 	if err != nil {
 		return "", err
@@ -545,7 +546,7 @@ func (s *WebService) insertSession(ctx context.Context, db bun.IDB, principalID 
 	return token, nil
 }
 
-func (s *WebService) revokeOtherAuthentication(ctx context.Context, tx bun.Tx, principalID, currentSession string, now int64) error {
+func (s *WebService) revokeOtherAuthentication(ctx context.Context, tx bun.Tx, principalID guid.ID, currentSession string, now int64) error {
 	query := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", principalID)
 	if currentSession != "" {
 		query = query.Where("id_hash <> ?", currentSession)

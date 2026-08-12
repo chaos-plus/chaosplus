@@ -24,6 +24,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	saml "github.com/crewjam/saml"
 	"github.com/uptrace/bun"
@@ -46,8 +47,8 @@ const federationCipherVersion = "v1"
 
 type providerRow struct {
 	bun.BaseModel          `bun:"table:iam_identity_providers"`
-	ID                     string `bun:"id,pk"`
-	TenantID               string
+	ID                     guid.ID `bun:"id,pk"`
+	TenantID               guid.ID
 	Name                   string
 	ProviderType           string
 	Issuer                 string
@@ -55,7 +56,7 @@ type providerRow struct {
 	ClientSecretCiphertext string
 	Scopes                 string
 	AutoProvision          bool
-	DefaultRoleID          string
+	DefaultRoleID          guid.ID
 	Status                 string
 	CreatedAt              int64
 	UpdatedAt              int64
@@ -63,10 +64,10 @@ type providerRow struct {
 
 type identityLinkRow struct {
 	bun.BaseModel   `bun:"table:iam_identity_links"`
-	ProviderID      string `bun:"provider_id,pk"`
-	TenantID        string `bun:"tenant_id,pk"`
-	ExternalSubject string `bun:"external_subject,pk"`
-	PrincipalID     string
+	ProviderID      guid.ID `bun:"provider_id,pk"`
+	TenantID        guid.ID `bun:"tenant_id,pk"`
+	ExternalSubject string  `bun:"external_subject,pk"`
+	PrincipalID     guid.ID
 	Email           string
 	DisplayName     string
 	LastLoginAt     int64
@@ -78,7 +79,7 @@ type identityLinkRow struct {
 // find or create the global principal plus tenant membership inside the
 // caller's transaction.
 type ExternalPrincipalProvisioner interface {
-	EnsureExternalPrincipal(context.Context, bun.IDB, string, string, string, time.Time) (string, bool, error)
+	EnsureExternalPrincipal(context.Context, bun.IDB, guid.ID, string, string, time.Time) (guid.ID, bool, error)
 }
 
 // LoginStart is the result of beginning a browser login: where to redirect and
@@ -101,6 +102,7 @@ type Service struct {
 	audit      auditx.Appender
 	identities ExternalPrincipalProvisioner
 	authn      *authnmod.WebService
+	nextID     func() (guid.ID, error)
 	key        []byte
 	oidc       *oidcClient
 	stateTTL   time.Duration
@@ -144,9 +146,9 @@ func ResolveEncryptionKey(cfg Config) ([]byte, error) {
 	return ParseEncryptionKey(encoded)
 }
 
-func NewService(db *bun.DB, audit auditx.Appender, identities ExternalPrincipalProvisioner, authn *authnmod.WebService, cfg Config, key []byte) *Service {
-	if db == nil || audit == nil || identities == nil || authn == nil {
-		panic("federation service requires database, audit appender, identity provisioner, and authentication service")
+func NewService(db *bun.DB, audit auditx.Appender, identities ExternalPrincipalProvisioner, authn *authnmod.WebService, cfg Config, key []byte, nextID func() (guid.ID, error)) *Service {
+	if db == nil || audit == nil || identities == nil || authn == nil || nextID == nil {
+		panic("federation service requires database, audit appender, identity provisioner, authentication service, and id generator")
 	}
 	dialect := db.Dialect().Name().String()
 	if dialect == "pg" {
@@ -166,14 +168,13 @@ func NewService(db *bun.DB, audit auditx.Appender, identities ExternalPrincipalP
 	}
 	return &Service{
 		db: db, dialect: dialect, audit: audit, identities: identities, authn: authn,
-		key: key, stateTTL: stateTTL, now: time.Now,
+		key: key, stateTTL: stateTTL, now: time.Now, nextID: nextID,
 		oidc: newOIDCClient(&http.Client{Timeout: timeout}, skew, 5*time.Minute),
 	}
 }
 
-func (s *Service) ListProviders(ctx context.Context, tenantID string) ([]Provider, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || len(tenantID) > 128 {
+func (s *Service) ListProviders(ctx context.Context, tenantID guid.ID) ([]Provider, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidProvider
 	}
 	var rows []providerRow
@@ -187,7 +188,7 @@ func (s *Service) ListProviders(ctx context.Context, tenantID string) ([]Provide
 	return result, nil
 }
 
-func (s *Service) CreateProvider(ctx context.Context, tenantID string, input ProviderInput) (Provider, error) {
+func (s *Service) CreateProvider(ctx context.Context, tenantID guid.ID, input ProviderInput) (Provider, error) {
 	row, secret, err := s.normalizeProvider(tenantID, input)
 	if err != nil {
 		return Provider{}, err
@@ -195,9 +196,12 @@ func (s *Service) CreateProvider(ctx context.Context, tenantID string, input Pro
 	if err := s.validateDefaultRole(ctx, s.db, row.TenantID, row.DefaultRoleID); err != nil {
 		return Provider{}, err
 	}
-	id, err := randomToken(18)
+	id, err := s.nextID()
 	if err != nil {
 		return Provider{}, err
+	}
+	if id.Zero() {
+		return Provider{}, ErrInvalidProvider
 	}
 	now := s.now().UTC().UnixMilli()
 	row.ID = id
@@ -218,9 +222,8 @@ func (s *Service) CreateProvider(ctx context.Context, tenantID string, input Pro
 	return providerFromRow(row), nil
 }
 
-func (s *Service) UpdateProvider(ctx context.Context, tenantID, id string, input ProviderInput) (Provider, error) {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || len(tenantID) > 128 || id == "" || len(id) > 128 {
+func (s *Service) UpdateProvider(ctx context.Context, tenantID, id guid.ID, input ProviderInput) (Provider, error) {
+	if tenantID.Zero() || id.Zero() {
 		return Provider{}, ErrInvalidProvider
 	}
 	current, err := s.getProvider(ctx, tenantID, id)
@@ -263,9 +266,8 @@ func (s *Service) UpdateProvider(ctx context.Context, tenantID, id string, input
 	return providerFromRow(row), nil
 }
 
-func (s *Service) DeleteProvider(ctx context.Context, tenantID, id string) error {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || len(tenantID) > 128 || id == "" || len(id) > 128 {
+func (s *Service) DeleteProvider(ctx context.Context, tenantID, id guid.ID) error {
+	if tenantID.Zero() || id.Zero() {
 		return ErrInvalidProvider
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -291,8 +293,8 @@ func (s *Service) DeleteProvider(ctx context.Context, tenantID, id string) error
 // OIDC authorization-code flow, or the SAML SP-initiated flow for SAML
 // providers. It resolves the provider, seals the state cookie, and returns the
 // upstream redirect URL.
-func (s *Service) StartLogin(ctx context.Context, providerID, returnURL, callback string) (LoginStart, error) {
-	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+func (s *Service) StartLogin(ctx context.Context, providerID guid.ID, returnURL, callback string) (LoginStart, error) {
+	provider, err := s.getProviderByID(ctx, providerID)
 	if err != nil {
 		return LoginStart{}, err
 	}
@@ -313,7 +315,7 @@ func (s *Service) StartLogin(ctx context.Context, providerID, returnURL, callbac
 	if err != nil {
 		return LoginStart{}, err
 	}
-	state, err := newLoginState(provider.ID, resolvedReturnURL, s.stateTTL, s.now().UTC())
+	state, err := newLoginState(provider.ID.String(), resolvedReturnURL, s.stateTTL, s.now().UTC())
 	if err != nil {
 		return LoginStart{}, err
 	}
@@ -346,8 +348,8 @@ func (s *Service) StartLogin(ctx context.Context, providerID, returnURL, callbac
 // CompleteLogin finishes the callback: it validates the state cookie, exchanges
 // the code, verifies the ID token, provisions or links the identity, and issues
 // a browser session.
-func (s *Service) CompleteLogin(ctx context.Context, providerID, code, state, cookieHeader, callback string) (LoginComplete, error) {
-	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+func (s *Service) CompleteLogin(ctx context.Context, providerID guid.ID, code, state, cookieHeader, callback string) (LoginComplete, error) {
+	provider, err := s.getProviderByID(ctx, providerID)
 	if err != nil {
 		return LoginComplete{}, err
 	}
@@ -362,7 +364,7 @@ func (s *Service) CompleteLogin(ctx context.Context, providerID, code, state, co
 	if err != nil {
 		return LoginComplete{}, ErrOIDCState
 	}
-	if sealedState.ProviderID != provider.ID || !strings.EqualFold(sealedState.Nonce, state) || sealedState.ExpiresAt < s.now().UTC().Unix() {
+	if sealedState.ProviderID != provider.ID.String() || !strings.EqualFold(sealedState.Nonce, state) || sealedState.ExpiresAt < s.now().UTC().Unix() {
 		return LoginComplete{}, ErrOIDCState
 	}
 	var clientSecret string
@@ -397,8 +399,8 @@ func (s *Service) StateClearCookie() string {
 // provider. It builds a signed HTTP-Redirect AuthnRequest to the IdP's SSO
 // endpoint and returns the redirect URL plus the sealed state cookie the
 // browser must send back to the callback.
-func (s *Service) StartSAMLLogin(ctx context.Context, providerID, returnURL, callback string) (string, string, error) {
-	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+func (s *Service) StartSAMLLogin(ctx context.Context, providerID guid.ID, returnURL, callback string) (string, string, error) {
+	provider, err := s.getProviderByID(ctx, providerID)
 	if err != nil {
 		return "", "", err
 	}
@@ -427,7 +429,7 @@ func (s *Service) StartSAMLLogin(ctx context.Context, providerID, returnURL, cal
 		return "", "", err
 	}
 	state := loginState{
-		ProviderID: provider.ID, Nonce: "id-" + nonce, CodeVerifier: verifier,
+		ProviderID: provider.ID.String(), Nonce: "id-" + nonce, CodeVerifier: verifier,
 		ReturnURL: resolvedReturnURL, ExpiresAt: now.Add(s.stateTTL).Unix(),
 	}
 	sealed, err := sealState(s.key, state)
@@ -457,8 +459,8 @@ func (s *Service) StartSAMLLogin(ctx context.Context, providerID, returnURL, cal
 // CompleteSAMLLogin finishes an SP-initiated SAML login: it verifies the state
 // cookie, parses and verifies the IdP's SAMLResponse, provisions or links the
 // identity, and issues a browser session.
-func (s *Service) CompleteSAMLLogin(ctx context.Context, providerID, samlResponse, cookieHeader, callback string) (string, string, error) {
-	provider, err := s.getProviderByID(ctx, strings.TrimSpace(providerID))
+func (s *Service) CompleteSAMLLogin(ctx context.Context, providerID guid.ID, samlResponse, cookieHeader, callback string) (string, string, error) {
+	provider, err := s.getProviderByID(ctx, providerID)
 	if err != nil {
 		return "", "", err
 	}
@@ -479,7 +481,7 @@ func (s *Service) CompleteSAMLLogin(ctx context.Context, providerID, samlRespons
 	if err != nil {
 		return "", "", ErrOIDCState
 	}
-	if sealedState.ProviderID != provider.ID || sealedState.ExpiresAt < s.now().UTC().Unix() {
+	if sealedState.ProviderID != provider.ID.String() || sealedState.ExpiresAt < s.now().UTC().Unix() {
 		return "", "", ErrOIDCState
 	}
 	assertion, err := s.parseSAMLResponse(ctx, provider, samlResponse, callback, sealedState.Nonce)
@@ -514,7 +516,7 @@ func (s *Service) CompleteSAMLLogin(ctx context.Context, providerID, samlRespons
 }
 
 func (s *Service) authenticate(ctx context.Context, provider providerRow, token idTokenClaims, method string) (string, error) {
-	var principalID string
+	var principalID guid.ID
 	now := s.now().UTC()
 	provisioned := false
 	defaultRoleMissing := false
@@ -543,7 +545,7 @@ func (s *Service) authenticate(ctx context.Context, provider providerRow, token 
 			}
 			principalID = id
 			provisioned = created
-			if created && provider.DefaultRoleID != "" {
+			if created && !provider.DefaultRoleID.Zero() {
 				granted, err := grantDefaultRole(ctx, tx, s.dialect, provider.TenantID, provider.DefaultRoleID, principalID, now)
 				if err != nil {
 					return err
@@ -590,8 +592,7 @@ func (s *Service) authenticate(ctx context.Context, provider providerRow, token 
 	return s.authn.CreateSession(ctx, principalID, now, assurance)
 }
 
-func (s *Service) normalizeProvider(tenantID string, input ProviderInput) (providerRow, string, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func (s *Service) normalizeProvider(tenantID guid.ID, input ProviderInput) (providerRow, string, error) {
 	name := strings.TrimSpace(input.Name)
 	providerType := strings.TrimSpace(input.ProviderType)
 	if providerType == "" {
@@ -600,16 +601,16 @@ func (s *Service) normalizeProvider(tenantID string, input ProviderInput) (provi
 	issuer, err := normalizeIssuer(input.Issuer)
 	clientID := strings.TrimSpace(input.ClientID)
 	scopes := normalizeScopes(input.Scopes)
-	defaultRoleID := strings.TrimSpace(input.DefaultRoleID)
+	defaultRoleID := input.DefaultRoleID
 	status := strings.TrimSpace(input.Status)
 	if status == "" {
 		status = ProviderActive
 	}
 	secret := strings.TrimSpace(input.ClientSecret)
-	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 ||
+	if tenantID.Zero() || name == "" || len(name) > 128 ||
 		(providerType != ProviderOIDC && providerType != ProviderSAML) ||
 		err != nil || clientID == "" || len(clientID) > 128 ||
-		len(defaultRoleID) > 32 || (status != ProviderActive && status != ProviderDisabled) || len(secret) > 2048 {
+		(status != ProviderActive && status != ProviderDisabled) || len(secret) > 2048 {
 		return providerRow{}, "", ErrInvalidProvider
 	}
 	// SAML providers don't require scopes (assertion-driven); OIDC does.
@@ -624,8 +625,8 @@ func (s *Service) normalizeProvider(tenantID string, input ProviderInput) (provi
 
 // validateDefaultRole rejects provider changes that point at a role the tenant
 // does not have, so JIT provisioning never silently grants nothing.
-func (s *Service) validateDefaultRole(ctx context.Context, db bun.IDB, tenantID, roleID string) error {
-	if roleID == "" {
+func (s *Service) validateDefaultRole(ctx context.Context, db bun.IDB, tenantID, roleID guid.ID) error {
+	if roleID.Zero() {
 		return nil
 	}
 	exists, err := db.NewSelect().Table("iam_roles").Where("tenant_id = ? AND id = ?", tenantID, roleID).Exists(ctx)
@@ -638,7 +639,7 @@ func (s *Service) validateDefaultRole(ctx context.Context, db bun.IDB, tenantID,
 	return nil
 }
 
-func (s *Service) getProvider(ctx context.Context, tenantID, id string) (providerRow, error) {
+func (s *Service) getProvider(ctx context.Context, tenantID, id guid.ID) (providerRow, error) {
 	var row providerRow
 	if err := s.db.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -649,8 +650,8 @@ func (s *Service) getProvider(ctx context.Context, tenantID, id string) (provide
 	return row, nil
 }
 
-func (s *Service) getProviderByID(ctx context.Context, id string) (providerRow, error) {
-	if id == "" || len(id) > 128 {
+func (s *Service) getProviderByID(ctx context.Context, id guid.ID) (providerRow, error) {
+	if id.Zero() {
 		return providerRow{}, ErrProviderNotFound
 	}
 	var row providerRow
@@ -663,7 +664,7 @@ func (s *Service) getProviderByID(ctx context.Context, id string) (providerRow, 
 	return row, nil
 }
 
-func (s *Service) encryptSecret(providerID, secret string) (string, error) {
+func (s *Service) encryptSecret(providerID guid.ID, secret string) (string, error) {
 	block, err := aes.NewCipher(purposeKey(s.key, "client-secret"))
 	if err != nil {
 		return "", fmt.Errorf("create federation cipher: %w", err)
@@ -676,11 +677,11 @@ func (s *Service) encryptSecret(providerID, secret string) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("generate federation nonce: %w", err)
 	}
-	sealed := gcm.Seal(nonce, nonce, []byte(secret), []byte("chaosplus:federation:secret\x00"+providerID))
+	sealed := gcm.Seal(nonce, nonce, []byte(secret), []byte("federation:secret\x00"+providerID.String()))
 	return federationCipherVersion + "." + base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-func (s *Service) decryptSecret(providerID, encoded string) (string, error) {
+func (s *Service) decryptSecret(providerID guid.ID, encoded string) (string, error) {
 	version, payload, ok := strings.Cut(encoded, ".")
 	if !ok || version != federationCipherVersion || payload == "" {
 		return "", errors.New("unsupported federation client secret ciphertext")
@@ -701,14 +702,14 @@ func (s *Service) decryptSecret(providerID, encoded string) (string, error) {
 		return "", errors.New("invalid federation client secret ciphertext")
 	}
 	nonce, ciphertext := sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():]
-	plain, err := gcm.Open(nil, nonce, ciphertext, []byte("chaosplus:federation:secret\x00"+providerID))
+	plain, err := gcm.Open(nil, nonce, ciphertext, []byte("federation:secret\x00"+providerID.String()))
 	if err != nil {
 		return "", errors.New("decrypt federation client secret")
 	}
 	return string(plain), nil
 }
 
-func grantDefaultRole(ctx context.Context, tx bun.IDB, dialect, tenantID, roleID, principalID string, now time.Time) (bool, error) {
+func grantDefaultRole(ctx context.Context, tx bun.IDB, dialect string, tenantID, roleID, principalID guid.ID, now time.Time) (bool, error) {
 	exists, err := tx.NewSelect().Table("iam_roles").Where("tenant_id = ? AND id = ?", tenantID, roleID).Exists(ctx)
 	if err != nil {
 		return false, err
@@ -716,7 +717,7 @@ func grantDefaultRole(ctx context.Context, tx bun.IDB, dialect, tenantID, roleID
 	if !exists {
 		return false, nil
 	}
-	if _, err := tx.NewRaw("INSERT INTO iam_role_members (tenant_id, role_id, user_subject, created_at) VALUES (?, ?, ?, ?)", tenantID, roleID, principalID, now.UnixMilli()).Exec(ctx); err != nil {
+	if _, err := tx.NewRaw("INSERT INTO iam_role_members (tenant_id, role_id, principal_id, created_at) VALUES (?, ?, ?, ?)", tenantID, roleID, principalID, now.UnixMilli()).Exec(ctx); err != nil {
 		return false, fmt.Errorf("grant federation default role: %w", err)
 	}
 	if err := policyx.Advance(ctx, tx, dialect, tenantID, now.UnixMilli()); err != nil {
@@ -725,7 +726,7 @@ func grantDefaultRole(ctx context.Context, tx bun.IDB, dialect, tenantID, roleID
 	return true, nil
 }
 
-func verifyPrincipalAndMember(ctx context.Context, db bun.IDB, tenantID, principalID string) error {
+func verifyPrincipalAndMember(ctx context.Context, db bun.IDB, tenantID, principalID guid.ID) error {
 	var status string
 	if err := db.NewSelect().Table("iam_principals").Column("status").Where("id = ?", principalID).Scan(ctx, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -736,7 +737,7 @@ func verifyPrincipalAndMember(ctx context.Context, db bun.IDB, tenantID, princip
 	if status != "active" {
 		return ErrPrincipalInactive
 	}
-	if err := db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND user_subject = ?", tenantID, principalID).Scan(ctx, &status); err != nil {
+	if err := db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND principal_id = ?", tenantID, principalID).Scan(ctx, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrPrincipalInactive
 		}
@@ -794,7 +795,7 @@ func normalizeScopes(value string) string {
 // never encrypts two different kinds of payload with the same key material.
 func purposeKey(key []byte, purpose string) []byte {
 	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte("chaosplus:federation:key:" + purpose))
+	_, _ = mac.Write([]byte("federation:key:" + purpose))
 	return mac.Sum(nil)
 }
 
@@ -817,6 +818,6 @@ func cookieValue(header, name string) (string, error) {
 
 // callbackURL is the canonical callback path. The API layer prepends the
 // externally visible scheme and host before sending it to the IdP.
-func callbackURL(providerID string) string {
-	return "/federation/" + providerID + "/callback"
+func callbackURL(providerID guid.ID) string {
+	return "/federation/" + providerID.String() + "/callback"
 }

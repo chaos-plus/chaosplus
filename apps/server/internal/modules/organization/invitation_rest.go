@@ -8,6 +8,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
 
@@ -58,7 +59,11 @@ type revokedInvitation struct {
 
 func RegisterInvitationREST(api huma.API, service *InvitationService, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-list-invitations", Method: http.MethodGet, Path: "/iam/invitations", Summary: "List tenant invitations", Tags: []string{"organization"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "invitation", Verb: "view"}, func(ctx context.Context, in *invitationListInput) (*respx.Body[[]Invitation], error) {
-		items, err := service.List(ctx, in.TenantID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.List(ctx, tenantID)
 		if err != nil {
 			return nil, invitationError(err)
 		}
@@ -66,7 +71,23 @@ func RegisterInvitationREST(api huma.API, service *InvitationService, registrar 
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-create-invitation", Method: http.MethodPost, Path: "/iam/invitations", Summary: "Create a tenant invitation and return its credential once", Tags: []string{"organization"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "invitation", Verb: "create"}, func(ctx context.Context, in *createInvitationInput) (*respx.Body[issuedInvitation], error) {
-		item, token, err := service.Create(ctx, in.TenantID, CreateInvitation{Email: in.Body.Email, DepartmentID: in.Body.DepartmentID, RoleIDs: in.Body.RoleIDs, TTL: time.Duration(in.Body.ExpiresInHours) * time.Hour})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		departmentID, err := parseOptionalOrganizationID(in.Body.DepartmentID)
+		if err != nil {
+			return nil, err
+		}
+		roleIDs := make([]guid.ID, 0, len(in.Body.RoleIDs))
+		for _, roleID := range in.Body.RoleIDs {
+			id, err := parseOrganizationID(roleID)
+			if err != nil {
+				return nil, err
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		item, token, err := service.Create(ctx, tenantID, CreateInvitation{Email: in.Body.Email, DepartmentID: departmentID, RoleIDs: roleIDs, TTL: time.Duration(in.Body.ExpiresInHours) * time.Hour})
 		if err != nil {
 			return nil, invitationError(err)
 		}
@@ -74,14 +95,30 @@ func RegisterInvitationREST(api huma.API, service *InvitationService, registrar 
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-revoke-invitation", Method: http.MethodDelete, Path: "/iam/invitations/{id}", Summary: "Revoke a pending tenant invitation", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "invitation", Verb: "revoke"}, func(ctx context.Context, in *invitationIDInput) (*respx.Body[revokedInvitation], error) {
-		if err := service.Revoke(ctx, in.TenantID, in.ID); err != nil {
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.Revoke(ctx, tenantID, id); err != nil {
 			return nil, invitationError(err)
 		}
 		return respx.OK(ctx, revokedInvitation{Revoked: true}), nil
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-resend-invitation", Method: http.MethodPost, Path: "/iam/invitations/{id}/resend", Summary: "Rotate and return a pending invitation credential once", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "invitation", Verb: "resend"}, func(ctx context.Context, in *resendInvitationInput) (*respx.Body[issuedInvitation], error) {
-		item, token, err := service.Resend(ctx, in.TenantID, in.ID, time.Duration(in.Body.ExpiresInHours)*time.Hour)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, token, err := service.Resend(ctx, tenantID, id, time.Duration(in.Body.ExpiresInHours)*time.Hour)
 		if err != nil {
 			return nil, invitationError(err)
 		}

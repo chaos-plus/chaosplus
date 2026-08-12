@@ -16,6 +16,7 @@ import (
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/webauthnx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -27,7 +28,7 @@ const (
 
 type passkeyUserRow struct {
 	bun.BaseModel `bun:"table:iam_passkey_users"`
-	PrincipalID   string `bun:"principal_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	UserHandle    string
 	CreatedAt     int64
 }
@@ -35,7 +36,7 @@ type passkeyUserRow struct {
 type passkeyRow struct {
 	bun.BaseModel        `bun:"table:iam_passkeys"`
 	IDHash               string `bun:"id_hash,pk"`
-	PrincipalID          string
+	PrincipalID          guid.ID
 	Name                 string
 	CredentialCiphertext string
 	SignCount            uint32
@@ -48,7 +49,7 @@ type passkeyChallengeRow struct {
 	bun.BaseModel `bun:"table:iam_passkey_challenges"`
 	IDHash        string `bun:"id_hash,pk"`
 	Kind          string
-	PrincipalID   string
+	PrincipalID   guid.ID
 	ReturnURL     string
 	SessionData   string
 	CreatedAt     int64
@@ -65,7 +66,7 @@ func (s *WebService) ListPasskeys(ctx context.Context, authorization, cookieHead
 		return nil, err
 	}
 	var rows []passkeyRow
-	if err := s.db.NewSelect().Model(&rows).Where("principal_id = ?", claims.Subject).Order("created_at DESC").Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&rows).Where("principal_id = ?", claims.PrincipalID).Order("created_at DESC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list passkeys: %w", err)
 	}
 	result := make([]authnext.Passkey, 0, len(rows))
@@ -83,14 +84,14 @@ func (s *WebService) BeginPasskeyRegistration(ctx context.Context, authorization
 	if err != nil {
 		return authnext.PasskeyOptions{}, err
 	}
-	if err := s.ensureRecoveryCooldownExpired(ctx, claims.Subject); err != nil {
+	if err := s.ensureRecoveryCooldownExpired(ctx, claims.PrincipalID); err != nil {
 		return authnext.PasskeyOptions{}, err
 	}
-	principal, _, err := s.verifyCurrentPassword(ctx, claims.Subject, currentPassword)
+	principal, _, err := s.verifyCurrentPassword(ctx, claims.PrincipalID, currentPassword)
 	if err != nil {
 		return authnext.PasskeyOptions{}, err
 	}
-	count, err := s.db.NewSelect().Model((*passkeyRow)(nil)).Where("principal_id = ?", claims.Subject).Count(ctx)
+	count, err := s.db.NewSelect().Model((*passkeyRow)(nil)).Where("principal_id = ?", claims.PrincipalID).Count(ctx)
 	if err != nil {
 		return authnext.PasskeyOptions{}, fmt.Errorf("count passkeys: %w", err)
 	}
@@ -107,12 +108,12 @@ func (s *WebService) BeginPasskeyRegistration(ctx context.Context, authorization
 	if err != nil {
 		return authnext.PasskeyOptions{}, fmt.Errorf("begin passkey registration: %w", err)
 	}
-	result, err := s.storePasskeyChallenge(ctx, passkeyRegistration, claims.Subject, "", session, now, expires)
+	result, err := s.storePasskeyChallenge(ctx, passkeyRegistration, claims.PrincipalID, "", session, now, expires)
 	if err != nil {
 		return authnext.PasskeyOptions{}, err
 	}
 	result.Options = json.RawMessage(options)
-	s.audit(ctx, claims.Subject, "passkey_registration_started", "success")
+	s.audit(ctx, claims.PrincipalID, "passkey_registration_started", "success")
 	return result, nil
 }
 
@@ -129,31 +130,31 @@ func (s *WebService) FinishPasskeyRegistration(ctx context.Context, authorizatio
 		return authnext.Passkey{}, authnext.ErrPasskeyCredential
 	}
 	now := s.now().UTC()
-	challenge, err := s.consumePasskeyChallenge(ctx, challengeID, passkeyRegistration, claims.Subject, now)
+	challenge, err := s.consumePasskeyChallenge(ctx, challengeID, passkeyRegistration, claims.PrincipalID, now)
 	if err != nil {
 		return authnext.Passkey{}, err
 	}
-	user, err := s.loadPasskeyUser(ctx, s.db, claims.Subject)
+	user, err := s.loadPasskeyUser(ctx, s.db, claims.PrincipalID)
 	if err != nil {
 		return authnext.Passkey{}, err
 	}
 	credential, err := s.passkeys.FinishRegistration(user, []byte(challenge.SessionData), response)
 	if err != nil {
-		s.audit(ctx, claims.Subject, "passkey_registration", "denied")
+		s.audit(ctx, claims.PrincipalID, "passkey_registration", "denied")
 		return authnext.Passkey{}, authnext.ErrPasskeyCredential
 	}
 	if err := s.checkPasskeyAttestation(credential); err != nil {
-		s.audit(ctx, claims.Subject, "passkey_registration", "denied")
+		s.audit(ctx, claims.PrincipalID, "passkey_registration", "denied")
 		return authnext.Passkey{}, err
 	}
-	view, err := s.storePasskeyCredential(ctx, claims.Subject, name, credential, now)
+	view, err := s.storePasskeyCredential(ctx, claims.PrincipalID, name, credential, now)
 	if err != nil {
 		return authnext.Passkey{}, err
 	}
 	return view, nil
 }
 
-func (s *WebService) storePasskeyCredential(ctx context.Context, principalID, name string, credential webauthnx.Credential, now time.Time) (authnext.Passkey, error) {
+func (s *WebService) storePasskeyCredential(ctx context.Context, principalID guid.ID, name string, credential webauthnx.Credential, now time.Time) (authnext.Passkey, error) {
 	idHash := passkeyIDHash(credential.ID)
 	ciphertext, err := s.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), credential.Data)
 	if err != nil {
@@ -221,7 +222,7 @@ func (s *WebService) BeginPasskeyLogin(ctx context.Context, origin, returnURL st
 	if err != nil {
 		return authnext.PasskeyOptions{}, fmt.Errorf("begin passkey login: %w", err)
 	}
-	result, err := s.storePasskeyChallenge(ctx, passkeyLogin, "", returnURL, session, now, expires)
+	result, err := s.storePasskeyChallenge(ctx, passkeyLogin, 0, returnURL, session, now, expires)
 	if err != nil {
 		return authnext.PasskeyOptions{}, err
 	}
@@ -240,11 +241,11 @@ func (s *WebService) FinishPasskeyLogin(ctx context.Context, origin, challengeID
 		return authnext.LoginResult{}, authnext.ErrPasskeyCredential
 	}
 	now := s.now().UTC()
-	challenge, err := s.consumePasskeyChallenge(ctx, challengeID, passkeyLogin, "", now)
+	challenge, err := s.consumePasskeyChallenge(ctx, challengeID, passkeyLogin, 0, now)
 	if err != nil {
 		return authnext.LoginResult{}, err
 	}
-	var principalID string
+	var principalID guid.ID
 	var current passkeyRow
 	_, credential, err := s.passkeys.FinishLogin([]byte(challenge.SessionData), response, func(credentialID, userHandle []byte) (webauthnx.User, error) {
 		var lookupErr error
@@ -254,7 +255,7 @@ func (s *WebService) FinishPasskeyLogin(ctx context.Context, origin, challengeID
 		}
 		return s.loadPasskeyUser(ctx, s.db, principalID)
 	})
-	if err != nil || principalID == "" {
+	if err != nil || principalID.Zero() {
 		s.audit(ctx, principalID, "passkey_login", "denied")
 		return authnext.LoginResult{}, authnext.ErrPasskeyCredential
 	}
@@ -265,7 +266,7 @@ func (s *WebService) FinishPasskeyLogin(ctx context.Context, origin, challengeID
 	return authnext.LoginResult{Status: "authenticated", ReturnURL: challenge.ReturnURL, SessionID: sessionID}, nil
 }
 
-func (s *WebService) completePasskeyLogin(ctx context.Context, principalID string, current passkeyRow, credential webauthnx.Credential, now time.Time) (string, error) {
+func (s *WebService) completePasskeyLogin(ctx context.Context, principalID guid.ID, current passkeyRow, credential webauthnx.Credential, now time.Time) (string, error) {
 	ciphertext, err := s.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, current.IDHash), credential.Data)
 	if err != nil {
 		return "", err
@@ -314,17 +315,17 @@ func (s *WebService) RenamePasskey(ctx context.Context, authorization, cookieHea
 	var row passkeyRow
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		result, err := tx.NewUpdate().Model((*passkeyRow)(nil)).Set("name = ?", name).Set("updated_at = ?", now).
-			Where("id_hash = ? AND principal_id = ?", id, claims.Subject).Exec(ctx)
+			Where("id_hash = ? AND principal_id = ?", id, claims.PrincipalID).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return authnext.ErrPasskeyNotFound
 		}
-		if err := tx.NewSelect().Model(&row).Where("id_hash = ? AND principal_id = ?", id, claims.Subject).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(&row).Where("id_hash = ? AND principal_id = ?", id, claims.PrincipalID).Scan(ctx); err != nil {
 			return fmt.Errorf("load renamed passkey: %w", err)
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "passkey_renamed", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "passkey_renamed", "success")
 	})
 	if err != nil {
 		if errors.Is(err, authnext.ErrPasskeyNotFound) {
@@ -343,22 +344,22 @@ func (s *WebService) DeletePasskey(ctx context.Context, authorization, cookieHea
 	if err != nil {
 		return err
 	}
-	if _, _, err := s.verifyCurrentPassword(ctx, claims.Subject, currentPassword); err != nil {
+	if _, _, err := s.verifyCurrentPassword(ctx, claims.PrincipalID, currentPassword); err != nil {
 		return err
 	}
 	now := s.now().UTC().UnixMilli()
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		result, err := tx.NewDelete().Model((*passkeyRow)(nil)).Where("id_hash = ? AND principal_id = ?", id, claims.Subject).Exec(ctx)
+		result, err := tx.NewDelete().Model((*passkeyRow)(nil)).Where("id_hash = ? AND principal_id = ?", id, claims.PrincipalID).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return authnext.ErrPasskeyNotFound
 		}
-		if err := s.revokeOtherAuthentication(ctx, tx, claims.Subject, currentSessionHash(cookieHeader, s.web.CookieName), now); err != nil {
+		if err := s.revokeOtherAuthentication(ctx, tx, claims.PrincipalID, currentSessionHash(cookieHeader, s.web.CookieName), now); err != nil {
 			return err
 		}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "passkey_deleted", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "passkey_deleted", "success")
 	})
 	if err != nil {
 		if errors.Is(err, authnext.ErrPasskeyNotFound) {
@@ -396,7 +397,7 @@ func (s *WebService) ensurePasskeyUser(ctx context.Context, principal principalR
 	return s.loadPasskeyUserWithIdentity(ctx, s.db, principal, row)
 }
 
-func (s *WebService) loadPasskeyUser(ctx context.Context, db bun.IDB, principalID string) (webauthnx.User, error) {
+func (s *WebService) loadPasskeyUser(ctx context.Context, db bun.IDB, principalID guid.ID) (webauthnx.User, error) {
 	var principal principalRow
 	if err := db.NewSelect().Model(&principal).Where("id = ? AND status = 'active'", principalID).Scan(ctx); err != nil {
 		return webauthnx.User{}, authnext.ErrPasskeyCredential
@@ -432,23 +433,23 @@ func (s *WebService) loadPasskeyUserWithIdentity(ctx context.Context, db bun.IDB
 	return resolved, nil
 }
 
-func (s *WebService) resolvePasskey(ctx context.Context, credentialID, userHandle []byte) (string, passkeyRow, error) {
+func (s *WebService) resolvePasskey(ctx context.Context, credentialID, userHandle []byte) (guid.ID, passkeyRow, error) {
 	var row passkeyRow
 	if err := s.db.NewSelect().Model(&row).Where("id_hash = ?", passkeyIDHash(credentialID)).Scan(ctx); err != nil {
-		return "", row, authnext.ErrPasskeyCredential
+		return 0, row, authnext.ErrPasskeyCredential
 	}
 	var user passkeyUserRow
 	if err := s.db.NewSelect().Model(&user).Where("principal_id = ? AND user_handle = ?", row.PrincipalID, base64.RawURLEncoding.EncodeToString(userHandle)).Scan(ctx); err != nil {
-		return "", row, authnext.ErrPasskeyCredential
+		return 0, row, authnext.ErrPasskeyCredential
 	}
 	var status string
 	if err := s.db.NewSelect().Table("iam_principals").Column("status").Where("id = ?", row.PrincipalID).Scan(ctx, &status); err != nil || status != "active" {
-		return "", row, authnext.ErrPasskeyCredential
+		return 0, row, authnext.ErrPasskeyCredential
 	}
 	return row.PrincipalID, row, nil
 }
 
-func (s *WebService) storePasskeyChallenge(ctx context.Context, kind, principalID, returnURL string, session []byte, now, expires time.Time) (authnext.PasskeyOptions, error) {
+func (s *WebService) storePasskeyChallenge(ctx context.Context, kind string, principalID guid.ID, returnURL string, session []byte, now, expires time.Time) (authnext.PasskeyOptions, error) {
 	id, err := randomToken(32)
 	if err != nil {
 		return authnext.PasskeyOptions{}, err
@@ -467,14 +468,14 @@ func (s *WebService) storePasskeyChallenge(ctx context.Context, kind, principalI
 	return authnext.PasskeyOptions{ChallengeID: id, ExpiresAt: expires}, nil
 }
 
-func (s *WebService) consumePasskeyChallenge(ctx context.Context, id, kind, principalID string, now time.Time) (passkeyChallengeRow, error) {
+func (s *WebService) consumePasskeyChallenge(ctx context.Context, id, kind string, principalID guid.ID, now time.Time) (passkeyChallengeRow, error) {
 	if strings.TrimSpace(id) == "" {
 		return passkeyChallengeRow{}, authnext.ErrPasskeyChallenge
 	}
 	hash := tokenHash(id)
 	var row passkeyChallengeRow
 	query := s.db.NewSelect().Model(&row).Where("id_hash = ? AND kind = ?", hash, kind)
-	if principalID != "" {
+	if !principalID.Zero() {
 		query = query.Where("principal_id = ?", principalID)
 	}
 	if err := query.Scan(ctx); err != nil {
@@ -482,7 +483,7 @@ func (s *WebService) consumePasskeyChallenge(ctx context.Context, id, kind, prin
 	}
 	update := s.db.NewUpdate().Model((*passkeyChallengeRow)(nil)).Set("consumed_at = ?", now.UnixMilli()).
 		Where("id_hash = ? AND kind = ? AND consumed_at = 0 AND expires_at > ?", hash, kind, now.UnixMilli())
-	if principalID != "" {
+	if !principalID.Zero() {
 		update = update.Where("principal_id = ?", principalID)
 	}
 	result, err := update.Exec(ctx)
@@ -508,7 +509,9 @@ func passkeyIDHash(id []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func passkeyAAD(principalID, idHash string) string { return principalID + "\x00" + idHash }
+func passkeyAAD(principalID guid.ID, idHash string) string {
+	return principalID.String() + "\x00" + idHash
+}
 
 func passkeyView(row passkeyRow) authnext.Passkey {
 	view := authnext.Passkey{ID: row.IDHash, Name: row.Name, SignCount: row.SignCount, CreatedAt: time.UnixMilli(row.CreatedAt).UTC()}

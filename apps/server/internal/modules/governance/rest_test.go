@@ -31,36 +31,36 @@ type governanceEnvelope struct {
 func TestGovernanceHTTPWorkflowAndOpenAPI(t *testing.T) {
 	fixture := newGovernanceFixture(t)
 	server, api := newGovernanceHTTPServer(t, fixture.service)
-	roles := governanceRequest(t, server, http.MethodGet, "/iam/requestable-roles", "tenant-a", "requester", authn.SubjectTypePrincipal, "en-US", nil)
+	roles := governanceRequest(t, server, http.MethodGet, "/iam/requestable-roles", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "en-US", nil)
 	require.Equal(t, http.StatusOK, roles.status, roles.Message)
 
-	created := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", "tenant-a", "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{
-		"role_id": "role-a", "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
+	created := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{
+		"role_id": wireID("role-a"), "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
 	})
 	require.Equal(t, http.StatusCreated, created.status, created.Message)
 	var request AccessRequest
 	require.NoError(t, json.Unmarshal(created.Data, &request))
 
-	listed := governanceRequest(t, server, http.MethodGet, "/iam/my/access-requests", "tenant-a", "requester", authn.SubjectTypePrincipal, "en-US", nil)
+	listed := governanceRequest(t, server, http.MethodGet, "/iam/my/access-requests", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "en-US", nil)
 	require.Equal(t, http.StatusOK, listed.status, listed.Message)
 	var requests []AccessRequest
 	require.NoError(t, json.Unmarshal(listed.Data, &requests))
 	require.Len(t, requests, 1)
-	queue := governanceRequest(t, server, http.MethodGet, "/iam/access-requests", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", nil)
+	queue := governanceRequest(t, server, http.MethodGet, "/iam/access-requests", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", nil)
 	assert.Equal(t, http.StatusOK, queue.status, queue.Message)
 
-	approved := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+request.ID+"/approve", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "approved"})
+	approved := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+request.ID.String()+"/approve", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "approved"})
 	require.Equal(t, http.StatusOK, approved.status, approved.Message)
-	withdrawn := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+request.ID+"/withdraw", "tenant-a", "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{"reason": "finished"})
+	withdrawn := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+request.ID.String()+"/withdraw", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{"reason": "finished"})
 	assert.Equal(t, http.StatusOK, withdrawn.status, withdrawn.Message)
 
 	rejectedRequest := createGovernanceHTTPRequest(t, server)
-	rejected := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+rejectedRequest.ID+"/reject", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "not needed"})
+	rejected := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+rejectedRequest.ID.String()+"/reject", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "not needed"})
 	assert.Equal(t, http.StatusOK, rejected.status, rejected.Message)
 	revokedRequest := createGovernanceHTTPRequest(t, server)
-	approved = governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+revokedRequest.ID+"/approve", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "approved"})
+	approved = governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+revokedRequest.ID.String()+"/approve", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"note": "approved"})
 	require.Equal(t, http.StatusOK, approved.status, approved.Message)
-	revoked := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+revokedRequest.ID+"/revoke", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"reason": "revoked"})
+	revoked := governanceRequest(t, server, http.MethodPost, "/iam/access-requests/"+revokedRequest.ID.String()+"/revoke", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", map[string]any{"reason": "revoked"})
 	assert.Equal(t, http.StatusOK, revoked.status, revoked.Message)
 
 	operations := map[string]string{
@@ -80,8 +80,8 @@ func TestGovernanceHTTPWorkflowAndOpenAPI(t *testing.T) {
 
 func createGovernanceHTTPRequest(t *testing.T, server *httptest.Server) AccessRequest {
 	t.Helper()
-	response := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", "tenant-a", "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{
-		"role_id": "role-a", "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
+	response := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "en-US", map[string]any{
+		"role_id": wireID("role-a"), "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
 	})
 	require.Equal(t, http.StatusCreated, response.status, response.Message)
 	var request AccessRequest
@@ -99,16 +99,16 @@ func TestGovernanceHTTPErrorsAreLocalized(t *testing.T) {
 		{"zh-CN", "申请的角色在当前租户中已不存在。请选择可用角色后重新提交申请。"},
 		{"ms-MY", "Peranan yang diminta tidak lagi wujud dalam penyewa ini. Pilih peranan yang tersedia dan hantar permintaan baharu."},
 	} {
-		response := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", "tenant-a", "requester", authn.SubjectTypePrincipal, item.locale, map[string]any{
-			"role_id": "missing", "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
+		response := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, item.locale, map[string]any{
+			"role_id": wireID("missing"), "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
 		})
 		assert.Equal(t, http.StatusNotFound, response.status)
 		assert.Equal(t, item.expected, response.Message)
 		assert.NotContains(t, response.Message, "access_request_")
 	}
 
-	serviceAccount := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", "tenant-a", "service", authn.SubjectTypeServiceAccount, "zh-CN", map[string]any{
-		"role_id": "role-a", "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
+	serviceAccount := governanceRequest(t, server, http.MethodPost, "/iam/access-requests", wireID("tenant-a"), "service", authn.SubjectTypeServiceAccount, "zh-CN", map[string]any{
+		"role_id": wireID("role-a"), "reason": "temporary operations", "access_expires_at": governanceNow.Add(24 * time.Hour),
 	})
 	assert.Equal(t, http.StatusForbidden, serviceAccount.status)
 	assert.Equal(t, "该操作必须由已认证的人员身份执行，服务账号和 OAuth 客户端不能申请、审批或复核访问权限。", serviceAccount.Message)
@@ -117,10 +117,10 @@ func TestGovernanceHTTPErrorsAreLocalized(t *testing.T) {
 	require.NoError(t, err)
 	_, err = fixture.db.ExecContext(t.Context(), "DROP TABLE iam_access_requests")
 	require.NoError(t, err)
-	unavailable := governanceRequest(t, server, http.MethodGet, "/iam/my/access-requests", "tenant-a", "requester", authn.SubjectTypePrincipal, "ms-MY", nil)
+	unavailable := governanceRequest(t, server, http.MethodGet, "/iam/my/access-requests", wireID("tenant-a"), "requester", authn.SubjectTypePrincipal, "ms-MY", nil)
 	assert.Equal(t, http.StatusInternalServerError, unavailable.status)
 	assert.Equal(t, "Perkhidmatan tadbir urus akses tidak tersedia buat sementara waktu. Tiada perubahan dilakukan; cuba lagi kemudian.", unavailable.Message)
-	queueUnavailable := governanceRequest(t, server, http.MethodGet, "/iam/access-requests", "tenant-a", "approver", authn.SubjectTypePrincipal, "en-US", nil)
+	queueUnavailable := governanceRequest(t, server, http.MethodGet, "/iam/access-requests", wireID("tenant-a"), "approver", authn.SubjectTypePrincipal, "en-US", nil)
 	assert.Equal(t, http.StatusInternalServerError, queueUnavailable.status)
 	assert.Equal(t, "The access governance service is temporarily unavailable. No governance change was committed; try again later.", queueUnavailable.Message)
 }
@@ -144,10 +144,10 @@ func TestGovernanceErrorMappingAndHumanPrincipal(t *testing.T) {
 	}
 	_, err := humanPrincipal(t.Context())
 	assert.Error(t, err)
-	ctx := authn.WithClaims(t.Context(), &authn.Claims{Subject: "principal", SubjectType: authn.SubjectTypePrincipal})
+	ctx := authn.WithClaims(t.Context(), &authn.Claims{Subject: "principal", PrincipalID: testID("principal"), SubjectType: authn.SubjectTypePrincipal})
 	principal, err := humanPrincipal(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "principal", principal)
+	assert.Equal(t, testID("principal"), principal)
 }
 
 func newGovernanceHTTPServer(t *testing.T, service *Service) (*httptest.Server, huma.API) {
@@ -159,7 +159,7 @@ func newGovernanceHTTPServer(t *testing.T, service *Service) (*httptest.Server, 
 	router.Use(respx.Locale)
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			claims := &authn.Claims{Subject: request.Header.Get("X-Test-Subject"), SubjectType: request.Header.Get("X-Test-Subject-Type")}
+			claims := &authn.Claims{Subject: request.Header.Get("X-Test-Subject"), PrincipalID: testID(request.Header.Get("X-Test-Subject")), SubjectType: request.Header.Get("X-Test-Subject-Type")}
 			next.ServeHTTP(writer, request.WithContext(authn.WithClaims(request.Context(), claims)))
 		})
 	})

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -14,12 +15,12 @@ import (
 type ProvisionedGroupInput struct {
 	DisplayName string
 	Active      bool
-	MemberIDs   []string
+	MemberIDs   []guid.ID
 }
 
 // CreateProvisionedTo writes a static group through a caller-owned transaction.
 // The caller owns the corresponding provisioning mapping and audit event.
-func (s *GroupService) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID string, input ProvisionedGroupInput) (Group, error) {
+func (s *GroupService) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID guid.ID, input ProvisionedGroupInput) (Group, error) {
 	input, memberIDs, err := normalizeProvisionedGroup(input)
 	if err != nil || db == nil {
 		return Group{}, ErrGroupInvalid
@@ -54,10 +55,9 @@ func (s *GroupService) CreateProvisionedTo(ctx context.Context, db bun.IDB, tena
 
 // ReplaceProvisionedTo replaces the profile, status, and complete member set of
 // a directory-owned static group inside the caller's transaction.
-func (s *GroupService) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id string, input ProvisionedGroupInput) (Group, error) {
+func (s *GroupService) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id guid.ID, input ProvisionedGroupInput) (Group, error) {
 	input, memberIDs, err := normalizeProvisionedGroup(input)
-	tenantID, id = trimPair(tenantID, id)
-	if err != nil || db == nil || !validTenant(tenantID) || !validID(id) {
+	if err != nil || db == nil || tenantID.Zero() || !validID(id) {
 		return Group{}, ErrGroupInvalid
 	}
 	repo := s.repo.withExecutor(db)
@@ -77,7 +77,7 @@ func (s *GroupService) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, ten
 	if err != nil {
 		return Group{}, err
 	}
-	wanted := make(map[string]struct{}, len(memberIDs))
+	wanted := make(map[guid.ID]struct{}, len(memberIDs))
 	for _, principalID := range memberIDs {
 		wanted[principalID] = struct{}{}
 	}
@@ -134,9 +134,8 @@ func (s *GroupService) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, ten
 	return groupFromRow(updated), nil
 }
 
-func (s *GroupService) DisableProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id string) (Group, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if db == nil || !validTenant(tenantID) || !validID(id) {
+func (s *GroupService) DisableProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id guid.ID) (Group, error) {
+	if db == nil || tenantID.Zero() || !validID(id) {
 		return Group{}, ErrGroupInvalid
 	}
 	repo := s.repo.withExecutor(db)
@@ -169,7 +168,7 @@ func (s *GroupService) DisableProvisionedTo(ctx context.Context, db bun.IDB, ten
 	return groupFromRow(updated), nil
 }
 
-func (s *GroupService) requireProvisionedMember(ctx context.Context, db bun.IDB, tenantID, principalID string) error {
+func (s *GroupService) requireProvisionedMember(ctx context.Context, db bun.IDB, tenantID, principalID guid.ID) error {
 	active, err := s.members.IsMemberActiveOn(ctx, db, tenantID, principalID)
 	if err != nil {
 		return fmt.Errorf("check provisioned group member: %w", err)
@@ -180,16 +179,15 @@ func (s *GroupService) requireProvisionedMember(ctx context.Context, db bun.IDB,
 	return nil
 }
 
-func normalizeProvisionedGroup(input ProvisionedGroupInput) (ProvisionedGroupInput, []string, error) {
+func normalizeProvisionedGroup(input ProvisionedGroupInput) (ProvisionedGroupInput, []guid.ID, error) {
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	if !validName(input.DisplayName) || len(input.MemberIDs) > 1000 {
 		return ProvisionedGroupInput{}, nil, ErrGroupInvalid
 	}
-	unique := make(map[string]struct{}, len(input.MemberIDs))
-	members := make([]string, 0, len(input.MemberIDs))
+	unique := make(map[guid.ID]struct{}, len(input.MemberIDs))
+	members := make([]guid.ID, 0, len(input.MemberIDs))
 	for _, value := range input.MemberIDs {
-		value = strings.TrimSpace(value)
-		if !validID(value) {
+		if value.Zero() {
 			return ProvisionedGroupInput{}, nil, ErrGroupInvalid
 		}
 		if _, ok := unique[value]; ok {

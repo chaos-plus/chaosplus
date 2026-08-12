@@ -21,37 +21,37 @@ func TestProvisionedPrincipalLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	require.NoError(t, organization.Migrate(t.Context(), db))
-	require.NoError(t, organization.EnsureTenant(t.Context(), db, "tenant"))
+	require.NoError(t, organization.EnsureTenant(t.Context(), db, testID("tenant")))
 	service := newIdentityService(db)
 
 	input := ProvisionedPrincipalInput{
 		LoginName: " SCIM.User ", DisplayName: "", Email: "SCIM.USER@example.test",
 		PasswordHash: "provisioned-password-hash", Active: true,
 	}
-	principal, err := service.CreateProvisionedTo(t.Context(), db, " tenant ", input)
+	principal, err := service.CreateProvisionedTo(t.Context(), db, testID("tenant"), input)
 	require.NoError(t, err)
 	assert.Equal(t, "scim.user", principal.LoginName)
 	assert.Equal(t, "scim.user", principal.DisplayName)
 	assert.Equal(t, "scim.user@example.test", principal.Email)
-	inactive, err := service.CreateProvisionedTo(t.Context(), db, "tenant", ProvisionedPrincipalInput{
+	inactive, err := service.CreateProvisionedTo(t.Context(), db, testID("tenant"), ProvisionedPrincipalInput{
 		LoginName: "inactive", PasswordHash: "provisioned-password-hash", Active: false,
 	})
 	require.NoError(t, err)
 	var inactiveStatus string
-	require.NoError(t, db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND user_subject = ?", "tenant", inactive.ID).Scan(t.Context(), &inactiveStatus))
+	require.NoError(t, db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND principal_id = ?", testID("tenant"), inactive.ID).Scan(t.Context(), &inactiveStatus))
 	assert.Equal(t, "disabled", inactiveStatus)
 
-	_, err = service.CreateProvisionedTo(t.Context(), db, "tenant", input)
+	_, err = service.CreateProvisionedTo(t.Context(), db, testID("tenant"), input)
 	assert.ErrorIs(t, err, ErrLoginConflict)
-	_, err = service.ReplaceProvisionedTo(t.Context(), db, "tenant", principal.ID, ProvisionedPrincipalInput{
+	_, err = service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), principal.ID, ProvisionedPrincipalInput{
 		LoginName: inactive.LoginName, DisplayName: principal.DisplayName, Email: principal.Email, Active: true,
 	})
 	assert.ErrorIs(t, err, ErrLoginConflict)
-	_, err = service.CreateProvisionedTo(t.Context(), nil, "tenant", input)
+	_, err = service.CreateProvisionedTo(t.Context(), nil, testID("tenant"), input)
 	assert.ErrorIs(t, err, ErrInvalid)
-	_, err = service.CreateProvisionedTo(t.Context(), db, "", input)
+	_, err = service.CreateProvisionedTo(t.Context(), db, 0, input)
 	assert.ErrorIs(t, err, ErrInvalid)
-	_, err = service.CreateProvisionedTo(t.Context(), db, "tenant", ProvisionedPrincipalInput{LoginName: "bad", Email: "not-an-email", PasswordHash: "hash"})
+	_, err = service.CreateProvisionedTo(t.Context(), db, testID("tenant"), ProvisionedPrincipalInput{LoginName: "bad", Email: "not-an-email", PasswordHash: "hash"})
 	assert.ErrorIs(t, err, ErrInvalid)
 
 	for _, statement := range []string{
@@ -68,15 +68,15 @@ func TestProvisionedPrincipalLifecycle(t *testing.T) {
 	_, err = db.NewUpdate().Table("iam_principals").Set("email_verified = ?", true).Where("id = ?", principal.ID).Exec(t.Context())
 	require.NoError(t, err)
 
-	revisionBefore, err := policyx.Current(t.Context(), db, "tenant")
+	revisionBefore, err := policyx.Current(t.Context(), db, testID("tenant"))
 	require.NoError(t, err)
-	updated, err := service.ReplaceProvisionedTo(t.Context(), db, "tenant", principal.ID, ProvisionedPrincipalInput{
+	updated, err := service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), principal.ID, ProvisionedPrincipalInput{
 		LoginName: "scim.renamed", DisplayName: "SCIM Renamed", Email: "renamed@example.test", Active: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "scim.renamed", updated.LoginName)
 	assert.False(t, updated.EmailVerified)
-	revisionAfter, err := policyx.Current(t.Context(), db, "tenant")
+	revisionAfter, err := policyx.Current(t.Context(), db, testID("tenant"))
 	require.NoError(t, err)
 	assert.Greater(t, revisionAfter, revisionBefore)
 
@@ -89,31 +89,31 @@ func TestProvisionedPrincipalLifecycle(t *testing.T) {
 		assert.Positive(t, value, table)
 	}
 
-	updated, err = service.ReplaceProvisionedTo(t.Context(), db, "tenant", principal.ID, ProvisionedPrincipalInput{
+	updated, err = service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), principal.ID, ProvisionedPrincipalInput{
 		LoginName: updated.LoginName, DisplayName: updated.DisplayName, Email: updated.Email, Active: false,
 	})
 	require.NoError(t, err)
 	var memberStatus string
-	require.NoError(t, db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND user_subject = ?", "tenant", principal.ID).Scan(t.Context(), &memberStatus))
+	require.NoError(t, db.NewSelect().Table("iam_tenant_members").Column("status").Where("tenant_id = ? AND principal_id = ?", testID("tenant"), principal.ID).Scan(t.Context(), &memberStatus))
 	assert.Equal(t, "disabled", memberStatus)
 
-	_, err = service.ReplaceProvisionedTo(t.Context(), db, "tenant", principal.ID, ProvisionedPrincipalInput{
+	_, err = service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), principal.ID, ProvisionedPrincipalInput{
 		LoginName: updated.LoginName, DisplayName: updated.DisplayName, Email: updated.Email, Active: true,
 	})
 	require.NoError(t, err)
 	_, err = db.NewUpdate().Table("iam_principals").Set("status = 'disabled'").Where("id = ?", principal.ID).Exec(t.Context())
 	require.NoError(t, err)
-	_, err = service.ReplaceProvisionedTo(t.Context(), db, "tenant", principal.ID, ProvisionedPrincipalInput{
+	_, err = service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), principal.ID, ProvisionedPrincipalInput{
 		LoginName: updated.LoginName, DisplayName: updated.DisplayName, Email: updated.Email, Active: true,
 	})
 	assert.ErrorIs(t, err, ErrInvalid)
-	_, err = service.ReplaceProvisionedTo(t.Context(), nil, "tenant", principal.ID, ProvisionedPrincipalInput{LoginName: "valid"})
+	_, err = service.ReplaceProvisionedTo(t.Context(), nil, testID("tenant"), principal.ID, ProvisionedPrincipalInput{LoginName: "valid"})
 	assert.ErrorIs(t, err, ErrInvalid)
-	_, err = service.ReplaceProvisionedTo(t.Context(), db, "tenant", "missing", ProvisionedPrincipalInput{LoginName: "valid"})
+	_, err = service.ReplaceProvisionedTo(t.Context(), db, testID("tenant"), testID("missing"), ProvisionedPrincipalInput{LoginName: "valid"})
 	assert.ErrorIs(t, err, ErrNotFound)
 
 	rollbackErr := db.RunInTx(t.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
-		_, createErr := service.CreateProvisionedTo(ctx, tx, "tenant", ProvisionedPrincipalInput{
+		_, createErr := service.CreateProvisionedTo(ctx, tx, testID("tenant"), ProvisionedPrincipalInput{
 			LoginName: "rolled-back", PasswordHash: "hash", Active: true,
 		})
 		require.NoError(t, createErr)
@@ -131,7 +131,7 @@ func TestProvisionedPrincipalWriteFailuresRollback(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	require.NoError(t, organization.Migrate(t.Context(), db))
-	require.NoError(t, organization.EnsureTenant(t.Context(), db, "tenant"))
+	require.NoError(t, organization.EnsureTenant(t.Context(), db, testID("tenant")))
 	service := newIdentityService(db)
 
 	for _, test := range []struct {
@@ -145,7 +145,7 @@ func TestProvisionedPrincipalWriteFailuresRollback(t *testing.T) {
 			_, triggerErr := db.ExecContext(t.Context(), test.trigger)
 			require.NoError(t, triggerErr)
 			err := db.RunInTx(t.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
-				_, err := service.CreateProvisionedTo(ctx, tx, "tenant", ProvisionedPrincipalInput{
+				_, err := service.CreateProvisionedTo(ctx, tx, testID("tenant"), ProvisionedPrincipalInput{
 					LoginName: "fail-" + test.name, PasswordHash: "fail-" + test.name, Active: true,
 				})
 				return err

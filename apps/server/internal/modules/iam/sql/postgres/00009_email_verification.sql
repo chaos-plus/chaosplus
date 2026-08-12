@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_email_verification_tokens (
     token_hmac CHAR(64) PRIMARY KEY,
-    principal_id TEXT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
     email VARCHAR(320) NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

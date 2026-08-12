@@ -1,0 +1,1 @@
+{"workspace.task.invalid":"任务无效。","workspace.task.not_found":"未找到任务。","workspace.task.version_conflict":"任务已被其他请求修改。","workspace.task.state_conflict":"任务当前状态不允许执行。","workspace.task.unavailable":"任务服务暂不可用。"}

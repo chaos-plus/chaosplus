@@ -1,6 +1,6 @@
 -- +goose Up
 CREATE TABLE iam_platform_grants (
-    principal_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
     permission_code TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY (principal_id, permission_code)

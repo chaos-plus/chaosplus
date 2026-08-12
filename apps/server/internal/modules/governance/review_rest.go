@@ -38,7 +38,11 @@ func registerReviewREST(api huma.API, service *Service, registrar *authz.Registr
 		OperationID: "governance-list-access-reviews", Method: http.MethodGet, Path: "/iam/access-reviews",
 		Summary: "List tenant access review campaigns", Tags: []string{"governance"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_review", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]AccessReview], error) {
-		items, err := service.ListReviews(ctx, in.TenantID)
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListReviews(ctx, tenantID)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -50,11 +54,15 @@ func registerReviewREST(api huma.API, service *Service, registrar *authz.Registr
 		Summary: "Create a review of current direct and temporary tenant role grants", Tags: []string{"governance"}, DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_review", Verb: "create"}, func(ctx context.Context, in *createReviewInput) (*respx.Body[AccessReview], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
 		actorID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.CreateReview(ctx, in.TenantID, actorID, CreateAccessReview{Name: in.Body.Name, DueAt: in.Body.DueAt})
+		item, err := service.CreateReview(ctx, tenantID, actorID, CreateAccessReview{Name: in.Body.Name, DueAt: in.Body.DueAt})
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -66,7 +74,15 @@ func registerReviewREST(api huma.API, service *Service, registrar *authz.Registr
 		Summary: "Get an access review and its snapshotted grants", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_review", Verb: "view"}, func(ctx context.Context, in *reviewInput) (*respx.Body[AccessReview], error) {
-		item, err := service.GetReview(ctx, in.TenantID, in.ID)
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.GetReview(ctx, tenantID, id)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -78,11 +94,23 @@ func registerReviewREST(api huma.API, service *Service, registrar *authz.Registr
 		Summary: "Keep or revoke one snapshotted tenant role grant", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_review", Verb: "decide"}, func(ctx context.Context, in *reviewItemInput) (*respx.Body[AccessReviewItem], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		itemID, err := parseGovernanceID(in.ItemID)
+		if err != nil {
+			return nil, err
+		}
 		actorID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.DecideReviewItem(ctx, in.TenantID, in.ID, in.ItemID, actorID, in.Body.Decision, in.Body.Note)
+		item, err := service.DecideReviewItem(ctx, tenantID, id, itemID, actorID, in.Body.Decision, in.Body.Note)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -100,15 +128,23 @@ func registerReviewREST(api huma.API, service *Service, registrar *authz.Registr
 			OperationID: operation.id, Method: http.MethodPost, Path: operation.path, Summary: operation.summary, Tags: []string{"governance"},
 			Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 		}, authz.Guard{Resource: "access_review", Verb: "manage"}, func(ctx context.Context, in *reviewInput) (*respx.Body[AccessReview], error) {
+			tenantID, err := parseGovernanceID(in.TenantID)
+			if err != nil {
+				return nil, err
+			}
+			id, err := parseGovernanceID(in.ID)
+			if err != nil {
+				return nil, err
+			}
 			actorID, err := humanPrincipal(ctx)
 			if err != nil {
 				return nil, err
 			}
 			var item AccessReview
 			if operation.status == ReviewStatusCompleted {
-				item, err = service.CompleteReview(ctx, in.TenantID, in.ID, actorID)
+				item, err = service.CompleteReview(ctx, tenantID, id, actorID)
 			} else {
-				item, err = service.CancelReview(ctx, in.TenantID, in.ID, actorID)
+				item, err = service.CancelReview(ctx, tenantID, id, actorID)
 			}
 			if err != nil {
 				return nil, governanceError(err)

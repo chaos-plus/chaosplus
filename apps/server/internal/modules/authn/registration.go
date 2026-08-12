@@ -11,11 +11,14 @@ import (
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/uptrace/bun"
 )
 
-type RegistrationPrincipalCreator func(context.Context, bun.IDB, string, string, string, time.Time) (string, error)
+type RegistrationPrincipalCreator func(context.Context, bun.IDB, string, string, string, time.Time, func() (guid.ID, error)) (guid.ID, error)
+
+const registrationVerificationCooldown = time.Minute
 
 func (s *WebService) configureRegistration() error {
 	if !s.cfg.Registration.Enabled {
@@ -50,9 +53,6 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 	if len(email) > 320 || len(password) < 8 || len(password) > 1024 || len(displayName) > 128 || err != nil || !strings.EqualFold(parsed.Address, email) {
 		return authnext.ErrInvalidRegistration
 	}
-	if codeSendThrottled(email) {
-		return ErrVerificationCodeThrottled
-	}
 	passwordHash, err := passwordx.Hash(password)
 	if err != nil {
 		return fmt.Errorf("hash registration password: %w", err)
@@ -73,7 +73,7 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 	now := s.now().UTC()
 	expires := now.Add(s.cfg.EmailVerification.TokenTTL)
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		principalID, err := s.registrationCreator(ctx, tx, email, passwordHash, displayName, now)
+		principalID, err := s.registrationCreator(ctx, tx, email, passwordHash, displayName, now, s.nextID)
 		if err != nil {
 			return err
 		}
@@ -112,16 +112,6 @@ func (s *WebService) Register(ctx context.Context, email, password, displayName 
 // resendRegistrationCode 对已存在但未激活的注册邮箱重新生成并下发一次验证码;
 // 已激活账号静默忽略(可直接登录)。
 func (s *WebService) resendRegistrationCode(ctx context.Context, email string) error {
-	var principal principalRow
-	if err := s.db.NewSelect().Model(&principal).Where("login_name = ?", email).Scan(ctx); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return authnext.ErrRegistrationConflict
-		}
-		return fmt.Errorf("load pending principal for resend: %w", err)
-	}
-	if !principal.ActivationRequired {
-		return authnext.ErrRegistrationConflict
-	}
 	secret, err := randomToken(32)
 	if err != nil {
 		return fmt.Errorf("generate resend credential: %w", err)
@@ -138,6 +128,30 @@ func (s *WebService) resendRegistrationCode(ctx context.Context, email string) e
 		return err
 	}
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var principal principalRow
+		query := tx.NewSelect().Model(&principal).Where("login_name = ?", email)
+		if s.db.Dialect().Name().String() != "sqlite" {
+			query = query.For("UPDATE")
+		}
+		if err := query.Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return authnext.ErrRegistrationConflict
+			}
+			return fmt.Errorf("load pending principal for resend: %w", err)
+		}
+		if !principal.ActivationRequired {
+			return authnext.ErrRegistrationConflict
+		}
+
+		var latestCreatedAt int64
+		err := tx.NewSelect().Model((*emailVerificationRow)(nil)).Column("created_at").
+			Where("principal_id = ?", principal.ID).OrderExpr("created_at DESC").Limit(1).Scan(ctx, &latestCreatedAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("load latest registration verification: %w", err)
+		}
+		if latestCreatedAt > 0 && now.Sub(time.UnixMilli(latestCreatedAt).UTC()) < registrationVerificationCooldown {
+			return nil
+		}
 		if _, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).
 			Set("consumed_at = ?", now.UnixMilli()).
 			Where("principal_id = ? AND consumed_at = 0", principal.ID).Exec(ctx); err != nil {

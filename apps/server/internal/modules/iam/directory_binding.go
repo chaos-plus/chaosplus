@@ -6,25 +6,25 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type groupRoleBindingRow struct {
 	bun.BaseModel `bun:"table:iam_group_role_bindings"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
-	GroupID       string `bun:"group_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
+	GroupID       guid.ID `bun:"group_id,pk"`
 	CreatedAt     int64
 }
 
 type positionRoleBindingRow struct {
 	bun.BaseModel `bun:"table:iam_position_role_bindings"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
-	PositionID    string `bun:"position_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
+	PositionID    guid.ID `bun:"position_id,pk"`
 	CreatedAt     int64
 }
 
@@ -32,7 +32,7 @@ type directoryStatusRow struct {
 	Status string `bun:"status"`
 }
 
-func (r *Repository) ListDirectoryBindings(ctx context.Context, tenantID, roleID string) ([]RoleDirectoryBinding, error) {
+func (r *Repository) ListDirectoryBindings(ctx context.Context, tenantID, roleID guid.ID) ([]RoleDirectoryBinding, error) {
 	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (r *Repository) ListDirectoryBindings(ctx context.Context, tenantID, roleID
 	return bindings, nil
 }
 
-func (r *Repository) ChangeDirectoryBinding(ctx context.Context, tenantID, roleID string, assigneeType DirectoryAssigneeType, assigneeID string, add bool) (bool, error) {
+func (r *Repository) ChangeDirectoryBinding(ctx context.Context, tenantID, roleID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID, add bool) (bool, error) {
 	var changed bool
 	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
@@ -115,7 +115,7 @@ func (r *Repository) ChangeDirectoryBinding(ctx context.Context, tenantID, roleI
 	return changed, err
 }
 
-func directoryAssigneeStatus(ctx context.Context, db bun.IDB, tenantID string, assigneeType DirectoryAssigneeType, assigneeID string) (string, error) {
+func directoryAssigneeStatus(ctx context.Context, db bun.IDB, tenantID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID) (string, error) {
 	var row directoryStatusRow
 	var err error
 	switch assigneeType {
@@ -135,24 +135,22 @@ func directoryAssigneeStatus(ctx context.Context, db bun.IDB, tenantID string, a
 	return row.Status, nil
 }
 
-func (s *Service) ListDirectoryBindings(ctx context.Context, tenantID, roleID string) ([]RoleDirectoryBinding, error) {
+func (s *Service) ListDirectoryBindings(ctx context.Context, tenantID, roleID guid.ID) ([]RoleDirectoryBinding, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListDirectoryBindings(ctx, tenantID, roleID)
 }
 
-func (s *Service) AddDirectoryBinding(ctx context.Context, tenantID, roleID string, assigneeType DirectoryAssigneeType, assigneeID string) (bool, error) {
+func (s *Service) AddDirectoryBinding(ctx context.Context, tenantID, roleID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID) (bool, error) {
 	return s.changeDirectoryBinding(ctx, tenantID, roleID, assigneeType, assigneeID, true)
 }
 
-func (s *Service) RemoveDirectoryBinding(ctx context.Context, tenantID, roleID string, assigneeType DirectoryAssigneeType, assigneeID string) (bool, error) {
+func (s *Service) RemoveDirectoryBinding(ctx context.Context, tenantID, roleID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID) (bool, error) {
 	return s.changeDirectoryBinding(ctx, tenantID, roleID, assigneeType, assigneeID, false)
 }
 
-func (s *Service) changeDirectoryBinding(ctx context.Context, tenantID, roleID string, assigneeType DirectoryAssigneeType, assigneeID string, add bool) (bool, error) {
-	assigneeType = DirectoryAssigneeType(strings.TrimSpace(string(assigneeType)))
-	assigneeID = strings.TrimSpace(assigneeID)
+func (s *Service) changeDirectoryBinding(ctx context.Context, tenantID, roleID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID, add bool) (bool, error) {
 	if err := validateDirectoryBindingRef(tenantID, roleID, assigneeType, assigneeID); err != nil {
 		return false, err
 	}
@@ -192,14 +190,14 @@ func (s *Service) changeDirectoryBinding(ctx context.Context, tenantID, roleID s
 	return changed, err
 }
 
-func validateDirectoryBindingRef(tenantID, roleID string, assigneeType DirectoryAssigneeType, assigneeID string) error {
+func validateDirectoryBindingRef(tenantID, roleID guid.ID, assigneeType DirectoryAssigneeType, assigneeID guid.ID) error {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return err
 	}
 	if assigneeType != DirectoryAssigneeGroup && assigneeType != DirectoryAssigneePosition {
 		return fmt.Errorf("%w: invalid directory assignee type", ErrInvalidArgument)
 	}
-	if assigneeID == "" || len(assigneeID) > 128 {
+	if assigneeID.Zero() {
 		return fmt.Errorf("%w: invalid directory assignee id", ErrInvalidArgument)
 	}
 	return nil

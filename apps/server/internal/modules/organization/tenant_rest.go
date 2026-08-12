@@ -55,10 +55,10 @@ func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.R
 	// 自己租户的问题 —— /iam/tenants 是平台级操作。
 	authz.RegisterAuthenticated(registrar, api, huma.Operation{OperationID: "organization-my-tenants", Method: http.MethodGet, Path: "/iam/me/tenants", Summary: "List the caller's tenants", Tags: []string{"organization"}}, func(ctx context.Context, in *myTenantsInput) (*respx.Body[[]Tenant], error) {
 		claims, ok := authn.FromContext(ctx)
-		if !ok || claims.Subject == "" {
+		if !ok || claims == nil || claims.PrincipalID.Zero() {
 			return nil, errors.New("not authenticated")
 		}
-		items, err := service.ListByMember(ctx, claims.Subject)
+		items, err := service.ListByMember(ctx, claims.PrincipalID)
 		if err != nil {
 			return nil, tenantError(err)
 		}
@@ -82,7 +82,11 @@ func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.R
 	})
 
 	authz.RegisterPlatform(registrar, api, huma.Operation{OperationID: "organization-get-tenant", Method: http.MethodGet, Path: "/iam/tenants/{tenant_id}", Summary: "Get a platform tenant", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "tenant", Verb: "view"}, func(ctx context.Context, in *tenantIDInput) (*respx.Body[Tenant], error) {
-		item, err := service.Get(ctx, in.ID)
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Get(ctx, id)
 		if err != nil {
 			return nil, tenantError(err)
 		}
@@ -90,7 +94,11 @@ func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.R
 	})
 
 	authz.RegisterPlatform(registrar, api, huma.Operation{OperationID: "organization-update-tenant", Method: http.MethodPatch, Path: "/iam/tenants/{tenant_id}", Summary: "Update or suspend a platform tenant", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "tenant", Verb: "update"}, func(ctx context.Context, in *updateTenantInput) (*respx.Body[Tenant], error) {
-		item, err := service.Update(ctx, in.ID, UpdateTenant{Name: in.Body.Name, Status: in.Body.Status, Version: in.Body.Version})
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Update(ctx, id, UpdateTenant{Name: in.Body.Name, Status: in.Body.Status, Version: in.Body.Version})
 		if err != nil {
 			return nil, tenantError(err)
 		}
@@ -98,7 +106,11 @@ func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.R
 	})
 
 	authz.RegisterPlatform(registrar, api, huma.Operation{OperationID: "organization-delete-tenant", Method: http.MethodDelete, Path: "/iam/tenants/{tenant_id}", Summary: "Soft-delete a platform tenant", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "tenant", Verb: "delete"}, func(ctx context.Context, in *deleteTenantInput) (*respx.Body[deletedTenant], error) {
-		if err := service.Delete(ctx, in.ID, in.Version); err != nil {
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.Delete(ctx, id, in.Version); err != nil {
 			return nil, tenantError(err)
 		}
 		return respx.OK(ctx, deletedTenant{Deleted: true}), nil

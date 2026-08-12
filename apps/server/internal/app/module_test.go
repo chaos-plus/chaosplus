@@ -72,6 +72,12 @@ func TestBuildModules(t *testing.T) {
 	modules = application.buildModules()
 	require.Len(t, modules, 2)
 	assert.Same(t, claims, modules[0])
+
+	application = &App{resourceProfile: true, dbr: bunx.DatasourceRouter{Writer: []*bun.DB{nil}}}
+	modules = application.buildModules()
+	require.Len(t, modules, 1)
+	_, isGUID := modules[0].(*guid.Module)
+	assert.True(t, isGUID, "resource profile only installs shared infrastructure before product extensions")
 }
 
 func TestRealModuleLifecycleErrorsArePropagated(t *testing.T) {

@@ -1,77 +1,66 @@
 ---
 name: dev-quality-gate
-description: Route Dev repository work to the correct domain skill and enforce repository-wide quality gates. Use for any implementation, refactor, review, test, release, architecture, API, frontend, documentation, deployment, or skill change in this repository, especially when changed paths span multiple domains or acceptance readiness must be assessed.
+description: 为 Dev 仓库任务选择正确领域 Skill 并执行全仓质量门禁。任何实现、重构、评审、测试、发布、架构、API、前端、文档、部署、Skill 修改或跨领域验收都必须使用。
 ---
 
-# Dev Quality Gate
+# Dev 质量门禁
 
-Act as the repository-wide router and final acceptance gate. Domain skills guide implementation; this skill determines which ones apply and refuses unsupported quality claims.
+负责全仓路由和最终验收。领域 Skill 指导实现，本 Skill 决定必须使用哪些领域流程，并拒绝无证据的质量声明。
 
-**Canonical rules:** `.rules/3.ARCH.md` (architecture, cloud persistence, multi-machine dispatch), `.rules/3.API.md` (REST conventions, auth), `.rules/3.TEST.md` (test methodology), `.rules/4.PRD_TEMPLATE.md` (spec format). All domain skills SHOULD reference these instead of duplicating. When a decision changes a rule, update `.rules/` → note in `MEMORY.md` → skills pick it up automatically.
+规范唯一来源是 `.rules/`。决定变化时先更新 `.rules/`，再更新必要的 lessons 与可执行检查；各 Skill 严禁复制一份平行规范。
 
-## Refresh Context First
+## 首先刷新上下文
 
-Run:
+运行：
 
 ```text
-python .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh
+python3 .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh
 ```
 
-Read `references/repository-facts.md`. The script derives stable facts from actual manifests and source trees and writes only when content changes. Do not manually add transient facts to that file.
+完整读取 `references/repository-facts.md`。该文件由真实 manifest 和 source tree 生成，只在内容变化时写入，严禁手工添加临时事实。
 
-## Route By Changed Surface
+## 按变更面路由
 
-Use every matching domain skill:
-
-| Changed surface | Required skill |
+| 变更面 | 必须使用的 Skill |
 | --- | --- |
-| `cmd/**`, `internal/**`, `pkg/**`, `go.mod`, `go.sum`, backend deployment | `$dev-backend` |
-| `apps/admin/**`, frontend container or proxy | `$dev-frontend` |
-| `apps/docs/**`, `README.md` | `$dev-docs` |
-| `.claude/**`, `AGENTS.md`, `.github/**`, cross-domain release | `$dev-quality-gate` plus every affected domain |
+| `cmd/**`、`internal/**`、`pkg/**`、Go module、SQL、后端部署 | `$dev-backend` |
+| 管理前端、共享 UI、browser proxy/container | `$dev-frontend` 与 `$dev-ui-ux` |
+| 文档站、README、架构/API/部署文档 | `$dev-docs` |
+| `.claude/**`、`.agents/**`、`AGENTS.md`、`.rules/**`、跨领域发布 | `$dev-engineering`、`$dev-quality-gate` 和全部受影响领域 Skill |
 
-When a contract crosses domains, inspect the producer first, then the consumers. For example, backend OpenAPI precedes the frontend API client and public docs.
+合同跨域时先检查 producer，再检查 consumers，例如先确认后端 OpenAPI，再修改前端 client 和公开文档。
 
-## Apply Non-Negotiable Gates
+## 强制门禁
 
-- Preserve user changes and use repository patterns.
-- Reject YAML files under `internal/app`.
-- Reject a Go `name_test.go` without sibling `name.go`.
-- Reject tests that use mocks, fakes, stubs, miniredis, monkey patching, or fixture interception as substitutes for real dependencies.
-- Require SQLite, MySQL, and PostgreSQL compatibility for shared persistence behavior; state clearly which live dialects were actually exercised.
-- Require at least 90% real Go coverage for a full acceptance claim.
-- Require accurate OpenAPI operation IDs, summaries, tags, response envelopes, authentication, and tenant authorization.
-- Require frontend lint, typecheck, real tests, production build, responsive inspection, and deployability.
-- Require documentation sync, internal-link validation, navigation integrity, Mermaid rendering, and production build.
-- Never claim a feature, database, workflow, browser, or deployment was verified when it was not run.
+- 保留用户已有修改，遵循仓库模式。
+- 拒绝 `internal/app` 下 YAML、无同名生产文件的 Go 测试、以及用 mock/fake/stub 等替代真实依赖的测试。
+- 共享持久化要求 SQLite、MySQL、PostgreSQL 等价；明确哪些 live dialect 实际运行过。
+- 完整验收要求真实 Go coverage 不低于 90%。
+- OpenAPI operation ID、summary、tags、响应、认证、tenant/entity 授权必须准确。
+- 前端必须通过 lint、typecheck、真实测试、生产构建、响应式浏览器检查和部署检查。
+- 文档必须通过同步、内部链接、导航、Mermaid 和生产构建。
+- 严禁声称未运行的功能、数据库、workflow、浏览器或部署已通过。
 
-Run path-aware checks during work:
+工作中运行 path-aware gate：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1
 ```
 
-Run all release gates before an acceptance or open-source-ready claim:
+发布或生产就绪声明前运行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope all -Full
 ```
 
-Do not remove a check, exclude production packages, suppress a warning, reduce coverage scope, or alter a threshold merely to pass.
+严禁为了通过而删除检查、排除生产 package、压制 warning、缩小 coverage 或降低阈值。
 
-## Controlled Self-Learning
+## 受控学习
 
-Use `scripts/skill-runtime.py record` only after a failure has been reproduced and the fix has passed its proving test or gate. The command routes the entry to the relevant domain's `references/lessons.md`, removes line breaks, rejects likely secrets, locks concurrent writes, and deduplicates by content.
+只有失败已复现、修复已验证且规则可复用时，才运行 `skill-runtime.py record`。记录必须包含可观察 symptom、已确认 cause、通用 prevention 和验证 evidence。
 
-Each entry must contain:
+严禁自动修改 `SKILL.md`、门禁脚本、安全不变量、阈值、架构决策或依赖策略；这些必须作为正常代码变更接受完整评审和门禁。
 
-- Observable symptom.
-- Confirmed root cause.
-- General prevention rule.
-- Test, command, screenshot, or artifact that proves the rule.
+## 以证据结束
 
-Never auto-edit `SKILL.md`, gate scripts, security invariants, thresholds, architecture decisions, or dependency policy from a lesson. Such changes require ordinary reviewed code changes and all applicable gates.
-
-## Finish With Evidence
-
-Report the commands run, their outcomes, coverage percentage when claimed, untested external systems, and any remaining gap. A partial pass is useful evidence but is not full acceptance.
+报告运行过的命令、结果、声明 coverage 时的精确比例、未测试外部系统和剩余缺口。局部通过只能作为局部证据，不能作为全量验收。

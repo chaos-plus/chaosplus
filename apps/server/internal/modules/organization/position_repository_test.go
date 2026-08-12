@@ -12,21 +12,21 @@ func TestPositionRepositoryDatabaseFailures(t *testing.T) {
 	db, service := newPositionService(t)
 	repo := service.repo
 	require.NoError(t, db.Close())
-	row := positionRow{TenantID: "tenant", ID: "position", Code: "position", Name: "Position", Status: StatusActive, Version: 1}
+	row := positionRow{TenantID: testID("tenant"), ID: testID("position"), Code: "position", Name: "Position", Status: StatusActive, Version: 1}
 
-	_, err := repo.list(t.Context(), "tenant")
+	_, err := repo.list(t.Context(), testID("tenant"))
 	assert.Error(t, err)
-	_, err = repo.get(t.Context(), "tenant", "position")
+	_, err = repo.get(t.Context(), testID("tenant"), testID("position"))
 	assert.Error(t, err)
 	assert.Error(t, repo.insert(t.Context(), &row))
 	assert.Error(t, repo.update(t.Context(), &row, 1))
-	assert.Error(t, repo.delete(t.Context(), "tenant", "position", 1))
-	_, err = repo.listMembers(t.Context(), "tenant", "position")
+	assert.Error(t, repo.delete(t.Context(), testID("tenant"), testID("position"), 1))
+	_, err = repo.listMembers(t.Context(), testID("tenant"), testID("position"))
 	assert.Error(t, err)
-	_, err = repo.getMember(t.Context(), "tenant", "position", "principal")
+	_, err = repo.getMember(t.Context(), testID("tenant"), testID("position"), testID("principal"))
 	assert.Error(t, err)
 	assert.Error(t, repo.putMember(t.Context(), &positionMemberRow{}))
-	_, err = repo.deleteMember(t.Context(), "tenant", "position", "principal")
+	_, err = repo.deleteMember(t.Context(), testID("tenant"), testID("position"), testID("principal"))
 	assert.Error(t, err)
 }
 

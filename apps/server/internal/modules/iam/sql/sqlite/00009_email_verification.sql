@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_email_verification_tokens (
     token_hmac TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
     email TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -41,11 +40,14 @@ func (app *App) buildModules() []any {
 	} else {
 		slog.Warn("no writable database; skipping id generator")
 	}
+	if app.resourceProfile {
+		return mods
+	}
 
 	if app.cfg.Authn.Enabled {
 		mods = append(mods, authnmod.NewModule(app.authnRequest, app.authnWeb))
 		if app.authnWeb != nil {
-			mods = append(mods, oauth.NewModule(app.dbr.Write(), app.authnWeb, app.authzRegistrar))
+			mods = append(mods, oauth.NewModule(app.dbr.Write(), app.authnWeb, app.authzRegistrar, nextGUID))
 		}
 	}
 	if app.authzRegistrar != nil {
@@ -57,37 +59,33 @@ func (app *App) buildModules() []any {
 			mods = append(mods, governance.NewDeclarationOnlyModule(app.authzRegistrar))
 			mods = append(mods, federation.NewDeclarationOnlyModule(app.authzRegistrar))
 		} else {
-			auditTrail := audit.NewService(app.dbr.Write())
+			auditTrail := auditService(app.dbr.Write(), nextGUID)
 			appendAudit := auditAppender(auditTrail)
 			administratorGuard := iam.NewAdministratorGuard()
 			dialect := app.dbr.Write().Dialect().Name().String()
 			if dialect == "pg" {
 				dialect = "postgres"
 			}
-			nextID := func() (string, error) {
-				id, err := guid.Next()
-				return strconv.FormatInt(id, 10), err
-			}
-			identityService := identity.NewService(app.dbr.Write(), appendAudit, administratorGuard)
+			identityService := identity.NewService(app.dbr.Write(), appendAudit, administratorGuard, nextGUID)
 			mods = append(mods, identity.NewModuleWithService(identityService, app.authzRegistrar))
-			mods = append(mods, iam.NewModule(app.dbr.Write(), app.authzRegistrar, iam.NewAuthorizer(app.dbr.Write()), appendAudit, nextID))
-			createInvitedPrincipal := func(ctx context.Context, db bun.IDB, tenantID, loginName, password, displayName, email string) (string, error) {
+			mods = append(mods, iam.NewModule(app.dbr.Write(), app.authzRegistrar, iam.NewAuthorizerWithRegistry(app.dbr.Write(), app.authzRegistrar.Registry()), appendAudit, nextGUID))
+			createInvitedPrincipal := func(ctx context.Context, db bun.IDB, tenantID guid.ID, loginName, password, displayName, email string) (guid.ID, error) {
 				id, err := identityService.CreateInvitedPrincipal(ctx, db, tenantID, loginName, password, displayName, email)
 				switch {
 				case errors.Is(err, identity.ErrLoginConflict):
-					return "", organization.ErrInvitationLoginConflict
+					return 0, organization.ErrInvitationLoginConflict
 				case errors.Is(err, identity.ErrInvalid):
-					return "", organization.ErrInvitationInvalid
+					return 0, organization.ErrInvitationInvalid
 				default:
 					return id, err
 				}
 			}
-			organizationModule := organization.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, iam.NewMembershipChecker(app.dbr.Write()), administratorGuard, nextID, app.authnWeb, createInvitedPrincipal)
+			organizationModule := organization.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, iam.NewMembershipChecker(app.dbr.Write()), administratorGuard, nextGUID, app.authnWeb, createInvitedPrincipal)
 			mods = append(mods, organizationModule)
-			mods = append(mods, provisioning.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, nextID, identityService, organizationModule.ProvisioningGroups(), app.cfg.Provisioning, app.provisioningKey))
+			mods = append(mods, provisioning.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, nextGUID, identityService, organizationModule.ProvisioningGroups(), app.cfg.Provisioning, app.provisioningKey))
 			mods = append(mods, governance.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, governance.RoleGrantStore{
 				Grant: iam.GrantTemporaryRole, Revoke: iam.RevokeTemporaryRole,
-				RemovePermanent: func(ctx context.Context, db bun.IDB, tenantID, roleID, principalID string, createdAt int64) (bool, error) {
+				RemovePermanent: func(ctx context.Context, db bun.IDB, tenantID, roleID, principalID guid.ID, createdAt int64) (bool, error) {
 					changed, err := administratorGuard.RemoveRoleMember(ctx, db, dialect, tenantID, roleID, principalID, createdAt)
 					if errors.Is(err, iam.ErrLastTenantAdministrator) {
 						return false, governance.ErrReviewLastAdministrator
@@ -97,10 +95,10 @@ func (app *App) buildModules() []any {
 				RemoveGroupMembership:    guardGroupPositionRemove(administratorGuard, dialect, iam.RemoveGroupMembership),
 				RemovePositionMembership: guardGroupPositionRemove(administratorGuard, dialect, iam.RemovePositionMembership),
 				RemoveEntityRoleBinding:  guardEntityRoleRemove(administratorGuard, dialect, iam.RemoveEntityRoleBinding),
-			}, nextID))
-			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar, app.cfg.Audit))
+			}, nextGUID))
+			mods = append(mods, audit.NewModule(app.dbr.Write(), app.authzRegistrar, app.cfg.Audit, nextGUID))
 			if app.cfg.Federation.Enabled && app.authnWeb != nil {
-				mods = append(mods, federation.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, identityService, app.authnWeb, app.cfg.Federation, app.federationKey))
+				mods = append(mods, federation.NewModule(app.dbr.Write(), app.authzRegistrar, appendAudit, identityService, app.authnWeb, app.cfg.Federation, app.federationKey, nextGUID))
 			}
 		}
 	} else {
@@ -122,13 +120,22 @@ func auditAppender(service *audit.Service) auditx.Appender {
 	}
 }
 
-func registrationPrincipalCreator(ctx context.Context, db bun.IDB, email, passwordHash, displayName string, now time.Time) (string, error) {
-	id, err := identity.CreatePendingPrincipal(ctx, db, email, passwordHash, displayName, now)
+func nextGUID() (guid.ID, error) {
+	id, err := guid.Next()
+	return guid.ID(id), err
+}
+
+func auditService(db *bun.DB, nextID func() (guid.ID, error)) *audit.Service {
+	return audit.NewService(db, nextID)
+}
+
+func registrationPrincipalCreator(ctx context.Context, db bun.IDB, email, passwordHash, displayName string, now time.Time, nextID func() (guid.ID, error)) (guid.ID, error) {
+	id, err := identity.CreatePendingPrincipal(ctx, db, email, passwordHash, displayName, now, nextID)
 	switch {
 	case errors.Is(err, identity.ErrLoginConflict):
-		return "", authnext.ErrRegistrationConflict
+		return 0, authnext.ErrRegistrationConflict
 	case errors.Is(err, identity.ErrInvalid):
-		return "", authnext.ErrInvalidRegistration
+		return 0, authnext.ErrInvalidRegistration
 	default:
 		return id, err
 	}
@@ -140,9 +147,9 @@ func registrationPrincipalCreator(ctx context.Context, db bun.IDB, email, passwo
 // called only after the guard confirms a durable administrator remains.
 func guardGroupPositionRemove(
 	guard *iam.AdministratorGuard, dialect string,
-	remove func(context.Context, bun.IDB, string, string, string) (bool, error),
-) func(context.Context, bun.IDB, string, string, string) (bool, error) {
-	return func(ctx context.Context, db bun.IDB, tenantID, targetID, principalID string) (bool, error) {
+	remove func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID) (bool, error),
+) func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID) (bool, error) {
+	return func(ctx context.Context, db bun.IDB, tenantID, targetID, principalID guid.ID) (bool, error) {
 		verify, err := guard.Protect(ctx, db, dialect, tenantID)
 		if err != nil {
 			return false, err
@@ -166,9 +173,9 @@ func guardGroupPositionRemove(
 // administrator through a scoped entity role binding.
 func guardEntityRoleRemove(
 	guard *iam.AdministratorGuard, dialect string,
-	remove func(context.Context, bun.IDB, string, string, string, string) (bool, error),
-) func(context.Context, bun.IDB, string, string, string, string) (bool, error) {
-	return func(ctx context.Context, db bun.IDB, tenantID, entityID, roleID, principalID string) (bool, error) {
+	remove func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID, guid.ID) (bool, error),
+) func(context.Context, bun.IDB, guid.ID, guid.ID, guid.ID, guid.ID) (bool, error) {
+	return func(ctx context.Context, db bun.IDB, tenantID, entityID, roleID, principalID guid.ID) (bool, error) {
 		verify, err := guard.Protect(ctx, db, dialect, tenantID)
 		if err != nil {
 			return false, err

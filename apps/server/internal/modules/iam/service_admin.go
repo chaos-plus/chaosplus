@@ -6,14 +6,16 @@ import (
 	"net/mail"
 	"sort"
 	"strings"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
-func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displayName, email, departmentID string, status MemberStatus) (TenantMember, error) {
+func (s *Service) PutTenantMember(ctx context.Context, tenantID, principalID guid.ID, displayName, email string, departmentID guid.ID, status MemberStatus) (TenantMember, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return TenantMember{}, err
 	}
-	subject, displayName, email, departmentID = strings.TrimSpace(subject), strings.TrimSpace(displayName), strings.TrimSpace(email), strings.TrimSpace(departmentID)
-	if subject == "" || len(subject) > 255 || displayName == "" || len(displayName) > 128 || len(email) > 320 || len(departmentID) > 128 || (status != MemberActive && status != MemberDisabled) {
+	displayName, email = strings.TrimSpace(displayName), strings.TrimSpace(email)
+	if principalID.Zero() || displayName == "" || len(displayName) > 128 || len(email) > 320 || (status != MemberActive && status != MemberDisabled) {
 		return TenantMember{}, fmt.Errorf("%w: invalid tenant member", ErrInvalidArgument)
 	}
 	if email != "" {
@@ -22,20 +24,20 @@ func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displa
 		}
 	}
 	var member TenantMember
-	record := newAuditRecord(ctx, tenantID, "tenant_member_upserted", "tenant_member", subject)
+	record := newAuditRecord(ctx, tenantID, "tenant_member_upserted", "tenant_member", principalID)
 	record.Detail["status"] = status
-	record.Detail["has_department"] = departmentID != ""
+	record.Detail["has_department"] = !departmentID.Zero()
 	record.PolicyChanged = true
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
-		if departmentID != "" {
+		if !departmentID.Zero() {
 			departmentStatus, err := repo.departmentStatus(ctx, tenantID, departmentID)
 			if err != nil {
 				return err
 			}
-			if departmentStatus == "" {
-				return ErrMemberDepartmentMissing
-			}
 			if departmentStatus != "active" {
+				if departmentStatus == "" {
+					return ErrMemberDepartmentMissing
+				}
 				return ErrMemberDepartmentInactive
 			}
 		}
@@ -47,11 +49,11 @@ func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displa
 				return err
 			}
 		}
-		member, err = repo.PutMember(ctx, TenantMember{TenantID: tenantID, Subject: subject, DisplayName: displayName, Email: email, Status: status})
+		member, err = repo.PutMember(ctx, TenantMember{TenantID: tenantID, PrincipalID: principalID, DisplayName: displayName, Email: email, Status: status})
 		if err != nil {
 			return err
 		}
-		if err = repo.setMemberDepartment(ctx, tenantID, subject, departmentID); err != nil {
+		if err = repo.setMemberDepartment(ctx, tenantID, principalID, departmentID); err != nil {
 			return err
 		}
 		if verify != nil {
@@ -59,20 +61,20 @@ func (s *Service) PutTenantMember(ctx context.Context, tenantID, subject, displa
 				return err
 			}
 		}
-		member, err = repo.GetMember(ctx, tenantID, subject)
+		member, err = repo.GetMember(ctx, tenantID, principalID)
 		return err
 	})
 	return member, err
 }
 
-func (s *Service) GetTenantMember(ctx context.Context, tenantID, subject string) (TenantMember, error) {
-	if err := validateMemberRef(tenantID, subject); err != nil {
+func (s *Service) GetTenantMember(ctx context.Context, tenantID, principalID guid.ID) (TenantMember, error) {
+	if err := validateMemberRef(tenantID, principalID); err != nil {
 		return TenantMember{}, err
 	}
-	return s.repo.GetMember(ctx, tenantID, subject)
+	return s.repo.GetMember(ctx, tenantID, principalID)
 }
 
-func (s *Service) ListTenantMembers(ctx context.Context, tenantID string, filter MemberFilter) ([]TenantMember, int64, error) {
+func (s *Service) ListTenantMembers(ctx context.Context, tenantID guid.ID, filter MemberFilter) ([]TenantMember, int64, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, 0, err
 	}
@@ -82,15 +84,15 @@ func (s *Service) ListTenantMembers(ctx context.Context, tenantID string, filter
 	return s.repo.ListMembersPage(ctx, tenantID, filter)
 }
 
-func (s *Service) SetTenantMemberStatus(ctx context.Context, tenantID, subject string, status MemberStatus) (TenantMember, error) {
-	if err := validateMemberRef(tenantID, subject); err != nil {
+func (s *Service) SetTenantMemberStatus(ctx context.Context, tenantID, principalID guid.ID, status MemberStatus) (TenantMember, error) {
+	if err := validateMemberRef(tenantID, principalID); err != nil {
 		return TenantMember{}, err
 	}
 	if status != MemberActive && status != MemberDisabled {
 		return TenantMember{}, fmt.Errorf("%w: invalid member status", ErrInvalidArgument)
 	}
 	var member TenantMember
-	record := newAuditRecord(ctx, tenantID, "tenant_member_status_changed", "tenant_member", subject)
+	record := newAuditRecord(ctx, tenantID, "tenant_member_status_changed", "tenant_member", principalID)
 	record.Detail["status"] = status
 	record.PolicyChanged = true
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
@@ -102,7 +104,7 @@ func (s *Service) SetTenantMemberStatus(ctx context.Context, tenantID, subject s
 				return err
 			}
 		}
-		member, err = repo.SetMemberStatus(ctx, tenantID, subject, status)
+		member, err = repo.SetMemberStatus(ctx, tenantID, principalID, status)
 		if err != nil || verify == nil {
 			return err
 		}
@@ -111,20 +113,20 @@ func (s *Service) SetTenantMemberStatus(ctx context.Context, tenantID, subject s
 	return member, err
 }
 
-func (s *Service) ListTenantMemberRoles(ctx context.Context, tenantID, subject string) ([]string, error) {
-	if err := validateMemberRef(tenantID, subject); err != nil {
+func (s *Service) ListTenantMemberRoles(ctx context.Context, tenantID, principalID guid.ID) ([]guid.ID, error) {
+	if err := validateMemberRef(tenantID, principalID); err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.GetMember(ctx, tenantID, subject); err != nil {
+	if _, err := s.repo.GetMember(ctx, tenantID, principalID); err != nil {
 		return nil, err
 	}
-	return s.repo.ListMemberRoleIDs(ctx, tenantID, subject)
+	return s.repo.ListMemberRoleIDs(ctx, tenantID, principalID)
 }
 
 func (s *Service) CreateMenu(ctx context.Context, menu Menu) (Menu, error) {
-	menu.ID = ""
+	menu.ID = 0
 	var created Menu
-	record := newAuditRecord(ctx, menu.TenantID, "menu_created", "menu", "")
+	record := newAuditRecord(ctx, menu.TenantID, "menu_created", "menu", 0)
 	record.PolicyChanged = true
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
 		if err := s.validateMenu(ctx, repo, menu); err != nil {
@@ -138,14 +140,14 @@ func (s *Service) CreateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	return created, err
 }
 
-func (s *Service) ListMenus(ctx context.Context, tenantID string) ([]Menu, error) {
+func (s *Service) ListMenus(ctx context.Context, tenantID guid.ID) ([]Menu, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListMenus(ctx, tenantID, false)
 }
 
-func (s *Service) GetMenu(ctx context.Context, tenantID, menuID string) (Menu, error) {
+func (s *Service) GetMenu(ctx context.Context, tenantID, menuID guid.ID) (Menu, error) {
 	if err := validateMenuRef(tenantID, menuID); err != nil {
 		return Menu{}, err
 	}
@@ -166,10 +168,10 @@ func (s *Service) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 		if err := s.validateMenu(ctx, repo, menu); err != nil {
 			return err
 		}
-		if menu.ParentID != "" {
-			seen := map[string]bool{menu.ID: true}
+		if !menu.ParentID.Zero() {
+			seen := map[guid.ID]bool{menu.ID: true}
 			parentID := menu.ParentID
-			for depth := 0; parentID != "" && depth < 100; depth++ {
+			for depth := 0; !parentID.Zero() && depth < 100; depth++ {
 				if seen[parentID] {
 					return fmt.Errorf("%w: menu hierarchy cycle", ErrInvalidArgument)
 				}
@@ -180,7 +182,7 @@ func (s *Service) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 				}
 				parentID = parent.ParentID
 			}
-			if parentID != "" {
+			if !parentID.Zero() {
 				return fmt.Errorf("%w: menu hierarchy too deep", ErrInvalidArgument)
 			}
 		}
@@ -191,7 +193,7 @@ func (s *Service) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	return updated, err
 }
 
-func (s *Service) DeleteMenu(ctx context.Context, tenantID, menuID string) error {
+func (s *Service) DeleteMenu(ctx context.Context, tenantID, menuID guid.ID) error {
 	if err := validateMenuRef(tenantID, menuID); err != nil {
 		return err
 	}
@@ -202,8 +204,8 @@ func (s *Service) DeleteMenu(ctx context.Context, tenantID, menuID string) error
 	})
 }
 
-func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) ([]MenuItem, error) {
-	if err := validateMemberRef(tenantID, subject); err != nil {
+func (s *Service) EffectiveMenus(ctx context.Context, tenantID, principalID guid.ID) ([]MenuItem, error) {
+	if err := validateMemberRef(tenantID, principalID); err != nil {
 		return nil, err
 	}
 	menus, err := s.repo.ListMenus(ctx, tenantID, true)
@@ -228,7 +230,7 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 	allowed := map[string]bool{}
 	for start := 0; start < len(codes); start += 100 {
 		end := min(start+100, len(codes))
-		result, err := s.checker.CheckBulk(ctx, tenantID, codes[start:end], subject)
+		result, err := s.checker.CheckBulk(ctx, tenantID, codes[start:end], principalID)
 		if err != nil {
 			return nil, fmt.Errorf("check effective menu permissions: %w", err)
 		}
@@ -236,18 +238,18 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 			allowed[code] = value
 		}
 	}
-	children := map[string][]Menu{}
+	children := map[guid.ID][]Menu{}
 	for _, menu := range menus {
 		children[menu.ParentID] = append(children[menu.ParentID], menu)
 	}
-	var build func(string, map[string]bool) []MenuItem
-	build = func(parent string, visiting map[string]bool) []MenuItem {
+	var build func(guid.ID, map[guid.ID]bool) []MenuItem
+	build = func(parent guid.ID, visiting map[guid.ID]bool) []MenuItem {
 		result := make([]MenuItem, 0, len(children[parent]))
 		for _, menu := range children[parent] {
 			if visiting[menu.ID] {
 				continue
 			}
-			next := make(map[string]bool, len(visiting)+1)
+			next := make(map[guid.ID]bool, len(visiting)+1)
 			for id, value := range visiting {
 				next[id] = value
 			}
@@ -256,11 +258,11 @@ func (s *Service) EffectiveMenus(ctx context.Context, tenantID, subject string) 
 			if menu.PermissionCode != "" && !allowed[menu.PermissionCode] && len(nodes) == 0 {
 				continue
 			}
-			result = append(result, MenuItem{ID: menu.ID, Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
+			result = append(result, MenuItem{ID: menu.ID.String(), Label: menu.Label, Path: menu.Route, Icon: menu.Icon, SortOrder: menu.SortOrder, PermissionCode: menu.PermissionCode, Children: nodes})
 		}
 		return result
 	}
-	return build("", map[string]bool{}), nil
+	return build(0, map[guid.ID]bool{}), nil
 }
 
 func (s *Service) validateMenu(ctx context.Context, repo *Repository, menu Menu) error {
@@ -279,7 +281,7 @@ func (s *Service) validateMenu(ctx context.Context, repo *Repository, menu Menu)
 			return fmt.Errorf("%w: %s", ErrPermissionNotFound, menu.PermissionCode)
 		}
 	}
-	if menu.ParentID != "" {
+	if !menu.ParentID.Zero() {
 		if _, err := repo.GetMenu(ctx, menu.TenantID, menu.ParentID); err != nil {
 			return fmt.Errorf("%w: parent menu", ErrInvalidArgument)
 		}
@@ -287,21 +289,21 @@ func (s *Service) validateMenu(ctx context.Context, repo *Repository, menu Menu)
 	return nil
 }
 
-func validateMemberRef(tenantID, subject string) error {
+func validateMemberRef(tenantID, principalID guid.ID) error {
 	if err := validateTenant(tenantID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(subject) == "" || len(subject) > 255 {
+	if principalID.Zero() {
 		return fmt.Errorf("%w: invalid member subject", ErrInvalidArgument)
 	}
 	return nil
 }
 
-func validateMenuRef(tenantID, menuID string) error {
+func validateMenuRef(tenantID, menuID guid.ID) error {
 	if err := validateTenant(tenantID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(menuID) == "" || len(menuID) > 32 {
+	if menuID.Zero() {
 		return fmt.Errorf("%w: invalid menu id", ErrInvalidArgument)
 	}
 	return nil

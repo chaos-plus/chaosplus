@@ -9,14 +9,15 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
 
 type AuthorizationEvaluator interface {
-	CheckBulk(ctx context.Context, tenantID string, permissions []string, subject string) (map[string]bool, error)
-	Constraint(ctx context.Context, tenantID, permission, subject string) (authz.DataConstraint, error)
-	ExplainEntity(ctx context.Context, tenantID, entityID, permission, subject string) (authz.Explanation, error)
-	ExplainResource(ctx context.Context, tenantID, entityID, resourceType, resourceID, permission, subject string) (authz.Explanation, error)
+	CheckBulk(ctx context.Context, tenantID guid.ID, permissions []string, principalID guid.ID) (map[string]bool, error)
+	Constraint(ctx context.Context, tenantID guid.ID, permission string, principalID guid.ID) (authz.DataConstraint, error)
+	ExplainEntity(ctx context.Context, tenantID, entityID guid.ID, permission string, principalID guid.ID) (authz.Explanation, error)
+	ExplainResource(ctx context.Context, tenantID, entityID guid.ID, resourceType string, resourceID guid.ID, permission string, principalID guid.ID) (authz.Explanation, error)
 }
 
 type Service struct {
@@ -62,7 +63,7 @@ func (s *Service) MenuCatalog(context.Context) []MenuItem {
 	items := make([]MenuItem, 0, len(DefaultMenus()))
 	for _, menu := range DefaultMenus() {
 		items = append(items, MenuItem{
-			ID:             menu.ID,
+			ID:             menu.ID.String(),
 			Label:          menu.Label,
 			Path:           menu.Route,
 			PermissionCode: menu.PermissionCode,
@@ -78,25 +79,25 @@ func (s *Service) MenuCatalog(context.Context) []MenuItem {
 // belong here; roadmap pages must not appear before their APIs and workflows.
 func DefaultMenus() []Menu {
 	return []Menu{
-		{ID: "iam-users", Label: "Principals and members", Route: "/iam/users", Icon: "users", SortOrder: 10, PermissionCode: "user_view", Status: MenuActive},
-		{ID: "iam-invitations", Label: "Invitations", Route: "/iam/invitations", Icon: "mail-plus", SortOrder: 11, PermissionCode: "invitation_view", Status: MenuActive},
-		{ID: "iam-service-accounts", Label: "Service accounts", Route: "/iam/service-accounts", Icon: "bot", SortOrder: 12, PermissionCode: "service_account_view", Status: MenuActive},
-		{ID: "iam-entities", Label: "Entities", Route: "/iam/entities", Icon: "network", SortOrder: 13, PermissionCode: "entity_view", Status: MenuActive},
-		{ID: "iam-departments", Label: "Departments", Route: "/iam/departments", Icon: "building-2", SortOrder: 15, PermissionCode: "dept_view", Status: MenuActive},
-		{ID: "iam-positions", Label: "Positions", Route: "/iam/positions", Icon: "briefcase-business", SortOrder: 18, PermissionCode: "position_view", Status: MenuActive},
-		{ID: "iam-groups", Label: "Groups", Route: "/iam/groups", Icon: "users-round", SortOrder: 19, PermissionCode: "group_view", Status: MenuActive},
-		{ID: "iam-roles", Label: "Roles and permissions", Route: "/iam/roles", Icon: "key-round", SortOrder: 20, PermissionCode: "role_view", Status: MenuActive},
-		{ID: "iam-access-requests", Label: "Access requests", Route: "/iam/access-requests", Icon: "clipboard-check", SortOrder: 21, PermissionCode: "access_request_view", Status: MenuActive},
-		{ID: "iam-access-reviews", Label: "Access reviews", Route: "/iam/access-reviews", Icon: "list-checks", SortOrder: 22, PermissionCode: "access_review_view", Status: MenuActive},
-		{ID: "iam-menus", Label: "Menu metadata", Route: "/iam/menus", Icon: "boxes", SortOrder: 30, PermissionCode: "menu_view", Status: MenuActive},
-		{ID: "iam-oauth-clients", Label: "OAuth clients", Route: "/iam/oauth-clients", Icon: "app-window", SortOrder: 40, PermissionCode: "oauth_client_view", Status: MenuActive},
-		{ID: "iam-scim-directories", Label: "SCIM directories", Route: "/iam/scim-directories", Icon: "folder-sync", SortOrder: 45, PermissionCode: "tenant_administer", Status: MenuActive},
-		{ID: "iam-audit-events", Label: "Audit events", Route: "/iam/audit-events", Icon: "file-clock", SortOrder: 50, PermissionCode: "audit_event_view", Status: MenuActive},
-		{ID: "iam-audit-governance", Label: "Audit governance", Route: "/iam/audit-governance", Icon: "shield-check", SortOrder: 51, PermissionCode: "audit_event_view", Status: MenuActive},
+		{Label: "Principals and members", Route: "/iam/users", Icon: "users", SortOrder: 10, PermissionCode: "user_view", Status: MenuActive},
+		{Label: "Invitations", Route: "/iam/invitations", Icon: "mail-plus", SortOrder: 11, PermissionCode: "invitation_view", Status: MenuActive},
+		{Label: "Service accounts", Route: "/iam/service-accounts", Icon: "bot", SortOrder: 12, PermissionCode: "service_account_view", Status: MenuActive},
+		{Label: "Entities", Route: "/iam/entities", Icon: "network", SortOrder: 13, PermissionCode: "entity_view", Status: MenuActive},
+		{Label: "Departments", Route: "/iam/departments", Icon: "building-2", SortOrder: 15, PermissionCode: "dept_view", Status: MenuActive},
+		{Label: "Positions", Route: "/iam/positions", Icon: "briefcase-business", SortOrder: 18, PermissionCode: "position_view", Status: MenuActive},
+		{Label: "Groups", Route: "/iam/groups", Icon: "users-round", SortOrder: 19, PermissionCode: "group_view", Status: MenuActive},
+		{Label: "Roles and permissions", Route: "/iam/roles", Icon: "key-round", SortOrder: 20, PermissionCode: "role_view", Status: MenuActive},
+		{Label: "Access requests", Route: "/iam/access-requests", Icon: "clipboard-check", SortOrder: 21, PermissionCode: "access_request_view", Status: MenuActive},
+		{Label: "Access reviews", Route: "/iam/access-reviews", Icon: "list-checks", SortOrder: 22, PermissionCode: "access_review_view", Status: MenuActive},
+		{Label: "Menu metadata", Route: "/iam/menus", Icon: "boxes", SortOrder: 30, PermissionCode: "menu_view", Status: MenuActive},
+		{Label: "OAuth clients", Route: "/iam/oauth-clients", Icon: "app-window", SortOrder: 40, PermissionCode: "oauth_client_view", Status: MenuActive},
+		{Label: "SCIM directories", Route: "/iam/scim-directories", Icon: "folder-sync", SortOrder: 45, PermissionCode: "tenant_administer", Status: MenuActive},
+		{Label: "Audit events", Route: "/iam/audit-events", Icon: "file-clock", SortOrder: 50, PermissionCode: "audit_event_view", Status: MenuActive},
+		{Label: "Audit governance", Route: "/iam/audit-governance", Icon: "shield-check", SortOrder: 51, PermissionCode: "audit_event_view", Status: MenuActive},
 	}
 }
 
-func (s *Service) CreateRole(ctx context.Context, tenantID, name, description string) (iamdomain.Role, error) {
+func (s *Service) CreateRole(ctx context.Context, tenantID guid.ID, name, description string) (iamdomain.Role, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return iamdomain.Role{}, err
 	}
@@ -105,7 +106,7 @@ func (s *Service) CreateRole(ctx context.Context, tenantID, name, description st
 		return iamdomain.Role{}, fmt.Errorf("%w: invalid role name or description", ErrInvalidArgument)
 	}
 	var role iamdomain.Role
-	record := newAuditRecord(ctx, tenantID, "role_created", "role", "")
+	record := newAuditRecord(ctx, tenantID, "role_created", "role", 0)
 	record.PolicyChanged = true
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
 		var err error
@@ -116,21 +117,21 @@ func (s *Service) CreateRole(ctx context.Context, tenantID, name, description st
 	return role, err
 }
 
-func (s *Service) ListRoles(ctx context.Context, tenantID string) ([]iamdomain.Role, error) {
+func (s *Service) ListRoles(ctx context.Context, tenantID guid.ID) ([]iamdomain.Role, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListRoles(ctx, tenantID)
 }
 
-func (s *Service) GetRole(ctx context.Context, tenantID, roleID string) (iamdomain.Role, error) {
+func (s *Service) GetRole(ctx context.Context, tenantID, roleID guid.ID) (iamdomain.Role, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return iamdomain.Role{}, err
 	}
 	return s.repo.GetRole(ctx, tenantID, roleID)
 }
 
-func (s *Service) UpdateRole(ctx context.Context, tenantID, roleID string, name, description *string) (iamdomain.Role, error) {
+func (s *Service) UpdateRole(ctx context.Context, tenantID, roleID guid.ID, name, description *string) (iamdomain.Role, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return iamdomain.Role{}, err
 	}
@@ -160,7 +161,7 @@ func (s *Service) UpdateRole(ctx context.Context, tenantID, roleID string, name,
 	return updated, err
 }
 
-func (s *Service) DeleteRole(ctx context.Context, tenantID, roleID string) error {
+func (s *Service) DeleteRole(ctx context.Context, tenantID, roleID guid.ID) error {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return err
 	}
@@ -178,21 +179,21 @@ func (s *Service) DeleteRole(ctx context.Context, tenantID, roleID string) error
 	})
 }
 
-func (s *Service) ListPermissions(ctx context.Context, tenantID, roleID string) ([]string, error) {
+func (s *Service) ListPermissions(ctx context.Context, tenantID, roleID guid.ID) ([]string, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListPermissions(ctx, tenantID, roleID)
 }
 
-func (s *Service) ListPermissionGrants(ctx context.Context, tenantID, roleID string) ([]RolePermissionGrant, error) {
+func (s *Service) ListPermissionGrants(ctx context.Context, tenantID, roleID guid.ID) ([]RolePermissionGrant, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListPermissionGrants(ctx, tenantID, roleID)
 }
 
-func (s *Service) SetPermissionCondition(ctx context.Context, tenantID, roleID, code string, condition json.RawMessage) (RolePermissionGrant, bool, error) {
+func (s *Service) SetPermissionCondition(ctx context.Context, tenantID, roleID guid.ID, code string, condition json.RawMessage) (RolePermissionGrant, bool, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return RolePermissionGrant{}, false, err
 	}
@@ -242,15 +243,15 @@ func (s *Service) SetPermissionCondition(ctx context.Context, tenantID, roleID, 
 	return grant, changed, err
 }
 
-func (s *Service) GrantPermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
+func (s *Service) GrantPermission(ctx context.Context, tenantID, roleID guid.ID, code string) (bool, error) {
 	return s.changePermission(ctx, tenantID, roleID, code, true)
 }
 
-func (s *Service) RevokePermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
+func (s *Service) RevokePermission(ctx context.Context, tenantID, roleID guid.ID, code string) (bool, error) {
 	return s.changePermission(ctx, tenantID, roleID, code, false)
 }
 
-func (s *Service) changePermission(ctx context.Context, tenantID, roleID, code string, grant bool) (bool, error) {
+func (s *Service) changePermission(ctx context.Context, tenantID, roleID guid.ID, code string, grant bool) (bool, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return false, err
 	}
@@ -295,27 +296,26 @@ func (s *Service) changePermission(ctx context.Context, tenantID, roleID, code s
 	return changed, err
 }
 
-func (s *Service) ListMembers(ctx context.Context, tenantID, roleID string) ([]string, error) {
+func (s *Service) ListMembers(ctx context.Context, tenantID, roleID guid.ID) ([]guid.ID, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListMembers(ctx, tenantID, roleID)
 }
 
-func (s *Service) AddMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return s.changeMember(ctx, tenantID, roleID, subject, true)
+func (s *Service) AddMember(ctx context.Context, tenantID, roleID, principalID guid.ID) (bool, error) {
+	return s.changeMember(ctx, tenantID, roleID, principalID, true)
 }
 
-func (s *Service) RemoveMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return s.changeMember(ctx, tenantID, roleID, subject, false)
+func (s *Service) RemoveMember(ctx context.Context, tenantID, roleID, principalID guid.ID) (bool, error) {
+	return s.changeMember(ctx, tenantID, roleID, principalID, false)
 }
 
-func (s *Service) changeMember(ctx context.Context, tenantID, roleID, subject string, add bool) (bool, error) {
+func (s *Service) changeMember(ctx context.Context, tenantID, roleID, principalID guid.ID, add bool) (bool, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return false, err
 	}
-	subject = strings.TrimSpace(subject)
-	if subject == "" || len(subject) > 255 {
+	if principalID.Zero() {
 		return false, fmt.Errorf("%w: invalid principal subject", ErrInvalidArgument)
 	}
 	if add {
@@ -328,26 +328,26 @@ func (s *Service) changeMember(ctx context.Context, tenantID, roleID, subject st
 		eventType = "role_member_added"
 	}
 	record := newAuditRecord(ctx, tenantID, eventType, "role", roleID)
-	record.Detail["subject"] = subject
+	record.Detail["principal_id"] = principalID
 	var changed bool
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
 		var err error
 		if add {
-			active, activeErr := repo.IsMemberActive(ctx, tenantID, subject)
+			active, activeErr := repo.IsMemberActive(ctx, tenantID, principalID)
 			if activeErr != nil {
 				return activeErr
 			}
 			if !active {
 				return ErrMemberInactive
 			}
-			changed, err = repo.AddMember(ctx, tenantID, roleID, subject)
+			changed, err = repo.AddMember(ctx, tenantID, roleID, principalID)
 		} else {
 			var verify func() error
 			verify, err = s.administrators.Protect(ctx, repo.executor, repo.dialect, tenantID)
 			if err != nil {
 				return err
 			}
-			changed, err = repo.RemoveMember(ctx, tenantID, roleID, subject)
+			changed, err = repo.RemoveMember(ctx, tenantID, roleID, principalID)
 			if err == nil {
 				err = verify()
 			}
@@ -359,18 +359,18 @@ func (s *Service) changeMember(ctx context.Context, tenantID, roleID, subject st
 	return changed, err
 }
 
-func validateTenant(tenantID string) error {
-	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
+func validateTenant(tenantID guid.ID) error {
+	if tenantID.Zero() {
 		return fmt.Errorf("%w: invalid tenant id", ErrInvalidArgument)
 	}
 	return nil
 }
 
-func validateRoleRef(tenantID, roleID string) error {
+func validateRoleRef(tenantID, roleID guid.ID) error {
 	if err := validateTenant(tenantID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(roleID) == "" || len(roleID) > 32 {
+	if roleID.Zero() {
 		return fmt.Errorf("%w: invalid role id", ErrInvalidArgument)
 	}
 	return nil

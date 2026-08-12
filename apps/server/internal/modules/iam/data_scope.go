@@ -6,50 +6,49 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type roleDataScopeRow struct {
 	bun.BaseModel `bun:"table:iam_role_data_scopes"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
 	ScopeType     string
 	UpdatedAt     int64
 }
 
 type roleScopeDepartmentRow struct {
 	bun.BaseModel `bun:"table:iam_role_scope_departments"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
-	DepartmentID  string `bun:"department_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
+	DepartmentID  guid.ID `bun:"department_id,pk"`
 	CreatedAt     int64
 }
 
 type memberDepartmentRow struct {
 	bun.BaseModel `bun:"table:iam_member_departments"`
-	TenantID      string `bun:"tenant_id,pk"`
-	PrincipalID   string `bun:"principal_id,pk"`
-	DepartmentID  string
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
+	DepartmentID  guid.ID
 	UpdatedAt     int64
 }
 
-func (r *Repository) GetRoleDataScope(ctx context.Context, tenantID, roleID string) (RoleDataScope, error) {
+func (r *Repository) GetRoleDataScope(ctx context.Context, tenantID, roleID guid.ID) (RoleDataScope, error) {
 	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
 		return RoleDataScope{}, err
 	}
 	var row roleDataScopeRow
 	err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return RoleDataScope{RoleID: roleID, Scope: DataScopeAll, DepartmentIDs: []string{}}, nil
+		return RoleDataScope{RoleID: roleID, Scope: DataScopeAll, DepartmentIDs: []guid.ID{}}, nil
 	}
 	if err != nil {
 		return RoleDataScope{}, fmt.Errorf("get role data scope: %w", err)
 	}
-	departmentIDs := make([]string, 0)
+	departmentIDs := make([]guid.ID, 0)
 	if err := r.executor.NewSelect().Model((*roleScopeDepartmentRow)(nil)).Column("department_id").
 		Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("department_id ASC").Scan(ctx, &departmentIDs); err != nil {
 		return RoleDataScope{}, fmt.Errorf("list role scope departments: %w", err)
@@ -57,7 +56,7 @@ func (r *Repository) GetRoleDataScope(ctx context.Context, tenantID, roleID stri
 	return RoleDataScope{RoleID: roleID, Scope: DataScope(row.ScopeType), DepartmentIDs: departmentIDs, UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}, nil
 }
 
-func (r *Repository) replaceRoleDataScope(ctx context.Context, tenantID, roleID string, scope DataScope, departmentIDs []string) error {
+func (r *Repository) replaceRoleDataScope(ctx context.Context, tenantID, roleID guid.ID, scope DataScope, departmentIDs []guid.ID) error {
 	if _, err := r.executor.NewDelete().Model((*roleDataScopeRow)(nil)).Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Exec(ctx); err != nil {
 		return fmt.Errorf("delete role data scope: %w", err)
 	}
@@ -81,11 +80,11 @@ func (r *Repository) replaceRoleDataScope(ctx context.Context, tenantID, roleID 
 	return nil
 }
 
-func (r *Repository) setMemberDepartment(ctx context.Context, tenantID, principalID, departmentID string) error {
+func (r *Repository) setMemberDepartment(ctx context.Context, tenantID, principalID, departmentID guid.ID) error {
 	if _, err := r.executor.NewDelete().Model((*memberDepartmentRow)(nil)).Where("tenant_id = ? AND principal_id = ?", tenantID, principalID).Exec(ctx); err != nil {
 		return fmt.Errorf("clear member department: %w", err)
 	}
-	if departmentID == "" {
+	if departmentID.Zero() {
 		return nil
 	}
 	row := memberDepartmentRow{TenantID: tenantID, PrincipalID: principalID, DepartmentID: departmentID, UpdatedAt: r.now().UTC().UnixMilli()}
@@ -95,7 +94,7 @@ func (r *Repository) setMemberDepartment(ctx context.Context, tenantID, principa
 	return nil
 }
 
-func (r *Repository) departmentStatus(ctx context.Context, tenantID, departmentID string) (string, error) {
+func (r *Repository) departmentStatus(ctx context.Context, tenantID, departmentID guid.ID) (string, error) {
 	var status string
 	err := r.executor.NewSelect().Table("iam_departments").Column("status").Where("tenant_id = ? AND id = ?", tenantID, departmentID).Scan(ctx, &status)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -107,14 +106,14 @@ func (r *Repository) departmentStatus(ctx context.Context, tenantID, departmentI
 	return status, nil
 }
 
-func (s *Service) GetRoleDataScope(ctx context.Context, tenantID, roleID string) (RoleDataScope, error) {
+func (s *Service) GetRoleDataScope(ctx context.Context, tenantID, roleID guid.ID) (RoleDataScope, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return RoleDataScope{}, err
 	}
 	return s.repo.GetRoleDataScope(ctx, tenantID, roleID)
 }
 
-func (s *Service) SetRoleDataScope(ctx context.Context, tenantID, roleID string, scope DataScope, departmentIDs []string) (RoleDataScope, bool, error) {
+func (s *Service) SetRoleDataScope(ctx context.Context, tenantID, roleID guid.ID, scope DataScope, departmentIDs []guid.ID) (RoleDataScope, bool, error) {
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return RoleDataScope{}, false, err
 	}
@@ -159,25 +158,24 @@ func (s *Service) SetRoleDataScope(ctx context.Context, tenantID, roleID string,
 	return result, changed, err
 }
 
-func normalizeRoleDataScope(scope DataScope, departmentIDs []string) ([]string, error) {
+func normalizeRoleDataScope(scope DataScope, departmentIDs []guid.ID) ([]guid.ID, error) {
 	switch scope {
 	case DataScopeAll, DataScopeSelf, DataScopeDepartment, DataScopeDepartmentAndDescendants, DataScopeSelectedDepartments:
 	default:
 		return nil, ErrInvalidRoleDataScope
 	}
-	set := make(map[string]struct{}, len(departmentIDs))
+	set := make(map[guid.ID]struct{}, len(departmentIDs))
 	for _, id := range departmentIDs {
-		id = strings.TrimSpace(id)
-		if id == "" || len(id) > 128 {
+		if id.Zero() {
 			return nil, ErrInvalidRoleDataScope
 		}
 		set[id] = struct{}{}
 	}
-	normalized := make([]string, 0, len(set))
+	normalized := make([]guid.ID, 0, len(set))
 	for id := range set {
 		normalized = append(normalized, id)
 	}
-	sort.Strings(normalized)
+	slices.Sort(normalized)
 	if scope == DataScopeSelectedDepartments && len(normalized) == 0 {
 		return nil, ErrRoleScopeDepartmentNeeded
 	}

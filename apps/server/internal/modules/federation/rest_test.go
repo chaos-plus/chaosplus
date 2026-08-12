@@ -74,8 +74,8 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	insertRole(t, env.db, "tenant-a", "role-a")
 	client, server := newManagementAPI(t, env)
 
-	create := []byte(`{"name":"GitLab","provider_type":"oidc","issuer":"https://gitlab.example","client_id":"app","client_secret":"s3cret","auto_provision":true,"default_role_id":"role-a","status":"active"}`)
-	response := adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", "tenant-a", create, nil)
+	create := []byte("{\"name\":\"GitLab\",\"provider_type\":\"oidc\",\"issuer\":\"https://gitlab.example\",\"client_id\":\"app\",\"client_secret\":\"s3cret\",\"auto_provision\":true,\"default_role_id\":\"" + wireID("role-a") + "\",\"status\":\"active\"}")
+	response := adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), create, nil)
 	assert.Equal(t, http.StatusCreated, response.StatusCode)
 	var envelope federationEnvelope
 	decodeHTTPBody(t, response, &envelope)
@@ -87,50 +87,50 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	assert.Equal(t, "https://gitlab.example", provider.Issuer)
 	assert.True(t, provider.ClientSecretSet)
 
-	response = adminRequest(t, client, http.MethodGet, server.URL+"/iam/identity-providers", "tenant-a", nil, nil)
+	response = adminRequest(t, client, http.MethodGet, server.URL+"/iam/identity-providers", wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	var providers []Provider
 	require.NoError(t, json.Unmarshal(envelope.Data, &providers))
 	require.Len(t, providers, 1)
 
-	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", "tenant-a", create, map[string]string{"Accept-Language": "zh-CN"})
+	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), create, map[string]string{"Accept-Language": "zh-CN"})
 	assert.Equal(t, http.StatusConflict, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("zh-CN", "federation_provider_issuer_exists"), envelope.Message)
 	assert.NotEqual(t, "federation_provider_issuer_exists", envelope.Message)
 
-	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", "tenant-a", []byte(`{"name":"Broken","issuer":"https://broken.example","client_id":"app","auto_provision":true,"default_role_id":"missing","status":"active"}`), nil)
+	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), []byte("{\"name\":\"Broken\",\"issuer\":\"https://broken.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\"" + wireID("missing") + "\",\"status\":\"active\"}"), nil)
 	assert.Equal(t, http.StatusConflict, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("en-US", "federation_provider_role_missing"), envelope.Message)
 
-	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", "tenant-a", []byte(`{"name":"Bad","issuer":"not a url","client_id":"app","auto_provision":true,"status":"active"}`), nil)
+	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), []byte(`{"name":"Bad","issuer":"not a url","client_id":"app","auto_provision":true,"status":"active"}`), nil)
 	assert.Equal(t, http.StatusBadRequest, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("en-US", "federation_invalid_request"), envelope.Message)
 
-	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/"+provider.ID, "tenant-a", []byte(`{"name":"GitLab Renamed","provider_type":"oidc","issuer":"https://gitlab.example","client_id":"app","auto_provision":true,"default_role_id":"role-a","status":"active"}`), nil)
+	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), []byte("{\"name\":\"GitLab Renamed\",\"provider_type\":\"oidc\",\"issuer\":\"https://gitlab.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\"" + wireID("role-a") + "\",\"status\":\"active\"}"), nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	require.NoError(t, json.Unmarshal(envelope.Data, &provider))
 	assert.Equal(t, "GitLab Renamed", provider.Name)
 
-	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/missing", "tenant-a", []byte(`{"name":"X","issuer":"https://other.example","client_id":"app","auto_provision":true,"status":"active"}`), nil)
+	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/"+wireID("missing"), wireID("tenant-a"), []byte(`{"name":"X","issuer":"https://other.example","client_id":"app","auto_provision":true,"status":"active"}`), nil)
 	assert.Equal(t, http.StatusNotFound, response.StatusCode)
 
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/"+provider.ID, "tenant-a", nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Contains(t, string(envelope.Data), `"deleted":true`)
 
-	response = adminRequest(t, client, http.MethodGet, server.URL+"/iam/identity-providers", "tenant-a", nil, nil)
+	response = adminRequest(t, client, http.MethodGet, server.URL+"/iam/identity-providers", wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	require.NoError(t, json.Unmarshal(envelope.Data, &providers))
 	assert.Empty(t, providers)
 
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/"+provider.ID, "tenant-a", nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusNotFound, response.StatusCode)
 }
 
@@ -149,7 +149,7 @@ func TestFederationBrowserLoginHTTPFlow(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
-	startURL := server.URL + "/federation/" + provider.ID + "/start?return_url=" + url.QueryEscape("https://app.example/")
+	startURL := server.URL + "/federation/" + provider.ID.String() + "/start?return_url=" + url.QueryEscape("https://app.example/")
 	response, err := client.Get(startURL)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, response.StatusCode)
@@ -157,7 +157,7 @@ func TestFederationBrowserLoginHTTPFlow(t *testing.T) {
 	parsedLocation, err := url.Parse(location)
 	require.NoError(t, err)
 	assert.Equal(t, env.idp.issuer+"/authorize", parsedLocation.Scheme+"://"+parsedLocation.Host+parsedLocation.Path)
-	assert.Equal(t, server.URL+"/federation/"+provider.ID+"/callback", parsedLocation.Query().Get("redirect_uri"))
+	assert.Equal(t, server.URL+"/federation/" + provider.ID.String()+"/callback", parsedLocation.Query().Get("redirect_uri"))
 	var stateCookie *http.Cookie
 	for _, cookie := range response.Cookies() {
 		if cookie.Name == stateCookieName {
@@ -185,7 +185,7 @@ func TestFederationBrowserLoginHTTPFlow(t *testing.T) {
 
 	code, returnedState := env.idp.authorize(t, client, provider.Issuer, state.CodeVerifier, state.Nonce)
 	require.Equal(t, state.Nonce, returnedState)
-	callbackURL := server.URL + "/federation/" + provider.ID + "/callback?code=" + code + "&state=" + state.Nonce
+	callbackURL := server.URL + "/federation/" + provider.ID.String() + "/callback?code=" + code + "&state=" + state.Nonce
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, callbackURL, nil)
 	require.NoError(t, err)
 	request.Header.Set("Cookie", stateCookieName+"="+stateCookie.Value)
@@ -206,7 +206,7 @@ func TestFederationBrowserLoginHTTPFlow(t *testing.T) {
 	assert.Equal(t, "user@example.com", claims.Email)
 
 	// Replayed or forged state is rejected with a localized 400.
-	response, err = client.Get(server.URL + "/federation/" + provider.ID + "/callback?code=garbage&state=wrong")
+	response, err = client.Get(server.URL + "/federation/" + provider.ID.String() + "/callback?code=garbage&state=wrong")
 	require.NoError(t, err)
 	defer response.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, response.StatusCode)
@@ -238,7 +238,8 @@ func TestFederationErrorMapping(t *testing.T) {
 }
 
 func TestProviderInputFromBody(t *testing.T) {
-	body := providerBody{Name: "X", ProviderType: ProviderOIDC, Issuer: "https://x.example", ClientID: "c", ClientSecret: "s", Scopes: "openid", AutoProvision: true, DefaultRoleID: "r", Status: ProviderActive}
-	input := providerInputFromBody(body)
-	assert.Equal(t, ProviderInput{Name: "X", ProviderType: ProviderOIDC, Issuer: "https://x.example", ClientID: "c", ClientSecret: "s", Scopes: "openid", AutoProvision: true, DefaultRoleID: "r", Status: ProviderActive}, input)
+	body := providerBody{Name: "X", ProviderType: ProviderOIDC, Issuer: "https://x.example", ClientID: "c", ClientSecret: "s", Scopes: "openid", AutoProvision: true, DefaultRoleID: wireID("r"), Status: ProviderActive}
+	input, err := providerInputFromBody(body)
+	require.NoError(t, err)
+	assert.Equal(t, ProviderInput{Name: "X", ProviderType: ProviderOIDC, Issuer: "https://x.example", ClientID: "c", ClientSecret: "s", Scopes: "openid", AutoProvision: true, DefaultRoleID: testID("r"), Status: ProviderActive}, input)
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
@@ -258,7 +259,7 @@ func normalizeUserInput(input UserInput) (UserInput, bool, error) {
 	return input, active, nil
 }
 
-func normalizeGroupInput(input GroupInput) (GroupInput, []string, error) {
+func normalizeGroupInput(input GroupInput) (GroupInput, []guid.ID, error) {
 	if !hasSchema(input.Schemas, GroupSchema) || len(input.Schemas) != 1 {
 		return GroupInput{}, nil, ErrInvalidSCIM
 	}
@@ -268,20 +269,20 @@ func normalizeGroupInput(input GroupInput) (GroupInput, []string, error) {
 		return GroupInput{}, nil, ErrInvalidSCIM
 	}
 	originalMembers := input.Members
-	unique := make(map[string]struct{}, len(originalMembers))
-	members := make([]string, 0, len(originalMembers))
+	unique := make(map[guid.ID]struct{}, len(originalMembers))
+	members := make([]guid.ID, 0, len(originalMembers))
 	input.Members = input.Members[:0]
 	for _, member := range originalMembers {
-		member.Value = strings.TrimSpace(member.Value)
-		if member.Value == "" || len(member.Value) > 128 {
+		memberID, err := guid.Parse(strings.TrimSpace(member.Value))
+		if err != nil {
 			return GroupInput{}, nil, ErrInvalidSCIM
 		}
-		if _, ok := unique[member.Value]; ok {
+		if _, ok := unique[memberID]; ok {
 			continue
 		}
-		unique[member.Value] = struct{}{}
-		members = append(members, member.Value)
-		input.Members = append(input.Members, SCIMGroupMember{Value: member.Value})
+		unique[memberID] = struct{}{}
+		members = append(members, memberID)
+		input.Members = append(input.Members, SCIMGroupMember{Value: memberID.String()})
 	}
 	return input, members, nil
 }

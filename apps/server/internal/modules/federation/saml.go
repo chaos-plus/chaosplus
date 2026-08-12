@@ -31,6 +31,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	saml "github.com/crewjam/saml"
 	"github.com/danielgtaylor/huma/v2"
 	xrv "github.com/mattermost/xml-roundtrip-validator"
@@ -72,8 +73,8 @@ var (
 
 type samlSPRow struct {
 	bun.BaseModel `bun:"table:iam_saml_service_providers"`
-	ID            string `bun:"id,pk"`
-	TenantID      string
+	ID            guid.ID `bun:"id,pk"`
+	TenantID      guid.ID
 	Name          string
 	EntityID      string
 	MetadataXML   string
@@ -95,7 +96,7 @@ type samlKeyRow struct {
 // database, satisfying saml.ServiceProviderProvider.
 type samlSPProvider struct {
 	service *Service
-	tenant  string
+	tenant  guid.ID
 }
 
 // GetServiceProvider returns the parsed metadata of an active service provider
@@ -105,7 +106,7 @@ func (p samlSPProvider) GetServiceProvider(r *http.Request, entityID string) (*s
 	// crewjam/saml during MakeAssertion, not from a concurrent key-rotation
 	// path. Full snapshot via samlState() would add RLock overhead inside the
 	// library's SP lookup callback.
-	if p.service.samlCert == nil || p.tenant == "" {
+	if p.service.samlCert == nil || p.tenant.Zero() {
 		return nil, os.ErrNotExist
 	}
 	return p.service.samlSPDescriptor(r.Context(), p.tenant, entityID)
@@ -349,9 +350,11 @@ func parseSAMLKeyPair(keyPEM, certPEM string) (*rsa.PrivateKey, *x509.Certificat
 	return key, cert, nil
 }
 
-func samlMetadataPath(tenantID string) string { return "/federation/saml/" + tenantID + "/metadata" }
-func samlSSOPath(tenantID string) string      { return "/federation/saml/" + tenantID + "/sso" }
-func samlSLOPath(tenantID string) string      { return "/federation/saml/" + tenantID + "/slo" }
+func samlMetadataPath(tenantID guid.ID) string {
+	return "/federation/saml/" + tenantID.String() + "/metadata"
+}
+func samlSSOPath(tenantID guid.ID) string { return "/federation/saml/" + tenantID.String() + "/sso" }
+func samlSLOPath(tenantID guid.ID) string { return "/federation/saml/" + tenantID.String() + "/slo" }
 
 func samlBaseURL(ctx huma.Context) string {
 	scheme := "http"
@@ -372,7 +375,7 @@ func samlBaseURL(ctx huma.Context) string {
 // samlIDP builds an IdentityProvider bound to the request's external base URL
 // and the tenant's SP registry. The URL-dependent fields must match what the
 // browser and the SP actually use, so they are derived per request.
-func (s *Service) samlIDP(ctx huma.Context, tenantID string) *saml.IdentityProvider {
+func (s *Service) samlIDP(ctx huma.Context, tenantID guid.ID) *saml.IdentityProvider {
 	base := samlBaseURL(ctx)
 	makeURL := func(path string) url.URL {
 		u, _ := url.Parse(base + path)
@@ -393,7 +396,7 @@ func (s *Service) samlIDP(ctx huma.Context, tenantID string) *saml.IdentityProvi
 }
 
 // ServeSAMLMetadata renders the tenant's IdP metadata document.
-func (s *Service) ServeSAMLMetadata(api huma.API, ctx huma.Context, tenantID string) {
+func (s *Service) ServeSAMLMetadata(api huma.API, ctx huma.Context, tenantID guid.ID) {
 	if s.samlKey == nil || !s.samlCfg.Enabled {
 		writeSAMLError(api, ctx, http.StatusServiceUnavailable, "federation_saml_unavailable")
 		return
@@ -410,7 +413,7 @@ func (s *Service) ServeSAMLMetadata(api huma.API, ctx huma.Context, tenantID str
 
 // ServeSAMLSSO processes an AuthnRequest and responds with a signed assertion
 // through the HTTP-POST binding.
-func (s *Service) ServeSAMLSSO(api huma.API, ctx huma.Context, tenantID string) {
+func (s *Service) ServeSAMLSSO(api huma.API, ctx huma.Context, tenantID guid.ID) {
 	if s.samlKey == nil || !s.samlCfg.Enabled {
 		writeSAMLError(api, ctx, http.StatusServiceUnavailable, "federation_saml_unavailable")
 		return
@@ -455,15 +458,15 @@ func (s *Service) ServeSAMLSSO(api huma.API, ctx huma.Context, tenantID string) 
 		writeSAMLError(api, ctx, http.StatusInternalServerError, "federation_saml_unavailable")
 		return
 	}
-	event := auditx.NewEvent(ctx.Context(), tenantID, "federation_saml_sso", "service_provider", req.Request.Issuer.Value)
-	event.PrincipalID = session.NameID
+	event := auditx.NewEvent(ctx.Context(), tenantID, "federation_saml_sso", "service_provider", 0)
 	event.Detail["service_provider"] = req.Request.Issuer.Value
+	event.Detail["external_subject"] = session.NameID
 	_ = s.audit(ctx.Context(), s.db, event)
 }
 
 // ServeSAMLSLO validates a LogoutRequest, revokes the local browser session,
 // and returns a signed LogoutResponse to the service provider.
-func (s *Service) ServeSAMLSLO(api huma.API, ctx huma.Context, tenantID string) {
+func (s *Service) ServeSAMLSLO(api huma.API, ctx huma.Context, tenantID guid.ID) {
 	if s.samlKey == nil || !s.samlCfg.Enabled {
 		writeSAMLError(api, ctx, http.StatusServiceUnavailable, "federation_saml_unavailable")
 		return
@@ -517,8 +520,9 @@ func (s *Service) ServeSAMLSLO(api huma.API, ctx huma.Context, tenantID string) 
 
 	s.authn.Logout(ctx.Context(), ctx.Header("Cookie"))
 	ctx.AppendHeader("Set-Cookie", s.authn.ClearCookie())
-	event := auditx.NewEvent(ctx.Context(), tenantID, "federation_saml_slo", "service_provider", logout.Issuer.Value)
+	event := auditx.NewEvent(ctx.Context(), tenantID, "federation_saml_slo", "service_provider", 0)
 	event.Detail["service_provider"] = logout.Issuer.Value
+	event.Detail["external_subject"] = logout.NameID
 	_ = s.audit(ctx.Context(), s.db, event)
 
 	endpoint := samlSLOEndpoint(ed)
@@ -659,8 +663,8 @@ func (s *Service) samlSession(ctx huma.Context) (*saml.Session, bool) {
 
 // samlSPDescriptor returns the parsed descriptor of an active SP, caching the
 // result per tenant and entity ID.
-func (s *Service) samlSPDescriptor(ctx context.Context, tenantID, entityID string) (*saml.EntityDescriptor, error) {
-	cacheKey := tenantID + "\x00" + entityID
+func (s *Service) samlSPDescriptor(ctx context.Context, tenantID guid.ID, entityID string) (*saml.EntityDescriptor, error) {
+	cacheKey := tenantID.String() + "\x00" + entityID
 	if cached, ok := s.samlSPs.Load(cacheKey); ok {
 		return cached.(*saml.EntityDescriptor), nil
 	}
@@ -840,9 +844,8 @@ func samlError(err error) error {
 }
 
 // ListSAMLServiceProviders returns the tenant's SAML service provider registry.
-func (s *Service) ListSAMLServiceProviders(ctx context.Context, tenantID string) ([]SAMLServiceProvider, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || len(tenantID) > 128 {
+func (s *Service) ListSAMLServiceProviders(ctx context.Context, tenantID guid.ID) ([]SAMLServiceProvider, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidSAMLSP
 	}
 	var rows []samlSPRow
@@ -858,14 +861,17 @@ func (s *Service) ListSAMLServiceProviders(ctx context.Context, tenantID string)
 
 // CreateSAMLServiceProvider registers a service provider from its metadata
 // document after validating the XML, entity ID, and assertion consumer binding.
-func (s *Service) CreateSAMLServiceProvider(ctx context.Context, tenantID string, input SAMLServiceProviderInput) (SAMLServiceProvider, error) {
+func (s *Service) CreateSAMLServiceProvider(ctx context.Context, tenantID guid.ID, input SAMLServiceProviderInput) (SAMLServiceProvider, error) {
 	row, err := s.normalizeSAMLSP(tenantID, input)
 	if err != nil {
 		return SAMLServiceProvider{}, err
 	}
-	id, err := randomToken(18)
+	id, err := s.nextID()
 	if err != nil {
 		return SAMLServiceProvider{}, err
+	}
+	if id.Zero() {
+		return SAMLServiceProvider{}, ErrInvalidSAMLSP
 	}
 	now := s.now().UTC().UnixMilli()
 	row.ID = id
@@ -883,9 +889,8 @@ func (s *Service) CreateSAMLServiceProvider(ctx context.Context, tenantID string
 
 // UpdateSAMLServiceProvider replaces a registered service provider. A new
 // entity ID is allowed only when the metadata document changes with it.
-func (s *Service) UpdateSAMLServiceProvider(ctx context.Context, tenantID, id string, input SAMLServiceProviderInput) (SAMLServiceProvider, error) {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || id == "" {
+func (s *Service) UpdateSAMLServiceProvider(ctx context.Context, tenantID, id guid.ID, input SAMLServiceProviderInput) (SAMLServiceProvider, error) {
+	if tenantID.Zero() || id.Zero() {
 		return SAMLServiceProvider{}, ErrInvalidSAMLSP
 	}
 	row, err := s.normalizeSAMLSP(tenantID, input)
@@ -914,9 +919,8 @@ func (s *Service) UpdateSAMLServiceProvider(ctx context.Context, tenantID, id st
 }
 
 // DeleteSAMLServiceProvider removes a service provider and its cache entry.
-func (s *Service) DeleteSAMLServiceProvider(ctx context.Context, tenantID, id string) error {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || id == "" {
+func (s *Service) DeleteSAMLServiceProvider(ctx context.Context, tenantID, id guid.ID) error {
+	if tenantID.Zero() || id.Zero() {
 		return ErrInvalidSAMLSP
 	}
 	var existing samlSPRow
@@ -933,8 +937,7 @@ func (s *Service) DeleteSAMLServiceProvider(ctx context.Context, tenantID, id st
 	return nil
 }
 
-func (s *Service) normalizeSAMLSP(tenantID string, input SAMLServiceProviderInput) (samlSPRow, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func (s *Service) normalizeSAMLSP(tenantID guid.ID, input SAMLServiceProviderInput) (samlSPRow, error) {
 	name := strings.TrimSpace(input.Name)
 	entityID := strings.TrimSpace(input.EntityID)
 	metadataXML := strings.TrimSpace(input.MetadataXML)
@@ -942,7 +945,7 @@ func (s *Service) normalizeSAMLSP(tenantID string, input SAMLServiceProviderInpu
 	if status == "" {
 		status = samlSPStatusActive
 	}
-	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 ||
+	if tenantID.Zero() || name == "" || len(name) > 128 ||
 		entityID == "" || len(entityID) > 255 || metadataXML == "" || len(metadataXML) > samlMetadataMaxBytes ||
 		(status != samlSPStatusActive && status != ProviderDisabled) {
 		return samlSPRow{}, ErrInvalidSAMLSP
@@ -953,8 +956,8 @@ func (s *Service) normalizeSAMLSP(tenantID string, input SAMLServiceProviderInpu
 	return samlSPRow{TenantID: tenantID, Name: name, EntityID: entityID, MetadataXML: metadataXML, Status: status}, nil
 }
 
-func (s *Service) invalidateSAMLSP(tenantID, entityID string) {
-	s.samlSPs.Delete(tenantID + "\x00" + entityID)
+func (s *Service) invalidateSAMLSP(tenantID guid.ID, entityID string) {
+	s.samlSPs.Delete(tenantID.String() + "\x00" + entityID)
 }
 
 func samlSPFromRow(row samlSPRow) SAMLServiceProvider {

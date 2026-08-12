@@ -31,5 +31,8 @@
   "mfa_not_enabled": "Multi-factor authentication is not enabled for this account. Enable it before performing this operation.",
   "registration_request_rejected": "The registration request origin is not allowed. Use the configured application address or contact an administrator.",
   "invalid_registration": "The registration data is invalid. Enter a valid email address, a password of at least 12 characters, and a display name of at most 128 characters.",
-  "registration_unavailable": "Self-service registration is not available. Contact an administrator for access or try again later."
+  "registration_unavailable": "Self-service registration is not available. Contact an administrator for access or try again later.",
+  "captcha_unavailable": "The registration challenge is temporarily unavailable. Retry later.",
+  "captcha_invalid": "The registration challenge is invalid or expired. Request a new challenge and try again.",
+  "registration_conflict": "The registration request conflicts with the current account state. Sign in, recover the account, or contact an administrator."
 }

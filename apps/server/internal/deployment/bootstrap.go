@@ -2,18 +2,16 @@ package deployment
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/app"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
@@ -133,13 +131,17 @@ func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 		if err != nil {
 			return err
 		}
+		tenantID, err := guid.Parse(adminCfg.TenantID)
+		if err != nil {
+			return fmt.Errorf("provision initial tenant id: %w", err)
+		}
 		principalID, err := authnmod.EnsureBootstrapPrincipal(ctx, runtimeDB, authnmod.BootstrapPrincipal{
 			LoginName: adminCfg.LoginName, Password: password, DisplayName: adminCfg.DisplayName, Email: adminCfg.Email,
-		})
+		}, nextGUID)
 		if err != nil {
 			return fmt.Errorf("provision initial principal: %w", err)
 		}
-		if err := bindInitialAdmin(ctx, runtimeDB, adminCfg.TenantID, principalID, adminCfg.DisplayName, adminCfg.Email); err != nil {
+		if err := bindInitialAdmin(ctx, runtimeDB, tenantID, principalID, adminCfg.DisplayName, adminCfg.Email); err != nil {
 			return err
 		}
 	}
@@ -243,18 +245,18 @@ func assertRuntimeAccess(ctx context.Context, db *bun.DB) error {
 	return nil
 }
 
-func bindInitialAdmin(ctx context.Context, db *bun.DB, tenantID, principalID, displayName, email string) error {
+func bindInitialAdmin(ctx context.Context, db *bun.DB, tenantID, principalID guid.ID, displayName, email string) error {
 	if err := organization.EnsureTenant(ctx, db, tenantID); err != nil {
 		return fmt.Errorf("ensure initial tenant: %w", err)
 	}
-	repo := iam.NewRepository(db, bootstrapID)
+	repo := iam.NewRepository(db, nextGUID)
 	if _, err := repo.GrantPlatformAdministrator(ctx, principalID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(displayName) == "" {
-		displayName = principalID
+	if displayName == "" {
+		displayName = principalID.String()
 	}
-	if _, err := repo.PutMember(ctx, iam.TenantMember{TenantID: tenantID, Subject: principalID, DisplayName: displayName, Email: email, Status: iam.MemberActive}); err != nil {
+	if _, err := repo.PutMember(ctx, iam.TenantMember{TenantID: tenantID, PrincipalID: principalID, DisplayName: displayName, Email: email, Status: iam.MemberActive}); err != nil {
 		return fmt.Errorf("upsert initial tenant member: %w", err)
 	}
 	var role iam.Role
@@ -268,7 +270,7 @@ func bindInitialAdmin(ctx context.Context, db *bun.DB, tenantID, principalID, di
 			break
 		}
 	}
-	if role.ID == "" {
+	if role.ID.Zero() {
 		role, err = repo.CreateRole(ctx, tenantID, "System Administrator", "Built-in tenant administrator")
 		if err != nil {
 			return fmt.Errorf("create administrator role: %w", err)
@@ -298,7 +300,7 @@ func bindInitialAdmin(ctx context.Context, db *bun.DB, tenantID, principalID, di
 	return nil
 }
 
-func ensureDefaultMenus(ctx context.Context, repo *iam.Repository, tenantID string) error {
+func ensureDefaultMenus(ctx context.Context, repo *iam.Repository, tenantID guid.ID) error {
 	existing, err := repo.ListMenus(ctx, tenantID, false)
 	if err != nil {
 		return fmt.Errorf("list bootstrap menus: %w", err)
@@ -311,7 +313,7 @@ func ensureDefaultMenus(ctx context.Context, repo *iam.Repository, tenantID stri
 		if _, ok := routes[menu.Route]; ok {
 			continue
 		}
-		menu.ID = ""
+		menu.ID = 0
 		menu.TenantID = tenantID
 		if _, err := repo.CreateMenu(ctx, menu); err != nil {
 			return fmt.Errorf("create default menu %s: %w", menu.Route, err)
@@ -320,10 +322,7 @@ func ensureDefaultMenus(ctx context.Context, repo *iam.Repository, tenantID stri
 	return nil
 }
 
-func bootstrapID() (string, error) {
-	data := make([]byte, 18)
-	if _, err := rand.Read(data); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(data), nil
+func nextGUID() (guid.ID, error) {
+	id, err := guid.Next()
+	return guid.ID(id), err
 }

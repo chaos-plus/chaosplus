@@ -99,7 +99,7 @@ func (tsp *samlTestSP) metadataXML() string {
 
 func (tsp *samlTestSP) register(t *testing.T, env *federationEnvironment) SAMLServiceProvider {
 	t.Helper()
-	registered, err := env.service.CreateSAMLServiceProvider(t.Context(), "tenant-a", SAMLServiceProviderInput{
+	registered, err := env.service.CreateSAMLServiceProvider(t.Context(), testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "portal", EntityID: tsp.entityID, MetadataXML: tsp.metadataXML(), Status: samlSPStatusActive,
 	})
 	require.NoError(t, err)
@@ -135,11 +135,11 @@ func samlSessionCookie(t *testing.T, env *federationEnvironment) (string, string
 	t.Helper()
 	principalID, err := authnmod.EnsureBootstrapPrincipal(t.Context(), env.db, authnmod.BootstrapPrincipal{
 		LoginName: "alice", Password: "correct horse battery staple", DisplayName: "Alice Example", Email: "alice@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
 	token, err := env.web.CreateSession(t.Context(), principalID, time.Now().UTC(), authnext.Assurance{AuthTime: time.Now().UTC(), Level: 1, Methods: []string{"password"}})
 	require.NoError(t, err)
-	return principalID, env.web.SessionCookie(token)
+	return guidString(principalID), env.web.SessionCookie(token)
 }
 
 func samlAuthnRequestParam(t *testing.T, tsp *samlTestSP, id string, issued time.Time, destination, acsURL string) string {
@@ -167,7 +167,7 @@ func samlAuthnRequestParam(t *testing.T, tsp *samlTestSP, id string, issued time
 
 func fetchIDPMetadata(t *testing.T, client *http.Client, server *httptest.Server, tenantID string) *saml.EntityDescriptor {
 	t.Helper()
-	response, err := client.Get(server.URL + samlMetadataPath(tenantID))
+	response, err := client.Get(server.URL + samlMetadataPath(testID(tenantID)))
 	require.NoError(t, err)
 	defer response.Body.Close()
 	require.Equal(t, http.StatusOK, response.StatusCode)
@@ -274,7 +274,7 @@ func TestSAMLServiceProviderManagement(t *testing.T) {
 		{Name: "x", EntityID: tsp.entityID, MetadataXML: tsp.metadataXML(), Status: "bogus"},
 	}
 	for index, input := range invalid {
-		_, err := env.service.CreateSAMLServiceProvider(ctx, "tenant-a", input)
+		_, err := env.service.CreateSAMLServiceProvider(ctx, testID("tenant-a"), input)
 		assert.ErrorIs(t, err, ErrInvalidSAMLSP, "case %d", index)
 	}
 
@@ -283,40 +283,40 @@ func TestSAMLServiceProviderManagement(t *testing.T) {
 	assert.Equal(t, tsp.entityID, registered.EntityID)
 	assert.Equal(t, samlSPStatusActive, registered.Status)
 
-	_, err := env.service.CreateSAMLServiceProvider(ctx, "tenant-a", SAMLServiceProviderInput{
+	_, err := env.service.CreateSAMLServiceProvider(ctx, testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "duplicate", EntityID: tsp.entityID, MetadataXML: tsp.metadataXML(),
 	})
 	assert.ErrorIs(t, err, ErrSAMLSPEntityIDExists)
 
-	items, err := env.service.ListSAMLServiceProviders(ctx, "tenant-a")
+	items, err := env.service.ListSAMLServiceProviders(ctx, testID("tenant-a"))
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 
 	other := newSAMLSPServer(t)
-	updated, err := env.service.UpdateSAMLServiceProvider(ctx, "tenant-a", registered.ID, SAMLServiceProviderInput{
+	updated, err := env.service.UpdateSAMLServiceProvider(ctx, testID("tenant-a"), registered.ID, SAMLServiceProviderInput{
 		Name: "portal-v2", EntityID: other.entityID, MetadataXML: other.metadataXML(), Status: ProviderDisabled,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "portal-v2", updated.Name)
 	assert.Equal(t, ProviderDisabled, updated.Status)
 
-	_, err = env.service.samlSPDescriptor(ctx, "tenant-a", other.entityID)
+	_, err = env.service.samlSPDescriptor(ctx, testID("tenant-a"), other.entityID)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
-	_, err = env.service.UpdateSAMLServiceProvider(ctx, "tenant-a", "missing", SAMLServiceProviderInput{
+	_, err = env.service.UpdateSAMLServiceProvider(ctx, testID("tenant-a"), testID("missing"), SAMLServiceProviderInput{
 		Name: "x", EntityID: tsp.entityID, MetadataXML: tsp.metadataXML(),
 	})
 	assert.ErrorIs(t, err, ErrSAMLSPNotFound)
 
-	require.NoError(t, env.service.DeleteSAMLServiceProvider(ctx, "tenant-a", registered.ID))
-	_, err = env.service.samlSPDescriptor(ctx, "tenant-a", other.entityID)
+	require.NoError(t, env.service.DeleteSAMLServiceProvider(ctx, testID("tenant-a"), registered.ID))
+	_, err = env.service.samlSPDescriptor(ctx, testID("tenant-a"), other.entityID)
 	assert.ErrorIs(t, err, os.ErrNotExist)
-	err = env.service.DeleteSAMLServiceProvider(ctx, "tenant-a", registered.ID)
+	err = env.service.DeleteSAMLServiceProvider(ctx, testID("tenant-a"), registered.ID)
 	assert.ErrorIs(t, err, ErrSAMLSPNotFound)
 
-	_, err = env.service.ListSAMLServiceProviders(ctx, "")
+	_, err = env.service.ListSAMLServiceProviders(ctx, 0)
 	assert.ErrorIs(t, err, ErrInvalidSAMLSP)
-	err = env.service.DeleteSAMLServiceProvider(ctx, "", "")
+	err = env.service.DeleteSAMLServiceProvider(ctx, 0, 0)
 	assert.ErrorIs(t, err, ErrInvalidSAMLSP)
 }
 
@@ -327,7 +327,7 @@ func TestSAMLSSOCompletesWithSignedAssertion(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	principalID, cookie := samlSessionCookie(t, env)
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 
 	response := samlBrowserRequest(t, server, http.MethodGet, ssoURL+"?SAMLRequest="+url.QueryEscape(samlAuthnRequestParam(t, tsp, "id-request-1", time.Now().UTC(), ssoURL, "")), cookie)
 	require.Equal(t, http.StatusOK, response.StatusCode)
@@ -357,16 +357,16 @@ func TestSAMLSSOPostBindingAndMetadata(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 
 	// Metadata advertises entity ID, SSO/SLO endpoints, and the signing cert.
-	metadataResponse, err := server.Client().Get(server.URL + samlMetadataPath("tenant-a"))
+	metadataResponse, err := server.Client().Get(server.URL + samlMetadataPath(testID("tenant-a")))
 	require.NoError(t, err)
 	body := samlReadBody(t, metadataResponse)
 	assert.Equal(t, http.StatusOK, metadataResponse.StatusCode)
-	assert.Contains(t, body, server.URL+samlMetadataPath("tenant-a"))
+	assert.Contains(t, body, server.URL+samlMetadataPath(testID("tenant-a")))
 	assert.Contains(t, body, ssoURL)
-	assert.Contains(t, body, server.URL+samlSLOPath("tenant-a"))
+	assert.Contains(t, body, server.URL+samlSLOPath(testID("tenant-a")))
 	assert.Contains(t, body, base64.StdEncoding.EncodeToString(env.service.samlCert.Raw))
 
 	// HTTP-POST binding (raw base64, no deflate) also completes the flow.
@@ -393,7 +393,7 @@ func TestSAMLResponseTemplateEscapesRelayState(t *testing.T) {
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
 
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 	request := &saml.AuthnRequest{
 		ID: "id-xss-test", Version: "2.0", IssueInstant: time.Now().UTC(),
 		Destination: ssoURL, Issuer: &saml.Issuer{Value: tsp.entityID},
@@ -419,7 +419,7 @@ func TestSAMLSSORejectsInvalidRequests(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 
 	cases := []struct {
 		name       string
@@ -451,7 +451,7 @@ func TestSAMLSSORejectsInvalidRequests(t *testing.T) {
 func TestSAMLSSORequiresEnabledIdP(t *testing.T) {
 	env := newFederationEnvironment(t)
 	server := newSAMLServer(t, env)
-	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSSOPath("tenant-a")+"?SAMLRequest=x", "")
+	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSSOPath(testID("tenant-a"))+"?SAMLRequest=x", "")
 	assert.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
 }
 
@@ -462,7 +462,7 @@ func TestSAMLSingleLogout(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	notAfter := time.Now().UTC().Add(5 * time.Minute)
 	logout := &saml.LogoutRequest{
@@ -499,7 +499,7 @@ func TestSAMLSingleLogoutInvalid(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	notAfter := time.Now().UTC().Add(5 * time.Minute)
 	logout := &saml.LogoutRequest{
@@ -575,13 +575,13 @@ func TestSAMLSingleLogoutRedirectBinding(t *testing.T) {
 	env := newFederationEnvironment(t)
 	startSAML(t, env, SAMLConfig{Enabled: true})
 	tsp := newSAMLSPServer(t)
-	_, err := env.service.CreateSAMLServiceProvider(t.Context(), "tenant-a", SAMLServiceProviderInput{
+	_, err := env.service.CreateSAMLServiceProvider(t.Context(), testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "portal", EntityID: tsp.entityID, MetadataXML: tsp.metadataXMLRedirectSLO(), Status: samlSPStatusActive,
 	})
 	require.NoError(t, err)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	notAfter := time.Now().UTC().Add(5 * time.Minute)
 	logout := &saml.LogoutRequest{
@@ -661,13 +661,13 @@ func TestSAMLSingleLogoutWithoutSLOEndpoint(t *testing.T) {
 	env := newFederationEnvironment(t)
 	startSAML(t, env, SAMLConfig{Enabled: true})
 	tsp := newSAMLSPServer(t)
-	_, err := env.service.CreateSAMLServiceProvider(t.Context(), "tenant-a", SAMLServiceProviderInput{
+	_, err := env.service.CreateSAMLServiceProvider(t.Context(), testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "portal", EntityID: tsp.entityID, MetadataXML: tsp.metadataXMLNoSLO(), Status: samlSPStatusActive,
 	})
 	require.NoError(t, err)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	notAfter := time.Now().UTC().Add(5 * time.Minute)
 	logout := &saml.LogoutRequest{
@@ -697,7 +697,7 @@ func TestSAMLSingleLogoutRejectsMalformedRequests(t *testing.T) {
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
 	_, cookie := samlSessionCookie(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	deflate := func(raw []byte) string {
 		t.Helper()
@@ -747,7 +747,7 @@ func TestSAMLSingleLogoutRejectsMalformedRequests(t *testing.T) {
 func TestSAMLSingleLogoutRequiresEnabledIdP(t *testing.T) {
 	env := newFederationEnvironment(t)
 	server := newSAMLServer(t, env)
-	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSLOPath("tenant-a")+"?SAMLRequest=x", "")
+	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSLOPath(testID("tenant-a"))+"?SAMLRequest=x", "")
 	assert.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
 }
 
@@ -757,7 +757,7 @@ func TestSAMLSingleLogoutRejectsUnauthenticated(t *testing.T) {
 	tsp := newSAMLSPServer(t)
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
-	sloURL := server.URL + samlSLOPath("tenant-a")
+	sloURL := server.URL + samlSLOPath(testID("tenant-a"))
 
 	notAfter := time.Now().UTC().Add(5 * time.Minute)
 	logout := &saml.LogoutRequest{
@@ -777,7 +777,7 @@ func TestSAMLSingleLogoutRejectsUnauthenticated(t *testing.T) {
 func TestSAMLMetadataRequiresEnabledIdP(t *testing.T) {
 	env := newFederationEnvironment(t)
 	server := newSAMLServer(t, env)
-	response, err := server.Client().Get(server.URL + samlMetadataPath("tenant-a"))
+	response, err := server.Client().Get(server.URL + samlMetadataPath(testID("tenant-a")))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
 }
@@ -790,11 +790,11 @@ func TestSAMLUpdateRejectsDuplicateEntityID(t *testing.T) {
 	registered := first.register(t, env)
 	// An omitted status defaults to active, then updating onto an existing
 	// entity ID violates the registry uniqueness constraint.
-	_, err := env.service.CreateSAMLServiceProvider(ctx, "tenant-a", SAMLServiceProviderInput{
+	_, err := env.service.CreateSAMLServiceProvider(ctx, testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "portal-b", EntityID: second.entityID, MetadataXML: second.metadataXML(),
 	})
 	require.NoError(t, err)
-	_, err = env.service.UpdateSAMLServiceProvider(ctx, "tenant-a", registered.ID, SAMLServiceProviderInput{
+	_, err = env.service.UpdateSAMLServiceProvider(ctx, testID("tenant-a"), registered.ID, SAMLServiceProviderInput{
 		Name: "portal", EntityID: second.entityID, MetadataXML: second.metadataXML(),
 	})
 	assert.ErrorIs(t, err, ErrSAMLSPEntityIDExists)
@@ -828,9 +828,9 @@ func TestSAMLSSORespectsForwardedProto(t *testing.T) {
 	tsp := newSAMLSPServer(t)
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
-	httpsSSO := "https://" + strings.TrimPrefix(server.URL+samlSSOPath("tenant-a"), "http://")
+	httpsSSO := "https://" + strings.TrimPrefix(server.URL+samlSSOPath(testID("tenant-a")), "http://")
 
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+samlSSOPath("tenant-a")+"?SAMLRequest="+url.QueryEscape(samlAuthnRequestParam(t, tsp, "id-fwd", time.Now().UTC(), httpsSSO, "")), nil)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+samlSSOPath(testID("tenant-a"))+"?SAMLRequest="+url.QueryEscape(samlAuthnRequestParam(t, tsp, "id-fwd", time.Now().UTC(), httpsSSO, "")), nil)
 	require.NoError(t, err)
 	request.Header.Set("X-Forwarded-Proto", "https")
 	response, err := noRedirectClient().Do(request)
@@ -845,7 +845,7 @@ func TestSAMLSSOPathRejectsUnsupportedMethods(t *testing.T) {
 	server := newSAMLServer(t, env)
 	// The public SSO path only accepts GET and POST; other verbs are refused
 	// by the router before the binding parser runs.
-	response := samlBrowserRequest(t, server, http.MethodPut, server.URL+samlSSOPath("tenant-a"), "")
+	response := samlBrowserRequest(t, server, http.MethodPut, server.URL+samlSSOPath(testID("tenant-a")), "")
 	assert.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 }
 
@@ -855,7 +855,7 @@ func TestSAMLLoginPathNormalization(t *testing.T) {
 	tsp := newSAMLSPServer(t)
 	tsp.register(t, env)
 	server := newSAMLServer(t, env)
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 
 	response := samlBrowserRequest(t, server, http.MethodGet, ssoURL+"?SAMLRequest="+url.QueryEscape(samlAuthnRequestParam(t, tsp, "id-anon2", time.Now().UTC(), ssoURL, "")), "")
 	require.Equal(t, http.StatusFound, response.StatusCode)
@@ -882,7 +882,7 @@ func TestSAMLSSOOverTLS(t *testing.T) {
 	client := server.Client()
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 
-	ssoURL := server.URL + samlSSOPath("tenant-a")
+	ssoURL := server.URL + samlSSOPath(testID("tenant-a"))
 	response, err := client.Get(ssoURL + "?SAMLRequest=" + url.QueryEscape(samlAuthnRequestParam(t, tsp, "id-tls", time.Now().UTC(), ssoURL, "")))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, response.StatusCode)

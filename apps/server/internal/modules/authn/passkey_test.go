@@ -22,7 +22,7 @@ func TestPasskeyAuditFailuresRollBackSecurityMutations(t *testing.T) {
 		credential := webauthnxCredential([]byte("audit-registration"), 1, false)
 		rejectAuthnAudit(t, service, "passkey_registered")
 
-		_, err := service.storePasskeyCredential(t.Context(), principalID, "Security key", credential, now)
+		_, err := service.storePasskeyCredential(t.Context(), parseGUID(principalID), "Security key", credential, now)
 		require.ErrorContains(t, err, "append audit event")
 		count, countErr := service.db.NewSelect().Model((*passkeyRow)(nil)).Where("id_hash = ?", passkeyIDHash(credential.ID)).Count(t.Context())
 		require.NoError(t, countErr)
@@ -35,14 +35,14 @@ func TestPasskeyAuditFailuresRollBackSecurityMutations(t *testing.T) {
 		now := time.Unix(7_000, 0).UTC()
 		credential := webauthnxCredential([]byte("audit-login"), 8, false)
 		idHash := passkeyIDHash(credential.ID)
-		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), webauthnxCredential(credential.ID, 7, false).Data)
+		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), idHash), webauthnxCredential(credential.ID, 7, false).Data)
 		require.NoError(t, err)
-		stored := passkeyRow{IDHash: idHash, PrincipalID: principalID, Name: "Key", CredentialCiphertext: ciphertext, SignCount: 7, CreatedAt: now.Add(-time.Hour).UnixMilli(), UpdatedAt: now.Add(-time.Hour).UnixMilli()}
+		stored := passkeyRow{IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: ciphertext, SignCount: 7, CreatedAt: now.Add(-time.Hour).UnixMilli(), UpdatedAt: now.Add(-time.Hour).UnixMilli()}
 		_, err = service.db.NewInsert().Model(&stored).Exec(t.Context())
 		require.NoError(t, err)
 		rejectAuthnAudit(t, service, "passkey_login")
 
-		_, err = service.completePasskeyLogin(t.Context(), principalID, stored, credential, now)
+		_, err = service.completePasskeyLogin(t.Context(), parseGUID(principalID), stored, credential, now)
 		require.ErrorContains(t, err, "append audit event")
 		var after passkeyRow
 		require.NoError(t, service.db.NewSelect().Model(&after).Where("id_hash = ?", idHash).Scan(t.Context()))
@@ -60,7 +60,7 @@ func TestPasskeyAuditFailuresRollBackSecurityMutations(t *testing.T) {
 		service, principalID := newLocalService(t)
 		cookie := authenticatedCookie(t, service)
 		now := time.Unix(8_000, 0).UTC().UnixMilli()
-		stored := passkeyRow{IDHash: strings.Repeat("8", 64), PrincipalID: principalID, Name: "Original", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
+		stored := passkeyRow{IDHash: strings.Repeat("8", 64), PrincipalID: parseGUID(principalID), Name: "Original", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
 		_, err := service.db.NewInsert().Model(&stored).Exec(t.Context())
 		require.NoError(t, err)
 		rejectAuthnAudit(t, service, "passkey_renamed")
@@ -82,7 +82,7 @@ func TestPasskeyAuditFailuresRollBackSecurityMutations(t *testing.T) {
 		require.NoError(t, err)
 		cookie := service.SessionCookie(current)
 		now := time.Unix(9_000, 0).UTC().UnixMilli()
-		stored := passkeyRow{IDHash: strings.Repeat("9", 64), PrincipalID: principalID, Name: "Key", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
+		stored := passkeyRow{IDHash: strings.Repeat("9", 64), PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
 		_, err = service.db.NewInsert().Model(&stored).Exec(t.Context())
 		require.NoError(t, err)
 		rejectAuthnAudit(t, service, "passkey_deleted")
@@ -146,7 +146,7 @@ func TestPasskeyCredentialManagement(t *testing.T) {
 	cookie := service.SessionCookie(current)
 	now := time.Now().UTC().UnixMilli()
 	row := passkeyRow{
-		IDHash: strings.Repeat("a", 64), PrincipalID: principalID, Name: "Laptop",
+		IDHash: strings.Repeat("a", 64), PrincipalID: parseGUID(principalID), Name: "Laptop",
 		CredentialCiphertext: "unused-for-metadata-operations", SignCount: 7, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
@@ -203,11 +203,11 @@ func TestPasskeyConfigurationValidation(t *testing.T) {
 	service, _ := newLocalService(t)
 	cfg := service.cfg
 	cfg.Passkey.Origins = []string{"https://untrusted.example"}
-	_, err := NewWebService(cfg, service.db)
+	_, err := NewWebService(cfg, service.db, WithIDGenerator(newTestIDGenerator()))
 	assert.ErrorContains(t, err, "not an allowed web origin")
 	cfg.Passkey.Origins = []string{"https://app.example"}
 	cfg.Passkey.MaxCredentials = 21
-	_, err = NewWebService(cfg, service.db)
+	_, err = NewWebService(cfg, service.db, WithIDGenerator(newTestIDGenerator()))
 	assert.ErrorContains(t, err, "security limits")
 }
 
@@ -250,18 +250,18 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 
 	t.Run("load user without handle", func(t *testing.T) {
 		service, principalID := newLocalService(t)
-		_, err := service.loadPasskeyUser(t.Context(), service.db, principalID)
+		_, err := service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 	})
 
 	t.Run("load user credential storage", func(t *testing.T) {
 		service, principalID := newLocalService(t)
 		handle := base64.RawURLEncoding.EncodeToString([]byte("user-handle"))
-		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: principalID, UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
+		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: parseGUID(principalID), UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
 		require.NoError(t, err)
 		_, err = service.db.ExecContext(t.Context(), "DROP TABLE iam_passkeys")
 		require.NoError(t, err)
-		_, err = service.loadPasskeyUser(t.Context(), service.db, principalID)
+		_, err = service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 		assert.ErrorContains(t, err, "load passkey credentials")
 	})
 
@@ -280,7 +280,7 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 		_, err := service.db.ExecContext(t.Context(), "DROP TABLE iam_passkey_challenges")
 		require.NoError(t, err)
 		now := time.Now().UTC()
-		_, err = service.storePasskeyChallenge(t.Context(), passkeyLogin, "", "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
+		_, err = service.storePasskeyChallenge(t.Context(), passkeyLogin, 0, "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
 		assert.ErrorContains(t, err, "store passkey challenge")
 	})
 
@@ -289,7 +289,7 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 		_, err := service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_passkey_challenge BEFORE INSERT ON iam_passkey_challenges BEGIN SELECT RAISE(ABORT, 'challenge denied'); END`)
 		require.NoError(t, err)
 		now := time.Now().UTC()
-		_, err = service.storePasskeyChallenge(t.Context(), passkeyLogin, "", "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
+		_, err = service.storePasskeyChallenge(t.Context(), passkeyLogin, 0, "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
 		assert.ErrorContains(t, err, "challenge denied")
 	})
 
@@ -297,7 +297,7 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 		service, principalID := newLocalService(t)
 		_, err := service.db.ExecContext(t.Context(), "DROP TABLE iam_passkeys")
 		require.NoError(t, err)
-		_, err = service.storePasskeyCredential(t.Context(), principalID, "Security key", webauthnxCredential([]byte("credential"), 1, false), time.Now().UTC())
+		_, err = service.storePasskeyCredential(t.Context(), parseGUID(principalID), "Security key", webauthnxCredential([]byte("credential"), 1, false), time.Now().UTC())
 		assert.ErrorContains(t, err, "store passkey")
 	})
 
@@ -305,7 +305,7 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 		service, principalID := newLocalService(t)
 		cookie := authenticatedCookie(t, service)
 		now := time.Now().UTC()
-		challenge, err := service.storePasskeyChallenge(t.Context(), passkeyRegistration, principalID, "", []byte(`{"state":true}`), now, now.Add(time.Minute))
+		challenge, err := service.storePasskeyChallenge(t.Context(), passkeyRegistration, parseGUID(principalID), "", []byte(`{"state":true}`), now, now.Add(time.Minute))
 		require.NoError(t, err)
 		_, err = service.FinishPasskeyRegistration(t.Context(), "", cookie, challenge.ChallengeID, "Security key", json.RawMessage(`{"invalid":true}`))
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
@@ -314,8 +314,8 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 	t.Run("login transaction", func(t *testing.T) {
 		service, principalID := newLocalService(t)
 		require.NoError(t, service.db.Close())
-		current := passkeyRow{IDHash: strings.Repeat("a", 64), PrincipalID: principalID, SignCount: 1}
-		_, err := service.completePasskeyLogin(t.Context(), principalID, current, webauthnxCredential([]byte("credential"), 2, false), time.Now().UTC())
+		current := passkeyRow{IDHash: strings.Repeat("a", 64), PrincipalID: parseGUID(principalID), SignCount: 1}
+		_, err := service.completePasskeyLogin(t.Context(), parseGUID(principalID), current, webauthnxCredential([]byte("credential"), 2, false), time.Now().UTC())
 		assert.ErrorContains(t, err, "complete passkey login")
 	})
 
@@ -340,11 +340,11 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 	t.Run("challenge consumption", func(t *testing.T) {
 		service, _ := newLocalService(t)
 		now := time.Now().UTC()
-		challenge, err := service.storePasskeyChallenge(t.Context(), passkeyLogin, "", "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
+		challenge, err := service.storePasskeyChallenge(t.Context(), passkeyLogin, 0, "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Minute))
 		require.NoError(t, err)
 		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER deny_passkey_consume BEFORE UPDATE ON iam_passkey_challenges BEGIN SELECT RAISE(ABORT, 'consume denied'); END`)
 		require.NoError(t, err)
-		_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyLogin, "", now)
+		_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyLogin, 0, now)
 		assert.ErrorContains(t, err, "consume denied")
 	})
 
@@ -352,7 +352,7 @@ func TestPasskeyStorageFailuresFailClosed(t *testing.T) {
 		service, principalID := newLocalService(t)
 		cookie := authenticatedCookie(t, service)
 		now := time.Now().UTC().UnixMilli()
-		row := passkeyRow{IDHash: strings.Repeat("a", 64), PrincipalID: principalID, Name: "Key", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
+		row := passkeyRow{IDHash: strings.Repeat("a", 64), PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: "metadata", CreatedAt: now, UpdatedAt: now}
 		_, err := service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
 		_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER delete_renamed_passkey AFTER UPDATE ON iam_passkeys BEGIN DELETE FROM iam_passkeys WHERE id_hash = NEW.id_hash; END`)
@@ -385,24 +385,24 @@ func TestPasskeyStoredCredentialResolution(t *testing.T) {
 	credentialData, err := json.Marshal(credential)
 	require.NoError(t, err)
 	idHash := passkeyIDHash(credential.ID)
-	ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), credentialData)
+	ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), idHash), credentialData)
 	require.NoError(t, err)
 	createdAt := now.UnixMilli()
 	lastUsedAt := now.Add(time.Minute).UnixMilli()
 	row := passkeyRow{
-		IDHash: idHash, PrincipalID: principalID, Name: "Platform authenticator",
+		IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Platform authenticator",
 		CredentialCiphertext: ciphertext, SignCount: 9, CreatedAt: createdAt, UpdatedAt: createdAt, LastUsedAt: lastUsedAt,
 	}
 	_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
 	require.NoError(t, err)
 
-	loaded, err := service.loadPasskeyUser(t.Context(), service.db, principalID)
+	loaded, err := service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 	require.NoError(t, err)
 	require.Len(t, loaded.WebAuthnCredentials(), 1)
 	assert.Equal(t, credential.ID, loaded.WebAuthnCredentials()[0].ID)
 	resolvedID, resolvedRow, err := service.resolvePasskey(t.Context(), credential.ID, firstHandle)
 	require.NoError(t, err)
-	assert.Equal(t, principalID, resolvedID)
+	assert.Equal(t, parseGUID(principalID), resolvedID)
 	assert.Equal(t, idHash, resolvedRow.IDHash)
 	_, _, err = service.resolvePasskey(t.Context(), []byte("unknown"), firstHandle)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
@@ -414,49 +414,49 @@ func TestPasskeyStoredCredentialResolution(t *testing.T) {
 	require.Len(t, listed, 1)
 	assert.Equal(t, idHash, listed[0].ID)
 	assert.Equal(t, time.UnixMilli(lastUsedAt).UTC(), *listed[0].LastUsedAt)
-	assert.Equal(t, principalID+"\x00"+idHash, passkeyAAD(principalID, idHash))
+	assert.Equal(t, principalID+"\x00"+idHash, passkeyAAD(parseGUID(principalID), idHash))
 
 	_, err = service.db.NewUpdate().Table("iam_principals").Set("status = 'disabled'").Where("id = ?", principalID).Exec(t.Context())
 	require.NoError(t, err)
 	_, _, err = service.resolvePasskey(t.Context(), credential.ID, firstHandle)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
-	_, err = service.loadPasskeyUser(t.Context(), service.db, principalID)
+	_, err = service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 	assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 }
 
 func TestPasskeyRejectsCorruptedStoredIdentity(t *testing.T) {
 	t.Run("user handle", func(t *testing.T) {
 		service, principalID := newLocalService(t)
-		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: principalID, UserHandle: "%%%", CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
+		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: parseGUID(principalID), UserHandle: "%%%", CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
 		require.NoError(t, err)
-		_, err = service.loadPasskeyUser(t.Context(), service.db, principalID)
+		_, err = service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 	})
 
 	t.Run("ciphertext", func(t *testing.T) {
 		service, principalID := newLocalService(t)
 		handle := base64.RawURLEncoding.EncodeToString([]byte("user-handle"))
-		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: principalID, UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
+		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: parseGUID(principalID), UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
 		require.NoError(t, err)
-		row := passkeyRow{IDHash: strings.Repeat("c", 64), PrincipalID: principalID, Name: "Corrupted", CredentialCiphertext: "not-ciphertext", CreatedAt: time.Now().UnixMilli(), UpdatedAt: time.Now().UnixMilli()}
+		row := passkeyRow{IDHash: strings.Repeat("c", 64), PrincipalID: parseGUID(principalID), Name: "Corrupted", CredentialCiphertext: "not-ciphertext", CreatedAt: time.Now().UnixMilli(), UpdatedAt: time.Now().UnixMilli()}
 		_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
-		_, err = service.loadPasskeyUser(t.Context(), service.db, principalID)
+		_, err = service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 	})
 
 	t.Run("credential JSON", func(t *testing.T) {
 		service, principalID := newLocalService(t)
 		handle := base64.RawURLEncoding.EncodeToString([]byte("user-handle"))
-		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: principalID, UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
+		_, err := service.db.NewInsert().Model(&passkeyUserRow{PrincipalID: parseGUID(principalID), UserHandle: handle, CreatedAt: time.Now().UnixMilli()}).Exec(t.Context())
 		require.NoError(t, err)
 		idHash := strings.Repeat("d", 64)
-		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), []byte("not-json"))
+		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), idHash), []byte("not-json"))
 		require.NoError(t, err)
-		row := passkeyRow{IDHash: idHash, PrincipalID: principalID, Name: "Invalid", CredentialCiphertext: ciphertext, CreatedAt: time.Now().UnixMilli(), UpdatedAt: time.Now().UnixMilli()}
+		row := passkeyRow{IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Invalid", CredentialCiphertext: ciphertext, CreatedAt: time.Now().UnixMilli(), UpdatedAt: time.Now().UnixMilli()}
 		_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
-		_, err = service.loadPasskeyUser(t.Context(), service.db, principalID)
+		_, err = service.loadPasskeyUser(t.Context(), service.db, parseGUID(principalID))
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 	})
 }
@@ -464,29 +464,29 @@ func TestPasskeyRejectsCorruptedStoredIdentity(t *testing.T) {
 func TestPasskeyChallengePersistenceAndLimits(t *testing.T) {
 	service, principalID := newLocalService(t)
 	now := time.Unix(1_000, 0).UTC()
-	_, err := service.consumePasskeyChallenge(t.Context(), "", passkeyLogin, "", now)
+	_, err := service.consumePasskeyChallenge(t.Context(), "", passkeyLogin, 0, now)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyChallenge)
 
-	challenge, err := service.storePasskeyChallenge(t.Context(), passkeyRegistration, principalID, "", []byte(`{"state":true}`), now, now.Add(time.Minute))
+	challenge, err := service.storePasskeyChallenge(t.Context(), passkeyRegistration, parseGUID(principalID), "", []byte(`{"state":true}`), now, now.Add(time.Minute))
 	require.NoError(t, err)
-	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyLogin, principalID, now)
+	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyLogin, parseGUID(principalID), now)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyChallenge)
-	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, "other-principal", now)
+	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, testID("other-principal"), now)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyChallenge)
-	consumed, err := service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, principalID, now)
+	consumed, err := service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, parseGUID(principalID), now)
 	require.NoError(t, err)
-	assert.Equal(t, principalID, consumed.PrincipalID)
-	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, principalID, now)
+	assert.Equal(t, parseGUID(principalID), consumed.PrincipalID)
+	_, err = service.consumePasskeyChallenge(t.Context(), challenge.ChallengeID, passkeyRegistration, parseGUID(principalID), now)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyChallenge)
 
-	expired, err := service.storePasskeyChallenge(t.Context(), passkeyLogin, "", "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Second))
+	expired, err := service.storePasskeyChallenge(t.Context(), passkeyLogin, 0, "https://app.example/", []byte(`{"state":true}`), now, now.Add(time.Second))
 	require.NoError(t, err)
-	_, err = service.consumePasskeyChallenge(t.Context(), expired.ChallengeID, passkeyLogin, "", now.Add(time.Second))
+	_, err = service.consumePasskeyChallenge(t.Context(), expired.ChallengeID, passkeyLogin, 0, now.Add(time.Second))
 	assert.ErrorIs(t, err, authnext.ErrPasskeyChallenge)
 
 	cookie := authenticatedCookie(t, service)
 	service.cfg.Passkey.MaxCredentials = 1
-	row := passkeyRow{IDHash: strings.Repeat("e", 64), PrincipalID: principalID, Name: "Existing", CredentialCiphertext: "metadata-only", CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
+	row := passkeyRow{IDHash: strings.Repeat("e", 64), PrincipalID: parseGUID(principalID), Name: "Existing", CredentialCiphertext: "metadata-only", CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
 	_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
 	require.NoError(t, err)
 	_, err = service.BeginPasskeyRegistration(t.Context(), "", cookie, "correct horse battery staple")
@@ -524,7 +524,7 @@ func TestPasskeyCredentialCommit(t *testing.T) {
 	service, principalID := newLocalService(t)
 	now := time.Unix(2_000, 0).UTC()
 	credential := webauthnxCredential([]byte("committed-credential"), 12, false)
-	view, err := service.storePasskeyCredential(t.Context(), principalID, "Security key", credential, now)
+	view, err := service.storePasskeyCredential(t.Context(), parseGUID(principalID), "Security key", credential, now)
 	require.NoError(t, err)
 	assert.Equal(t, passkeyIDHash(credential.ID), view.ID)
 	assert.Equal(t, "Security key", view.Name)
@@ -536,16 +536,16 @@ func TestPasskeyCredentialCommit(t *testing.T) {
 
 	var row passkeyRow
 	require.NoError(t, service.db.NewSelect().Model(&row).Where("id_hash = ?", view.ID).Scan(t.Context()))
-	plain, err := service.decryptAuthnData(passkeyCipher, passkeyAAD(principalID, row.IDHash), row.CredentialCiphertext)
+	plain, err := service.decryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), row.IDHash), row.CredentialCiphertext)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(credential.Data), string(plain))
 
 	service.cfg.Passkey.MaxCredentials = 1
-	_, err = service.storePasskeyCredential(t.Context(), principalID, "Second", webauthnxCredential([]byte("second"), 0, false), now)
+	_, err = service.storePasskeyCredential(t.Context(), parseGUID(principalID), "Second", webauthnxCredential([]byte("second"), 0, false), now)
 	assert.ErrorIs(t, err, authnext.ErrPasskeyLimit)
 
 	service.cfg.Passkey.MaxCredentials = 10
-	_, err = service.storePasskeyCredential(t.Context(), principalID, "Duplicate", credential, now)
+	_, err = service.storePasskeyCredential(t.Context(), parseGUID(principalID), "Duplicate", credential, now)
 	assert.ErrorContains(t, err, "store passkey")
 }
 
@@ -555,13 +555,13 @@ func TestPasskeyLoginCommitAndCounterProtection(t *testing.T) {
 		now := time.Unix(3_000, 0).UTC()
 		credential := webauthnxCredential([]byte("login-credential"), 8, false)
 		idHash := passkeyIDHash(credential.ID)
-		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), webauthnxCredential(credential.ID, 7, false).Data)
+		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), idHash), webauthnxCredential(credential.ID, 7, false).Data)
 		require.NoError(t, err)
-		row := passkeyRow{IDHash: idHash, PrincipalID: principalID, Name: "Key", CredentialCiphertext: ciphertext, SignCount: 7, CreatedAt: now.Add(-time.Hour).UnixMilli(), UpdatedAt: now.Add(-time.Hour).UnixMilli()}
+		row := passkeyRow{IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: ciphertext, SignCount: 7, CreatedAt: now.Add(-time.Hour).UnixMilli(), UpdatedAt: now.Add(-time.Hour).UnixMilli()}
 		_, err = service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
 
-		sessionID, err := service.completePasskeyLogin(t.Context(), principalID, row, credential, now)
+		sessionID, err := service.completePasskeyLogin(t.Context(), parseGUID(principalID), row, credential, now)
 		require.NoError(t, err)
 		assert.NotEmpty(t, sessionID)
 		require.NoError(t, service.db.NewSelect().Model(&row).Where("id_hash = ?", idHash).Scan(t.Context()))
@@ -578,14 +578,14 @@ func TestPasskeyLoginCommitAndCounterProtection(t *testing.T) {
 		now := time.Unix(4_000, 0).UTC()
 		credential := webauthnxCredential([]byte("stale-credential"), 10, false)
 		idHash := passkeyIDHash(credential.ID)
-		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(principalID, idHash), credential.Data)
+		ciphertext, err := service.encryptAuthnData(passkeyCipher, passkeyAAD(parseGUID(principalID), idHash), credential.Data)
 		require.NoError(t, err)
-		stored := passkeyRow{IDHash: idHash, PrincipalID: principalID, Name: "Key", CredentialCiphertext: ciphertext, SignCount: 9, CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
+		stored := passkeyRow{IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: ciphertext, SignCount: 9, CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
 		_, err = service.db.NewInsert().Model(&stored).Exec(t.Context())
 		require.NoError(t, err)
 		stale := stored
 		stale.SignCount = 8
-		_, err = service.completePasskeyLogin(t.Context(), principalID, stale, credential, now)
+		_, err = service.completePasskeyLogin(t.Context(), parseGUID(principalID), stale, credential, now)
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 	})
 
@@ -594,10 +594,10 @@ func TestPasskeyLoginCommitAndCounterProtection(t *testing.T) {
 		now := time.Unix(5_000, 0).UTC()
 		credential := webauthnxCredential([]byte("cloned-credential"), 3, true)
 		idHash := passkeyIDHash(credential.ID)
-		row := passkeyRow{IDHash: idHash, PrincipalID: principalID, Name: "Key", CredentialCiphertext: "old", SignCount: 3, CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
+		row := passkeyRow{IDHash: idHash, PrincipalID: parseGUID(principalID), Name: "Key", CredentialCiphertext: "old", SignCount: 3, CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
 		_, err := service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
-		_, err = service.completePasskeyLogin(t.Context(), principalID, row, credential, now)
+		_, err = service.completePasskeyLogin(t.Context(), parseGUID(principalID), row, credential, now)
 		assert.ErrorIs(t, err, authnext.ErrPasskeyCredential)
 		count, countErr := service.db.NewSelect().Model((*sessionRow)(nil)).Where("principal_id = ?", principalID).Count(t.Context())
 		require.NoError(t, countErr)

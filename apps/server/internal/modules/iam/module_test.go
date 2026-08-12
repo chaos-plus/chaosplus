@@ -2,8 +2,7 @@ package iam
 
 import (
 	"context"
-	"fmt"
-	"net/http"
+		"net/http"
 	"sync/atomic"
 	"testing"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 )
 
@@ -40,7 +40,7 @@ func TestModuleLifecycle(t *testing.T) {
 		authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()),
 		NewAuthorizer(db),
 		newTestAuditAppender(db),
-		func() (string, error) { return fmt.Sprint(id.Add(1)), nil },
+		func() (guid.ID, error) { return guid.ID(id.Add(1)), nil },
 	)
 	require.NoError(t, m.Migrate(context.Background()))
 

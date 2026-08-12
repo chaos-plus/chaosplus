@@ -12,21 +12,21 @@ func TestGroupRepositoryDatabaseFailures(t *testing.T) {
 	db, service := newGroupService(t)
 	repo := service.repo
 	require.NoError(t, db.Close())
-	row := groupRow{TenantID: "tenant", ID: "group", Name: "Group", NameKey: "group", GroupType: GroupTypeStatic, Status: StatusActive, Version: 1}
+	row := groupRow{TenantID: testID("tenant"), ID: testID("group"), Name: "Group", NameKey: "group", GroupType: GroupTypeStatic, Status: StatusActive, Version: 1}
 
-	_, err := repo.list(t.Context(), "tenant")
+	_, err := repo.list(t.Context(), testID("tenant"))
 	assert.Error(t, err)
-	_, err = repo.get(t.Context(), "tenant", "group")
+	_, err = repo.get(t.Context(), testID("tenant"), testID("group"))
 	assert.Error(t, err)
 	assert.Error(t, repo.insert(t.Context(), &row))
 	assert.Error(t, repo.update(t.Context(), &row, 1))
-	assert.Error(t, repo.delete(t.Context(), "tenant", "group", 1))
-	_, err = repo.listMembers(t.Context(), "tenant", "group")
+	assert.Error(t, repo.delete(t.Context(), testID("tenant"), testID("group"), 1))
+	_, err = repo.listMembers(t.Context(), testID("tenant"), testID("group"))
 	assert.Error(t, err)
-	_, err = repo.getMember(t.Context(), "tenant", "group", "principal")
+	_, err = repo.getMember(t.Context(), testID("tenant"), testID("group"), testID("principal"))
 	assert.Error(t, err)
 	assert.Error(t, repo.putMember(t.Context(), &groupMemberRow{}))
-	_, err = repo.deleteMember(t.Context(), "tenant", "group", "principal")
+	_, err = repo.deleteMember(t.Context(), testID("tenant"), testID("group"), testID("principal"))
 	assert.Error(t, err)
 }
 

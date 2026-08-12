@@ -6,14 +6,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
-func Advance(ctx context.Context, db bun.IDB, dialect, tenantID string, updatedAt int64) error {
+func Advance(ctx context.Context, db bun.IDB, dialect string, tenantID guid.ID, updatedAt int64) error {
 	query := upsertSQL(normalizeDialect(dialect))
-	if db == nil || strings.TrimSpace(tenantID) == "" || query == "" {
+	if db == nil || tenantID.Zero() || query == "" {
 		return fmt.Errorf("invalid policy revision store configuration")
 	}
 	if _, err := db.ExecContext(ctx, query, tenantID, updatedAt); err != nil {
@@ -25,10 +25,10 @@ func Advance(ctx context.Context, db bun.IDB, dialect, tenantID string, updatedA
 // Lock serializes tenant policy mutations without changing the revision. The
 // no-op update acquires a row lock on MySQL and PostgreSQL and a write lock on
 // SQLite for the lifetime of the caller's transaction.
-func Lock(ctx context.Context, db bun.IDB, dialect, tenantID string) error {
+func Lock(ctx context.Context, db bun.IDB, dialect string, tenantID guid.ID) error {
 	dialect = normalizeDialect(dialect)
 	query := ensureSQL(dialect)
-	if db == nil || strings.TrimSpace(tenantID) == "" || query == "" {
+	if db == nil || tenantID.Zero() || query == "" {
 		return fmt.Errorf("invalid policy revision lock configuration")
 	}
 	if _, err := db.ExecContext(ctx, query, tenantID); err != nil {
@@ -41,8 +41,8 @@ func Lock(ctx context.Context, db bun.IDB, dialect, tenantID string) error {
 	return nil
 }
 
-func Current(ctx context.Context, db bun.IDB, tenantID string) (int64, error) {
-	if db == nil || strings.TrimSpace(tenantID) == "" {
+func Current(ctx context.Context, db bun.IDB, tenantID guid.ID) (int64, error) {
+	if db == nil || tenantID.Zero() {
 		return 0, fmt.Errorf("invalid policy revision query")
 	}
 	var revision int64

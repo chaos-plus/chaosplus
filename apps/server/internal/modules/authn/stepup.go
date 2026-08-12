@@ -8,13 +8,14 @@ import (
 	"time"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type stepUpChallengeRow struct {
 	bun.BaseModel `bun:"table:iam_stepup_challenges"`
 	IDHash        string `bun:"id_hash,pk"`
-	PrincipalID   string
+	PrincipalID   guid.ID
 	SessionHash   string
 	CreatedAt     int64
 	ExpiresAt     int64
@@ -30,7 +31,7 @@ func (s *WebService) BeginStepUp(ctx context.Context, authorization, cookieHeade
 		return authnext.StepUpOptions{}, err
 	}
 	var credential credentialRow
-	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ? AND mfa_required = ?", claims.Subject, true).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ? AND mfa_required = ?", claims.PrincipalID, true).Scan(ctx); err != nil {
 		return authnext.StepUpOptions{}, ErrMFANotEnabled
 	}
 	now := s.now().UTC()
@@ -39,11 +40,11 @@ func (s *WebService) BeginStepUp(ctx context.Context, authorization, cookieHeade
 		return authnext.StepUpOptions{}, err
 	}
 	row := stepUpChallengeRow{
-		IDHash: tokenHash(challengeID), PrincipalID: claims.Subject, SessionHash: currentSessionHash(cookieHeader, s.web.CookieName),
+		IDHash: tokenHash(challengeID), PrincipalID: claims.PrincipalID, SessionHash: currentSessionHash(cookieHeader, s.web.CookieName),
 		CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(s.cfg.MFA.ChallengeTTL).UnixMilli(),
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewDelete().Model((*stepUpChallengeRow)(nil)).Where("principal_id = ? AND (consumed_at <> 0 OR expires_at <= ?)", claims.Subject, now.UnixMilli()).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*stepUpChallengeRow)(nil)).Where("principal_id = ? AND (consumed_at <> 0 OR expires_at <= ?)", claims.PrincipalID, now.UnixMilli()).Exec(ctx); err != nil {
 			return err
 		}
 		_, err := tx.NewInsert().Model(&row).Exec(ctx)
@@ -52,7 +53,7 @@ func (s *WebService) BeginStepUp(ctx context.Context, authorization, cookieHeade
 	if err != nil {
 		return authnext.StepUpOptions{}, fmt.Errorf("create step-up challenge: %w", err)
 	}
-	s.audit(ctx, claims.Subject, "step_up_started", "success")
+	s.audit(ctx, claims.PrincipalID, "step_up_started", "success")
 	return authnext.StepUpOptions{ChallengeID: challengeID, ExpiresAt: time.UnixMilli(row.ExpiresAt).UTC(), Methods: []string{"totp", "recovery_code"}}, nil
 }
 
@@ -74,11 +75,11 @@ func (s *WebService) VerifyStepUp(ctx context.Context, authorization, cookieHead
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var challenge stepUpChallengeRow
 		err := tx.NewSelect().Model(&challenge).Where("id_hash = ?", tokenHash(challengeID)).Scan(ctx)
-		if err != nil || challenge.ConsumedAt != 0 || challenge.ExpiresAt <= now.UnixMilli() || challenge.Attempts >= s.cfg.MFA.MaxAttempts || challenge.PrincipalID != claims.Subject || challenge.SessionHash != sessionHash {
+		if err != nil || challenge.ConsumedAt != 0 || challenge.ExpiresAt <= now.UnixMilli() || challenge.Attempts >= s.cfg.MFA.MaxAttempts || challenge.PrincipalID != claims.PrincipalID || challenge.SessionHash != sessionHash {
 			return ErrMFAChallenge
 		}
 		var credential credentialRow
-		if err := tx.NewSelect().Model(&credential).Where("principal_id = ? AND mfa_required = ?", claims.Subject, true).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(&credential).Where("principal_id = ? AND mfa_required = ?", claims.PrincipalID, true).Scan(ctx); err != nil {
 			return ErrMFAChallenge
 		}
 		valid, err := s.consumeFactor(ctx, tx, &credential, code, now)
@@ -104,24 +105,24 @@ func (s *WebService) VerifyStepUp(ctx context.Context, authorization, cookieHead
 		if _, err := tx.NewUpdate().Model((*stepUpChallengeRow)(nil)).Set("consumed_at = ?", now.UnixMilli()).Where("id_hash = ? AND consumed_at = 0", challenge.IDHash).Exec(ctx); err != nil {
 			return err
 		}
-		sessionID, absoluteExpiry, err := s.elevateSession(ctx, tx, claims.Subject, sessionHash, now)
+		sessionID, absoluteExpiry, err := s.elevateSession(ctx, tx, claims.PrincipalID, sessionHash, now)
 		if err != nil {
 			return err
 		}
 		result = authnext.StepUpResult{SessionID: sessionID, ExpiresAt: time.UnixMilli(absoluteExpiry).UTC()}
-		return s.appendSecurityAudit(ctx, tx, claims.Subject, "step_up_completed", "success")
+		return s.appendSecurityAudit(ctx, tx, claims.PrincipalID, "step_up_completed", "success")
 	})
 	if err != nil {
 		return authnext.StepUpResult{}, err
 	}
 	if invalidCode {
-		s.audit(ctx, claims.Subject, "step_up", "denied")
+		s.audit(ctx, claims.PrincipalID, "step_up", "denied")
 		return authnext.StepUpResult{}, ErrInvalidMFA
 	}
 	return result, nil
 }
 
-func (s *WebService) elevateSession(ctx context.Context, tx bun.Tx, principalID, sessionHash string, now time.Time) (string, int64, error) {
+func (s *WebService) elevateSession(ctx context.Context, tx bun.Tx, principalID guid.ID, sessionHash string, now time.Time) (string, int64, error) {
 	var current sessionRow
 	if err := tx.NewSelect().Model(&current).Where("id_hash = ? AND principal_id = ? AND revoked_at = 0", sessionHash, principalID).Scan(ctx); err != nil {
 		return "", 0, ErrMFAChallenge

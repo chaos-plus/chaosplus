@@ -1,9 +1,9 @@
 # NATS deployment boundary
 
-`apps/server-ai/cmd/nats` is a local-development fallback only. It refuses to
-start when `CONTROL_ENV=production`. When Docker is available in development,
-use the official NATS image through `start-dev.sh`. Production must use
-`compose.production.yaml` (or an equivalent deployment of the official image).
+The repository does not ship or build an embedded NATS server. Development and
+production both run the pinned official NATS image. Development uses
+`start-dev.sh`; production uses `compose.production.yaml` or an equivalent
+orchestrated deployment of the same official image.
 
 ## Local development
 
@@ -11,9 +11,8 @@ use the official NATS image through `start-dev.sh`. Production must use
 ./deploy/nats/start-dev.sh
 ```
 
-The script uses Docker Compose when the Docker daemon is available. Only when
-Docker is unavailable does it run `go run ./cmd/nats`. JetStream data in the
-Docker path is kept in the `nats-dev-data` volume.
+Docker with the Compose plugin is required. The script fails explicitly when
+Docker is unavailable. JetStream data is kept in the `nats-dev-data` volume.
 
 ## Production
 

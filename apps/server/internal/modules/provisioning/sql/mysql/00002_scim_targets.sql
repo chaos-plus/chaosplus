@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_scim_targets (
-    id VARCHAR(128) NOT NULL PRIMARY KEY,
-    tenant_id VARCHAR(128) NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
     name VARCHAR(128) NOT NULL,
     name_key VARCHAR(128) NOT NULL,
     base_url VARCHAR(1024) NOT NULL,
@@ -18,9 +18,9 @@ CREATE TABLE iam_scim_targets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_scim_target_resources (
-    target_id VARCHAR(128) NOT NULL,
+    target_id BIGINT NOT NULL,
     resource_type VARCHAR(16) NOT NULL,
-    resource_id VARCHAR(128) NOT NULL,
+    resource_id BIGINT NOT NULL,
     external_id VARCHAR(512) NOT NULL DEFAULT '',
     version BIGINT NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL,

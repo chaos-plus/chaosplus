@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 
 	"github.com/uptrace/bun"
 )
@@ -23,7 +24,7 @@ var ErrRetentionInvalid = errors.New("invalid audit retention policy")
 // available for at least MinDays and become archive-eligible after
 // ArchiveAfterDays; WORM semantics mean archiving never deletes events.
 type RetentionPolicy struct {
-	TenantID         string    `json:"tenant_id"`
+	TenantID         guid.ID   `json:"tenant_id"`
 	MinDays          int       `json:"min_days"`
 	ArchiveAfterDays int       `json:"archive_after_days"`
 	UpdatedAt        time.Time `json:"updated_at,omitempty"`
@@ -31,7 +32,7 @@ type RetentionPolicy struct {
 
 type retentionPolicyRow struct {
 	bun.BaseModel    `bun:"table:iam_audit_retention_policies"`
-	TenantID         string `bun:"tenant_id,pk"`
+	TenantID         guid.ID `bun:"tenant_id,pk"`
 	MinDays          int
 	ArchiveAfterDays int
 	UpdatedAt        int64
@@ -50,8 +51,8 @@ type Governance struct {
 
 // GetRetentionPolicy returns the tenant's policy, or the platform default
 // when the tenant has never configured one.
-func (s *Service) GetRetentionPolicy(ctx context.Context, tenantID string) (RetentionPolicy, error) {
-	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
+func (s *Service) GetRetentionPolicy(ctx context.Context, tenantID guid.ID) (RetentionPolicy, error) {
+	if tenantID.Zero() {
 		return RetentionPolicy{}, ErrRetentionInvalid
 	}
 	var row retentionPolicyRow
@@ -68,8 +69,8 @@ func (s *Service) GetRetentionPolicy(ctx context.Context, tenantID string) (Rete
 // SetRetentionPolicy upserts the tenant policy, refusing archive thresholds
 // earlier than the minimum retention. The mutation is recorded in the audit
 // chain so the compliance record is complete.
-func (s *Service) SetRetentionPolicy(ctx context.Context, tenantID string, minDays, archiveAfterDays int) (RetentionPolicy, error) {
-	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
+func (s *Service) SetRetentionPolicy(ctx context.Context, tenantID guid.ID, minDays, archiveAfterDays int) (RetentionPolicy, error) {
+	if tenantID.Zero() {
 		return RetentionPolicy{}, ErrRetentionInvalid
 	}
 	if minDays < 1 || minDays > maxRetentionDays || archiveAfterDays < minDays || archiveAfterDays > maxRetentionDays {
@@ -103,7 +104,7 @@ func (s *Service) SetRetentionPolicy(ctx context.Context, tenantID string, minDa
 }
 
 // Governance assembles the WORM governance report for one tenant.
-func (s *Service) Governance(ctx context.Context, tenantID string) (Governance, error) {
+func (s *Service) Governance(ctx context.Context, tenantID guid.ID) (Governance, error) {
 	policy, err := s.GetRetentionPolicy(ctx, tenantID)
 	if err != nil {
 		return Governance{}, err

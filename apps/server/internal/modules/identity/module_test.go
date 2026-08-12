@@ -16,14 +16,14 @@ func TestModuleRegistersIdentityOperations(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	registrar := authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())
-	module := NewModule(db, registrar, newIdentityAuditAppender(db), iam.NewAdministratorGuard())
+	module := NewModule(db, registrar, newIdentityAuditAppender(db), iam.NewAdministratorGuard(), newTestIDGenerator())
 	_, api := humatest.New(t)
 
 	module.RegisterREST(api)
 	assert.Contains(t, api.OpenAPI().Paths, "/iam/principals")
 	assert.Contains(t, api.OpenAPI().Paths, "/iam/principals/{id}")
-	assert.Panics(t, func() { NewModule(db, nil, newIdentityAuditAppender(db), iam.NewAdministratorGuard()) })
-	assert.Panics(t, func() { NewModule(db, registrar, nil, iam.NewAdministratorGuard()) })
-	assert.Panics(t, func() { NewModule(db, registrar, newIdentityAuditAppender(db), nil) })
+	assert.Panics(t, func() { NewModule(db, nil, newIdentityAuditAppender(db), iam.NewAdministratorGuard(), newTestIDGenerator()) })
+	assert.Panics(t, func() { NewModule(db, registrar, nil, iam.NewAdministratorGuard(), newTestIDGenerator()) })
+	assert.Panics(t, func() { NewModule(db, registrar, newIdentityAuditAppender(db), nil, newTestIDGenerator()) })
 	assert.Panics(t, func() { NewModuleWithService(nil, nil) })
 }

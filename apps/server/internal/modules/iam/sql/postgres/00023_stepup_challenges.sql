@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_stepup_challenges (
     id_hash CHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
     session_hash CHAR(64) NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

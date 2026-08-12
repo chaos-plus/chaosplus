@@ -23,7 +23,7 @@ func (id ID) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON accepts a JSON string ("123"), a bare number (123), or
-// null/empty (→ 0).
+// null/empty (-> 0).
 func (id *ID) UnmarshalJSON(b []byte) error {
 	v, err := Parse(string(b))
 	*id = v
@@ -40,9 +40,9 @@ func (id *ID) UnmarshalText(b []byte) error {
 	return err
 }
 
-// Schema reports the OpenAPI schema as a numeric string.
+// Schema reports the OpenAPI schema as a positive numeric string.
 func (ID) Schema(_ huma.Registry) *huma.Schema {
-	return &huma.Schema{Type: huma.TypeString, Pattern: `^-?[0-9]+$`}
+	return &huma.Schema{Type: huma.TypeString, Pattern: `^[1-9][0-9]*$`}
 }
 
 // Value stores the id as a BIGINT.
@@ -94,7 +94,10 @@ func Parse(s string) (ID, error) {
 		return 0, nil
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
+	if err != nil || n <= 0 {
+		if err == nil {
+			err = fmt.Errorf("must be positive")
+		}
 		return 0, fmt.Errorf("guid.ID: invalid id %q: %w", s, err)
 	}
 	return ID(n), nil

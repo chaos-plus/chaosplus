@@ -177,7 +177,7 @@ func IssueCaptcha() (*captchaOutput, error) {
 		}
 		block := data.GetData()
 		id := mustRandomToken(16)
-		storeInteractiveAnswer(id, fmt.Sprintf("S:%d:%d", block.TileX, block.TileY))
+		storeInteractiveAnswer(id, fmt.Sprintf("S:%d:%d", block.DX, block.DY))
 		master, err := data.GetMasterImage().ToBase64()
 		if err != nil {
 			return nil, err

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -28,9 +30,9 @@ var (
 // Business entities such as companies, merchants, and stores are separate
 // concepts and do not belong in this hierarchy.
 type Department struct {
-	ID        string    `json:"id"`
-	TenantID  string    `json:"tenant_id"`
-	ParentID  string    `json:"parent_id,omitempty"`
+	ID        guid.ID   `json:"id"`
+	TenantID  guid.ID   `json:"tenant_id"`
+	ParentID  guid.ID   `json:"parent_id,omitempty"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
 	SortOrder int       `json:"sort_order"`
@@ -41,14 +43,14 @@ type Department struct {
 }
 
 type CreateDepartment struct {
-	ParentID  string
+	ParentID  guid.ID
 	Name      string
 	Status    string
 	SortOrder int
 }
 
 type UpdateDepartment struct {
-	ParentID  *string
+	ParentID  *guid.ID
 	Name      *string
 	Status    *string
 	SortOrder *int
@@ -62,52 +64,42 @@ type MembershipWindow struct {
 	EndsAt   *time.Time
 }
 
-func normalizeCreate(tenantID string, input CreateDepartment) (string, CreateDepartment, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	input.ParentID = strings.TrimSpace(input.ParentID)
+func normalizeCreate(tenantID guid.ID, input CreateDepartment) (guid.ID, CreateDepartment, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Status == "" {
 		input.Status = StatusActive
 	}
-	if !validTenant(tenantID) || !validOptionalID(input.ParentID) || !validName(input.Name) || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
-		return "", CreateDepartment{}, ErrInvalid
+	if tenantID.Zero() || !validOptionalID(input.ParentID) || !validName(input.Name) || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
+		return 0, CreateDepartment{}, ErrInvalid
 	}
 	return tenantID, input, nil
 }
 
-func normalizeUpdate(tenantID, id string, input UpdateDepartment) (string, string, UpdateDepartment, error) {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if !validTenant(tenantID) || !validID(id) || input.Version < 1 || (input.ParentID == nil && input.Name == nil && input.Status == nil && input.SortOrder == nil) {
-		return "", "", UpdateDepartment{}, ErrInvalid
+func normalizeUpdate(tenantID, id guid.ID, input UpdateDepartment) (guid.ID, guid.ID, UpdateDepartment, error) {
+	if tenantID.Zero() || id.Zero() || input.Version < 1 || (input.ParentID == nil && input.Name == nil && input.Status == nil && input.SortOrder == nil) {
+		return 0, 0, UpdateDepartment{}, ErrInvalid
 	}
-	if input.ParentID != nil {
-		value := strings.TrimSpace(*input.ParentID)
-		if !validOptionalID(value) {
-			return "", "", UpdateDepartment{}, ErrInvalid
-		}
-		input.ParentID = &value
+	if input.ParentID != nil && !validOptionalID(*input.ParentID) {
+		return 0, 0, UpdateDepartment{}, ErrInvalid
 	}
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		if !validName(value) {
-			return "", "", UpdateDepartment{}, ErrInvalid
+			return 0, 0, UpdateDepartment{}, ErrInvalid
 		}
 		input.Name = &value
 	}
 	if input.Status != nil && !validStatus(*input.Status) {
-		return "", "", UpdateDepartment{}, ErrInvalid
+		return 0, 0, UpdateDepartment{}, ErrInvalid
 	}
 	if input.SortOrder != nil && !validSortOrder(*input.SortOrder) {
-		return "", "", UpdateDepartment{}, ErrInvalid
+		return 0, 0, UpdateDepartment{}, ErrInvalid
 	}
 	return tenantID, id, input, nil
 }
 
-func validTenant(value string) bool { return value != "" && len(value) <= 128 }
-func validID(value string) bool     { return value != "" && len(value) <= 128 }
-func validOptionalID(value string) bool {
-	return value == "" || validID(value)
-}
+func validID(value guid.ID) bool         { return value > 0 }
+func validOptionalID(value guid.ID) bool { return value == 0 || value > 0 }
 func validName(value string) bool {
 	return value != "" && len(value) <= 128 && strings.IndexFunc(value, unicode.IsControl) < 0
 }

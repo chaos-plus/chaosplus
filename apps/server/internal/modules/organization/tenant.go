@@ -13,6 +13,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -31,7 +32,7 @@ var (
 )
 
 type Tenant struct {
-	ID        string    `json:"id"`
+	ID        guid.ID   `json:"id"`
 	Slug      string    `json:"slug"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
@@ -53,7 +54,7 @@ type UpdateTenant struct {
 
 type tenantRow struct {
 	bun.BaseModel `bun:"table:iam_tenants"`
-	ID            string `bun:"id,pk"`
+	ID            guid.ID `bun:"id,pk"`
 	Slug          string
 	Name          string
 	Status        string
@@ -78,17 +79,16 @@ func NewTenantService(db *bun.DB, audit auditx.Appender, nextID IDGenerator) *Te
 
 // EnsureTenant idempotently creates the configured bootstrap tenant. Existing
 // tenants retain their current name and lifecycle status.
-func EnsureTenant(ctx context.Context, db *bun.DB, id string) error {
+func EnsureTenant(ctx context.Context, db *bun.DB, id guid.ID) error {
 	if db == nil {
 		return fmt.Errorf("ensure tenant: database is required")
 	}
-	id = strings.TrimSpace(id)
-	if !validID(id) {
+	if id.Zero() {
 		return ErrInvalidTenant
 	}
-	slug := tenantSlugForID(id)
+	slug := tenantSlugForID(id.String())
 	now := time.Now().UTC().UnixMilli()
-	row := tenantRow{ID: id, Slug: slug, Name: id, Status: TenantActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	row := tenantRow{ID: id, Slug: slug, Name: id.String(), Status: TenantActive, Version: 1, CreatedAt: now, UpdatedAt: now}
 	if _, err := db.NewInsert().Model(&row).Ignore().Exec(ctx); err != nil {
 		return fmt.Errorf("ensure tenant: %w", err)
 	}
@@ -112,12 +112,12 @@ func (s *TenantService) List(ctx context.Context, includeDeleted bool) ([]Tenant
 }
 
 // ListByMember 返回指定用户所属的活跃租户(PRD:注册用户=租户主人)。
-func (s *TenantService) ListByMember(ctx context.Context, subject string) ([]Tenant, error) {
+func (s *TenantService) ListByMember(ctx context.Context, subject guid.ID) ([]Tenant, error) {
 	rows := make([]tenantRow, 0)
 	if err := s.repo.executor.NewRaw(`
 SELECT t.id, t.slug, t.name, t.status, t.version, t.created_at, t.updated_at
 FROM iam_tenants t
-JOIN iam_tenant_members m ON m.tenant_id = t.id AND m.user_subject = ?
+JOIN iam_tenant_members m ON m.tenant_id = t.id AND m.principal_id = ?
 WHERE t.status <> ? AND m.status = 'active'
 ORDER BY t.name ASC, t.id ASC`, subject, TenantDeleted).Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("list member tenants: %w", err)
@@ -129,8 +129,8 @@ ORDER BY t.name ASC, t.id ASC`, subject, TenantDeleted).Scan(ctx, &rows); err !=
 	return tenants, nil
 }
 
-func (s *TenantService) Get(ctx context.Context, id string) (Tenant, error) {
-	row, err := getTenantRow(ctx, s.repo.executor, strings.TrimSpace(id))
+func (s *TenantService) Get(ctx context.Context, id guid.ID) (Tenant, error) {
+	row, err := getTenantRow(ctx, s.repo.executor, id)
 	if err != nil {
 		return Tenant{}, err
 	}
@@ -144,12 +144,12 @@ func (s *TenantService) Create(ctx context.Context, input CreateTenant) (Tenant,
 		return Tenant{}, ErrInvalidTenant
 	}
 	id, err := s.nextID()
-	if err != nil || !validID(id) {
+	if err != nil || id.Zero() {
 		return Tenant{}, fmt.Errorf("generate tenant id: %w", errors.Join(err, ErrInvalidTenant))
 	}
 	now := s.now().UTC().UnixMilli()
 	row := tenantRow{ID: id, Slug: input.Slug, Name: input.Name, Status: TenantActive, Version: 1, CreatedAt: now, UpdatedAt: now}
-	event := auditx.NewEvent(ctx, "_system", "tenant_created", "tenant", id)
+	event := auditx.NewEvent(ctx, 0, "tenant_created", "tenant", id)
 	event.Detail["slug"] = input.Slug
 	err = s.repo.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
@@ -169,9 +169,8 @@ func (s *TenantService) Create(ctx context.Context, input CreateTenant) (Tenant,
 	return tenantFromRow(row), nil
 }
 
-func (s *TenantService) Update(ctx context.Context, id string, input UpdateTenant) (Tenant, error) {
-	id = strings.TrimSpace(id)
-	if !validID(id) || input.Version < 1 || (input.Name == nil && input.Status == nil) {
+func (s *TenantService) Update(ctx context.Context, id guid.ID, input UpdateTenant) (Tenant, error) {
+	if id.Zero() || input.Version < 1 || (input.Name == nil && input.Status == nil) {
 		return Tenant{}, ErrInvalidTenant
 	}
 	if input.Name != nil {
@@ -186,7 +185,7 @@ func (s *TenantService) Update(ctx context.Context, id string, input UpdateTenan
 	}
 	now := s.now().UTC().UnixMilli()
 	var updated tenantRow
-	event := auditx.NewEvent(ctx, "_system", "tenant_updated", "tenant", id)
+	event := auditx.NewEvent(ctx, 0, "tenant_updated", "tenant", id)
 	err := s.repo.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		current, err := getTenantRow(ctx, tx, id)
 		if err != nil {
@@ -227,13 +226,12 @@ func (s *TenantService) Update(ctx context.Context, id string, input UpdateTenan
 	return tenantFromRow(updated), nil
 }
 
-func (s *TenantService) Delete(ctx context.Context, id string, version int64) error {
-	id = strings.TrimSpace(id)
-	if !validID(id) || version < 1 {
+func (s *TenantService) Delete(ctx context.Context, id guid.ID, version int64) error {
+	if id.Zero() || version < 1 {
 		return ErrInvalidTenant
 	}
 	now := s.now().UTC().UnixMilli()
-	event := auditx.NewEvent(ctx, "_system", "tenant_deleted", "tenant", id)
+	event := auditx.NewEvent(ctx, 0, "tenant_deleted", "tenant", id)
 	err := s.repo.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		current, err := getTenantRow(ctx, tx, id)
 		if err != nil {
@@ -261,8 +259,8 @@ func (s *TenantService) Delete(ctx context.Context, id string, version int64) er
 	return nil
 }
 
-func getTenantRow(ctx context.Context, db bun.IDB, id string) (tenantRow, error) {
-	if !validID(id) {
+func getTenantRow(ctx context.Context, db bun.IDB, id guid.ID) (tenantRow, error) {
+	if id.Zero() {
 		return tenantRow{}, ErrInvalidTenant
 	}
 	var row tenantRow

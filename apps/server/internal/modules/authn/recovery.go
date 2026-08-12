@@ -21,6 +21,7 @@ import (
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/uptrace/bun"
 )
@@ -29,13 +30,13 @@ const (
 	passwordRecoveryNotification = "password_recovery"
 	passwordChangedNotification  = "password_changed"
 	recoveryTokenPrefix          = "cpr1_"
-	authnAuditTenant             = "_system"
+	authnAuditTenant             = guid.ID(0)
 )
 
 type passwordRecoveryRow struct {
 	bun.BaseModel `bun:"table:iam_password_recovery_tokens"`
 	TokenHMAC     string `bun:"token_hmac,pk"`
-	PrincipalID   string
+	PrincipalID   guid.ID
 	CreatedAt     int64
 	ExpiresAt     int64
 	ConsumedAt    int64
@@ -43,7 +44,7 @@ type passwordRecoveryRow struct {
 
 type notificationOutboxRow struct {
 	bun.BaseModel     `bun:"table:iam_notification_outbox"`
-	ID                string `bun:"id,pk"`
+	ID                guid.ID `bun:"id,pk"`
 	Kind              string
 	Recipient         string
 	PayloadCiphertext string
@@ -58,7 +59,7 @@ type notificationOutboxRow struct {
 }
 
 type notificationPayload struct {
-	ID              string    `json:"id"`
+	ID              guid.ID   `json:"id"`
 	Type            string    `json:"type"`
 	Recipient       string    `json:"recipient"`
 	RecoveryURL     string    `json:"recovery_url,omitempty"`
@@ -237,13 +238,11 @@ func (s *WebService) CompletePasswordRecovery(ctx context.Context, token, newPas
 	if err != nil {
 		return err
 	}
-	historyID, err := randomToken(18)
+	historyID, err := s.nextID()
 	if err != nil {
 		return err
 	}
 	notification := notificationPayload{Type: passwordChangedNotification, Recipient: principal.Email, OccurredAt: now}
-	auditService := auditmod.NewService(s.db)
-
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		result, err := tx.NewUpdate().Model((*passwordRecoveryRow)(nil)).Set("consumed_at = ?", now.UnixMilli()).
 			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", computedHMAC, now.UnixMilli()).Exec(ctx)
@@ -282,7 +281,7 @@ func (s *WebService) CompletePasswordRecovery(ctx context.Context, token, newPas
 				return err
 			}
 		}
-		_, err = auditService.AppendTo(ctx, tx, auditmod.EventInput{
+		_, err = s.auditTrail.AppendTo(ctx, tx, auditmod.EventInput{
 			TenantID: authnAuditTenant, PrincipalID: recovery.PrincipalID,
 			EventType: "password_recovery_completed", TargetType: "principal", TargetID: recovery.PrincipalID,
 			Outcome: "success", Detail: map[string]any{"sessions_revoked": true, "credential_version_incremented": true},
@@ -298,8 +297,8 @@ func (s *WebService) CompletePasswordRecovery(ctx context.Context, token, newPas
 	return nil
 }
 
-func trimPasswordHistory(ctx context.Context, db bun.IDB, principalID string) error {
-	var historyIDs []string
+func trimPasswordHistory(ctx context.Context, db bun.IDB, principalID guid.ID) error {
+	var historyIDs []guid.ID
 	if err := db.NewSelect().Model((*passwordHistoryRow)(nil)).Column("id").Where("principal_id = ?", principalID).
 		Order("created_at DESC", "id DESC").Scan(ctx, &historyIDs); err != nil {
 		return err
@@ -317,7 +316,7 @@ func (s *WebService) passwordRecoveryHMAC(token string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (s *WebService) ensureRecoveryCooldownExpired(ctx context.Context, principalID string) error {
+func (s *WebService) ensureRecoveryCooldownExpired(ctx context.Context, principalID guid.ID) error {
 	var until int64
 	if err := s.db.NewSelect().Model((*credentialRow)(nil)).Column("recovery_cooldown_until").Where("principal_id = ?", principalID).Scan(ctx, &until); err != nil {
 		return fmt.Errorf("load recovery cooldown: %w", err)
@@ -329,7 +328,7 @@ func (s *WebService) ensureRecoveryCooldownExpired(ctx context.Context, principa
 }
 
 func (s *WebService) enqueueNotification(ctx context.Context, db bun.IDB, payload notificationPayload) error {
-	id, err := randomToken(18)
+	id, err := s.nextID()
 	if err != nil {
 		return err
 	}
@@ -338,7 +337,7 @@ func (s *WebService) enqueueNotification(ctx context.Context, db bun.IDB, payloa
 	if err != nil {
 		return fmt.Errorf("encode notification: %w", err)
 	}
-	ciphertext, err := s.encryptAuthnData("notification:v1", id, encoded)
+	ciphertext, err := s.encryptAuthnData("notification:v1", id.String(), encoded)
 	if err != nil {
 		return err
 	}
@@ -434,7 +433,7 @@ func (s *WebService) deliverNotification(ctx context.Context, id string) error {
 	if err := s.db.NewSelect().Model(&row).Where("id = ?", id).Scan(ctx); err != nil {
 		return err
 	}
-	payload, err := s.decryptAuthnData("notification:v1", row.ID, row.PayloadCiphertext)
+	payload, err := s.decryptAuthnData("notification:v1", row.ID.String(), row.PayloadCiphertext)
 	if err == nil {
 		err = s.postNotification(ctx, row.ID, payload)
 	}
@@ -462,13 +461,13 @@ func (s *WebService) deliverNotification(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *WebService) postNotification(ctx context.Context, id string, payload []byte) error {
+func (s *WebService) postNotification(ctx context.Context, id guid.ID, payload []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.Notification.URL, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create notification request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", id)
+	req.Header.Set("Idempotency-Key", id.String())
 	if s.notificationAuthorization != "" {
 		req.Header.Set("Authorization", s.notificationAuthorization)
 	}

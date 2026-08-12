@@ -16,6 +16,7 @@ import (
 	"time"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/uptrace/bun"
 )
@@ -28,7 +29,7 @@ const (
 type emailVerificationRow struct {
 	bun.BaseModel `bun:"table:iam_email_verification_tokens"`
 	TokenHMAC     string `bun:"token_hmac,pk"`
-	PrincipalID   string
+	PrincipalID   guid.ID
 	Email         string
 	CreatedAt     int64
 	ExpiresAt     int64
@@ -72,11 +73,9 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 
 	now := s.now().UTC()
 	expires := now.Add(s.cfg.EmailVerification.TokenTTL)
-	auditService := auditmod.NewService(s.db)
-
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var principal principalRow
-		query := tx.NewSelect().Model(&principal).Where("id = ? AND status = 'active'", claims.Subject)
+		query := tx.NewSelect().Model(&principal).Where("id = ? AND status = 'active'", claims.PrincipalID)
 		if s.db.Dialect().Name().String() != "sqlite" {
 			query = query.For("UPDATE")
 		}
@@ -123,7 +122,7 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 		}); err != nil {
 			return err
 		}
-		_, err = auditService.AppendTo(ctx, tx, auditmod.EventInput{
+		_, err = s.auditTrail.AppendTo(ctx, tx, auditmod.EventInput{
 			TenantID: authnAuditTenant, PrincipalID: principal.ID,
 			EventType: "email_verification_requested", TargetType: "principal", TargetID: principal.ID,
 			Outcome: "success", Detail: map[string]any{"email_snapshot_bound": true},
@@ -138,7 +137,6 @@ func (s *WebService) BeginEmailVerification(ctx context.Context, authorization, 
 	}
 	return nil
 }
-
 
 // maxCodeAttempts bounds 6-digit email-verification-code guesses (M2).
 const maxCodeAttempts = 5
@@ -199,7 +197,6 @@ func (s *WebService) CompleteEmailVerification(ctx context.Context, token, code 
 	default:
 		return authnext.ErrInvalidEmailVerification
 	}
-	auditService := auditmod.NewService(s.db)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		result, err := tx.NewUpdate().Model((*emailVerificationRow)(nil)).Set("consumed_at = ?", now).
 			Where("token_hmac = ? AND consumed_at = 0 AND expires_at > ?", verification.TokenHMAC, now).Exec(ctx)
@@ -217,7 +214,7 @@ func (s *WebService) CompleteEmailVerification(ctx context.Context, token, code 
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return authnext.ErrInvalidEmailVerification
 		}
-		_, err = auditService.AppendTo(ctx, tx, auditmod.EventInput{
+		_, err = s.auditTrail.AppendTo(ctx, tx, auditmod.EventInput{
 			TenantID: authnAuditTenant, PrincipalID: verification.PrincipalID,
 			EventType: "email_verification_completed", TargetType: "principal", TargetID: verification.PrincipalID,
 			Outcome: "success", Detail: map[string]any{"email_snapshot_matched": true},

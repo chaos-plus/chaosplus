@@ -84,21 +84,21 @@ func TestBindInitialAdminIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(context.Background(), db))
 	require.NoError(t, organization.Migrate(context.Background(), db))
-	require.NoError(t, bindInitialAdmin(context.Background(), db, "tenant", "principal", "Admin", "admin@example.com"))
-	require.NoError(t, bindInitialAdmin(context.Background(), db, "tenant", "principal", "Admin", "admin@example.com"))
+	require.NoError(t, bindInitialAdmin(context.Background(), db, testID("tenant"), testID("principal"), "Admin", "admin@example.com"))
+	require.NoError(t, bindInitialAdmin(context.Background(), db, testID("tenant"), testID("principal"), "Admin", "admin@example.com"))
 	var member iam.TenantMember
-	_, err = iam.NewRepository(db, func() (string, error) { return "", nil }).GetMember(context.Background(), "tenant", "subject")
+	_, err = iam.NewRepository(db, newTestIDGenerator()).GetMember(context.Background(), testID("tenant"), testID("subject"))
 	require.Error(t, err)
-	member, err = iam.NewRepository(db, func() (string, error) { return "", nil }).GetMember(context.Background(), "tenant", "principal")
+	member, err = iam.NewRepository(db, newTestIDGenerator()).GetMember(context.Background(), testID("tenant"), testID("principal"))
 	require.NoError(t, err)
 	assert.Equal(t, iam.MemberActive, member.Status)
-	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), "tenant", "tenant_administer", "principal")
+	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), testID("tenant"), "tenant_administer", testID("principal"))
 	require.NoError(t, err)
 	assert.True(t, allowed)
 	var platformBindings int
-	require.NoError(t, db.NewSelect().Table("iam_platform_administrators").ColumnExpr("COUNT(*)").Where("principal_id = ?", "principal").Scan(context.Background(), &platformBindings))
+	require.NoError(t, db.NewSelect().Table("iam_platform_administrators").ColumnExpr("COUNT(*)").Where("principal_id = ?", testID("principal")).Scan(context.Background(), &platformBindings))
 	assert.Equal(t, 1, platformBindings)
-	menus, err := iam.NewRepository(db, func() (string, error) { return "", nil }).ListMenus(context.Background(), "tenant", false)
+	menus, err := iam.NewRepository(db, newTestIDGenerator()).ListMenus(context.Background(), testID("tenant"), false)
 	require.NoError(t, err)
 	assert.Len(t, menus, len(iam.DefaultMenus()))
 }
@@ -111,7 +111,7 @@ func TestProvisionRealSQLiteInitialAdministrator(t *testing.T) {
 			LockTimeout: time.Second,
 			Database:    datasource,
 			InitialAdmin: app.BootstrapInitialAdmin{
-				TenantID: "tenant", LoginName: "admin", Password: "correct horse battery staple",
+				TenantID: wireID("tenant"), LoginName: "admin", Password: "correct horse battery staple",
 				DisplayName: "System Admin", Email: "admin@example.com",
 			},
 		},
@@ -126,10 +126,10 @@ func TestProvisionRealSQLiteInitialAdministrator(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	var principalID string
 	require.NoError(t, db.NewSelect().Table("iam_principals").Column("id").Where("login_name = ?", "admin").Scan(context.Background(), &principalID))
-	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), "tenant", "tenant_administer", principalID)
+	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), testID("tenant"), "tenant_administer", parseGUID(principalID))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	allowed, err = iam.NewAuthorizer(db).CheckPlatform(context.Background(), "platform_administer", principalID)
+	allowed, err = iam.NewAuthorizer(db).CheckPlatform(context.Background(), "platform_administer", parseGUID(principalID))
 	require.NoError(t, err)
 	assert.True(t, allowed)
 }
@@ -178,7 +178,7 @@ func TestDeploymentFailurePaths(t *testing.T) {
 
 	require.NoError(t, Migrate(t.Context(), cfg))
 	cfg.Bootstrap.InitialAdmin = app.BootstrapInitialAdmin{
-		TenantID: "tenant", LoginName: "admin", Password: "value", PasswordFile: filepath.Join(t.TempDir(), "password"),
+		TenantID: wireID("tenant"), LoginName: "admin", Password: "value", PasswordFile: filepath.Join(t.TempDir(), "password"),
 	}
 	assert.ErrorContains(t, Provision(t.Context(), cfg), "mutually exclusive")
 
@@ -281,37 +281,37 @@ func TestInitialAdministratorTransactionFailures(t *testing.T) {
 		db := newIAMDB(t)
 		_, err := db.ExecContext(t.Context(), "ALTER TABLE iam_roles RENAME TO unavailable_roles")
 		require.NoError(t, err)
-		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "", ""), "list bootstrap roles")
+		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "", ""), "list bootstrap roles")
 	})
 	t.Run("create role", func(t *testing.T) {
 		db := newIAMDB(t)
 		_, err := db.ExecContext(t.Context(), `CREATE TRIGGER deny_role_insert BEFORE INSERT ON iam_roles BEGIN SELECT RAISE(ABORT, 'role denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""), "create administrator role")
+		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "Admin", ""), "create administrator role")
 	})
 	t.Run("grant permission", func(t *testing.T) {
 		db := newIAMDB(t)
-		repo := iam.NewRepository(db, bootstrapID)
-		_, err := repo.CreateRole(t.Context(), "tenant", "System Administrator", "")
+		repo := iam.NewRepository(db, newTestIDGenerator())
+		_, err := repo.CreateRole(t.Context(), testID("tenant"), "System Administrator", "")
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), `CREATE TRIGGER deny_permission_insert BEFORE INSERT ON iam_role_permissions BEGIN SELECT RAISE(ABORT, 'permission denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""), "grant administrator permission")
+		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "Admin", ""), "grant administrator permission")
 	})
 	t.Run("bind member", func(t *testing.T) {
 		db := newIAMDB(t)
-		require.NoError(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""))
+		require.NoError(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "Admin", ""))
 		_, err := db.ExecContext(t.Context(), "DELETE FROM iam_role_members")
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), `CREATE TRIGGER deny_role_member_insert BEFORE INSERT ON iam_role_members BEGIN SELECT RAISE(ABORT, 'member denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""), "bind initial administrator")
+		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "Admin", ""), "bind initial administrator")
 	})
 	t.Run("create default menu", func(t *testing.T) {
 		db := newIAMDB(t)
 		_, err := db.ExecContext(t.Context(), `CREATE TRIGGER deny_menu_insert BEFORE INSERT ON iam_menus BEGIN SELECT RAISE(ABORT, 'menu denied'); END`)
 		require.NoError(t, err)
-		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, "tenant", "principal", "Admin", ""), "create default menu")
+		assert.ErrorContains(t, bindInitialAdmin(t.Context(), db, testID("tenant"), testID("principal"), "Admin", ""), "create default menu")
 	})
 }
 func TestProvisionAndLoginRealDialect(t *testing.T) {
@@ -326,7 +326,7 @@ func TestProvisionAndLoginRealDialect(t *testing.T) {
 			LockTimeout: time.Second,
 			Database:    datasource,
 			InitialAdmin: app.BootstrapInitialAdmin{
-				TenantID: "tenant", LoginName: "admin", Password: "correct horse battery staple",
+				TenantID: wireID("tenant"), LoginName: "admin", Password: "correct horse battery staple",
 				DisplayName: "System Admin", Email: "admin@example.com",
 			},
 		},
@@ -341,10 +341,10 @@ func TestProvisionAndLoginRealDialect(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	var principalID string
 	require.NoError(t, db.NewSelect().Table("iam_principals").Column("id").Where("login_name = ?", "admin").Scan(context.Background(), &principalID))
-	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), "tenant", "tenant_administer", principalID)
+	allowed, err := iam.NewAuthorizer(db).Check(context.Background(), testID("tenant"), "tenant_administer", parseGUID(principalID))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	allowed, err = iam.NewAuthorizer(db).CheckPlatform(context.Background(), "platform_administer", principalID)
+	allowed, err = iam.NewAuthorizer(db).CheckPlatform(context.Background(), "platform_administer", parseGUID(principalID))
 	require.NoError(t, err)
 	assert.True(t, allowed)
 
@@ -363,13 +363,13 @@ func TestProvisionAndLoginRealDialect(t *testing.T) {
 	// Token rotation: reconciling with a new password bumps the credential
 	// version and revokes the previous session and access token.
 	cookie := service.SessionCookie(token)
-	oldAccess, _, err := service.IssueAccessToken(context.Background(), principalID, "api", "openid profile")
+	oldAccess, _, err := service.IssueAccessToken(context.Background(), parseGUID(principalID), "api", "openid profile")
 	require.NoError(t, err)
 	_, err = service.Authenticate(context.Background(), "Bearer "+oldAccess, "")
 	require.NoError(t, err)
 	_, err = authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{
 		LoginName: "admin", Password: "rotated horse battery staple", DisplayName: "System Admin", Email: "admin@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
 	_, err = service.Authenticate(context.Background(), "", cookie)
 	assert.ErrorIs(t, err, authnext.ErrInvalidSession)

@@ -30,19 +30,19 @@ func TestInvitationHTTPWorkflowAndOpenAPI(t *testing.T) {
 	fixture := newInvitationFixture(t)
 	server, api := newInvitationHTTPServer(t, fixture.service)
 
-	create := invitationRequest(t, server, http.MethodPost, "/iam/invitations", "tenant-a", "en-US", map[string]any{"email": "api@example.com", "role_ids": []string{"role-a"}})
+	create := invitationRequest(t, server, http.MethodPost, "/iam/invitations", wireID("tenant-a"), "en-US", map[string]any{"email": "api@example.com", "role_ids": []string{wireID("role-a")}})
 	require.Equal(t, http.StatusCreated, create.status, create.message)
 	var issued issuedInvitation
 	require.NoError(t, json.Unmarshal(create.data, &issued))
 	assert.NotEmpty(t, issued.Token)
 
-	listed := invitationRequest(t, server, http.MethodGet, "/iam/invitations", "tenant-a", "en-US", nil)
+	listed := invitationRequest(t, server, http.MethodGet, "/iam/invitations", wireID("tenant-a"), "en-US", nil)
 	require.Equal(t, http.StatusOK, listed.status, listed.message)
 	var invitations []Invitation
 	require.NoError(t, json.Unmarshal(listed.data, &invitations))
 	require.Len(t, invitations, 1)
 
-	resent := invitationRequest(t, server, http.MethodPost, "/iam/invitations/"+issued.Invitation.ID+"/resend", "tenant-a", "en-US", map[string]any{"expires_in_hours": 48})
+	resent := invitationRequest(t, server, http.MethodPost, "/iam/invitations/"+issued.Invitation.ID.String()+"/resend", wireID("tenant-a"), "en-US", map[string]any{"expires_in_hours": 48})
 	require.Equal(t, http.StatusOK, resent.status, resent.message)
 	var replacement issuedInvitation
 	require.NoError(t, json.Unmarshal(resent.data, &replacement))
@@ -54,11 +54,11 @@ func TestInvitationHTTPWorkflowAndOpenAPI(t *testing.T) {
 	require.NoError(t, json.Unmarshal(accepted.data, &acceptance))
 	assert.Equal(t, "api@example.com", acceptance.Email)
 
-	revocable := invitationRequest(t, server, http.MethodPost, "/iam/invitations", "tenant-a", "en-US", map[string]any{"email": "revoke-api@example.com"})
+	revocable := invitationRequest(t, server, http.MethodPost, "/iam/invitations", wireID("tenant-a"), "en-US", map[string]any{"email": "revoke-api@example.com"})
 	require.Equal(t, http.StatusCreated, revocable.status, revocable.message)
 	require.NoError(t, json.Unmarshal(revocable.data, &issued))
 	assert.JSONEq(t, `[]`, string(mustInvitationRoleIDs(t, revocable.data)))
-	revoked := invitationRequest(t, server, http.MethodDelete, "/iam/invitations/"+issued.Invitation.ID, "tenant-a", "en-US", nil)
+	revoked := invitationRequest(t, server, http.MethodDelete, "/iam/invitations/"+issued.Invitation.ID.String(), wireID("tenant-a"), "en-US", nil)
 	assert.Equal(t, http.StatusOK, revoked.status, revoked.message)
 
 	operations := map[string]string{
@@ -92,7 +92,7 @@ func mustInvitationRoleIDs(t *testing.T, data json.RawMessage) json.RawMessage {
 func TestInvitationHTTPErrorsAreLocalized(t *testing.T) {
 	fixture := newInvitationFixture(t)
 	server, _ := newInvitationHTTPServer(t, fixture.service)
-	token := "cpi1_missing." + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	token := "inv1_missing." + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	for _, item := range []struct {
 		locale  string
 		message string

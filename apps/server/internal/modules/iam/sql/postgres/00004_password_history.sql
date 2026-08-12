@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_password_history (
-    id VARCHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
+    id BIGINT PRIMARY KEY,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
     password_hash TEXT NOT NULL,
     created_at BIGINT NOT NULL
 );

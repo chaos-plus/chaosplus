@@ -1,41 +1,41 @@
-# Dev Repository Facts
+# Dev 仓库事实
 
-This file is generated from repository manifests and source trees. Do not edit it manually.
+本文件由仓库 manifest 和 source tree 自动生成，严禁手工编辑。
 
-## Backend
+## 后端
 
-- Go module: `github.com/chaos-plus/chaosplus`
-- Go version: `1.26.5`
-- Go package directories: 54
-- Feature modules: audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
-- IAM SQL dialects: mysql, postgres, sqlite
-- HTTP framework: Huma v2 on chi
-- Persistence: Bun plus Goose
-- Primary configuration: `apps/server/internal/app/config.go`
-- Composition root: `apps/server/internal/app`
+- Go module：`github.com/chaos-plus/chaosplus`
+- Go 版本：`1.26.5`
+- Go package 目录数：60
+- 功能模块：audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
+- IAM SQL 方言：mysql, postgres, sqlite
+- HTTP 框架：基于 chi 的 Huma v2
+- 持久化：Bun + Goose
+- 主配置：`apps/server/internal/app/config.go`
+- 组合根：`apps/server/internal/app`
 
-## Frontend
+## 前端
 
-- Workspace: `chaosplus-admin`
-- Package manager: `bun@1.3.12`
-- Workspaces: apps/*, packages/*
-- Application: `apps/admin-ai/apps/platform` (React, Vite, TypeScript)
-- Shared UI: `apps/admin/packages/ui`
-- App test command: `bun test src`
+- Workspace：`chaosplus-admin-ai`
+- 包管理器：`bun@1.3.12`
+- Workspaces：apps/*, packages/*
+- 应用：`apps/admin-ai/apps/platform`（React、Vite、TypeScript）
+- 共享 UI：`apps/admin/packages/ui`
+- 应用测试命令：`bun test src`
 
-## Documentation
+## 文档
 
-- Package: `dev-docs`
-- Site: `apps/docs`
-- Generator: Astro ^7.0.2
-- Theme: Starlight ^0.41.3
-- Authoritative engineering sources: `README.md` and `apps/docs/*.md`
+- Package：`dev-docs`
+- 站点：`apps/docs`
+- 生成器：Astro ^7.0.2
+- 主题：Starlight ^0.41.3
+- 权威工程来源：`README.md` 和 `apps/docs/*.md`
 
-## Required Invariants
+## 强制不变量
 
-- Database configuration uses `type` plus `dsn` or `dsn_file` for SQLite, MySQL, and PostgreSQL.
-- No YAML belongs under `internal/app`.
-- Every Go `name_test.go` has sibling `name.go`.
-- Tests use real dependencies and real listeners; mocks, fakes, stubs, and miniredis are forbidden.
-- Full Go acceptance coverage is at least 90%.
-- Future business hierarchy is tenant -> entity -> business resources.
+- SQLite、MySQL、PostgreSQL 数据库配置使用 `type` 加 `dsn` 或 `dsn_file`。
+- `internal/app` 下严禁 YAML。
+- 每个 Go `name_test.go` 必须有同目录 `name.go`。
+- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 miniredis。
+- Go 完整验收覆盖率至少 90%。
+- 业务层级为 tenant -> entity -> business resources。

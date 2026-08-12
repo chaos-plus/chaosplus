@@ -86,7 +86,12 @@ func registerUserItemSCIM(api huma.API, service *Service) {
 		if !ok {
 			return
 		}
-		result, err := service.GetUser(ctx.Context(), auth, ctx.Param("id"))
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.GetUser(ctx.Context(), auth, id)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -109,7 +114,12 @@ func registerUserItemSCIM(api huma.API, service *Service) {
 			writeSCIMError(ctx, err)
 			return
 		}
-		result, err := service.ReplaceUser(ctx.Context(), auth, ctx.Param("id"), input, version)
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.ReplaceUser(ctx.Context(), auth, id, input, version)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -132,7 +142,12 @@ func registerUserItemSCIM(api huma.API, service *Service) {
 			writeSCIMError(ctx, err)
 			return
 		}
-		result, err := service.PatchUser(ctx.Context(), auth, ctx.Param("id"), input, version)
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.PatchUser(ctx.Context(), auth, id, input, version)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -146,8 +161,13 @@ func registerUserItemSCIM(api huma.API, service *Service) {
 			return
 		}
 		version, err := parseETag(ctx.Header("If-Match"))
+		id, idErr := parseProvisioningID(ctx.Param("id"))
+		if idErr != nil {
+			writeSCIMError(ctx, idErr)
+			return
+		}
 		if err == nil {
-			err = service.DeleteUser(ctx.Context(), auth, ctx.Param("id"), version)
+			err = service.DeleteUser(ctx.Context(), auth, id, version)
 		}
 		if err != nil {
 			writeSCIMError(ctx, err)
@@ -204,7 +224,12 @@ func registerGroupItemSCIM(api huma.API, service *Service) {
 		if !ok {
 			return
 		}
-		result, err := service.GetGroup(ctx.Context(), auth, ctx.Param("id"))
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.GetGroup(ctx.Context(), auth, id)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -227,7 +252,12 @@ func registerGroupItemSCIM(api huma.API, service *Service) {
 			writeSCIMError(ctx, err)
 			return
 		}
-		result, err := service.ReplaceGroup(ctx.Context(), auth, ctx.Param("id"), input, version)
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.ReplaceGroup(ctx.Context(), auth, id, input, version)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -250,7 +280,12 @@ func registerGroupItemSCIM(api huma.API, service *Service) {
 			writeSCIMError(ctx, err)
 			return
 		}
-		result, err := service.PatchGroup(ctx.Context(), auth, ctx.Param("id"), input, version)
+		id, err := parseProvisioningID(ctx.Param("id"))
+		if err != nil {
+			writeSCIMError(ctx, err)
+			return
+		}
+		result, err := service.PatchGroup(ctx.Context(), auth, id, input, version)
 		if err != nil {
 			writeSCIMError(ctx, err)
 			return
@@ -264,8 +299,13 @@ func registerGroupItemSCIM(api huma.API, service *Service) {
 			return
 		}
 		version, err := parseETag(ctx.Header("If-Match"))
+		id, idErr := parseProvisioningID(ctx.Param("id"))
+		if idErr != nil {
+			writeSCIMError(ctx, idErr)
+			return
+		}
 		if err == nil {
-			err = service.DeleteGroup(ctx.Context(), auth, ctx.Param("id"), version)
+			err = service.DeleteGroup(ctx.Context(), auth, id, version)
 		}
 		if err != nil {
 			writeSCIMError(ctx, err)

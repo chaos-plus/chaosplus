@@ -16,13 +16,16 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
+	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/go-chi/chi/v5"
+	"github.com/mojocn/base64Captcha"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,7 +49,7 @@ func TestAuthenticationHTTPFlow(t *testing.T) {
 	assert.Contains(t, session.Body.String(), principalID)
 	assert.Contains(t, session.Body.String(), `"email_verified":true`)
 
-	accessToken, _, err := web.IssueAccessToken(context.Background(), principalID, "api", "openid")
+	accessToken, _, err := web.IssueAccessToken(context.Background(), parseGUID(principalID), "api", "openid")
 	require.NoError(t, err)
 	me := api.Get("/authn/me", "Authorization: Bearer "+accessToken)
 	assert.Equal(t, http.StatusOK, me.Code, me.Body.String())
@@ -261,21 +264,21 @@ func TestRegistrationHTTPFlow(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, api.Post("/authn/register", map[string]any{
 		"email": "registered@example.com", "password": "correct registration password", "display_name": "Registered User",
+		"captcha_type": "text", "captcha_id": "invalid", "captcha_answer": "invalid",
 	}, "Origin: https://evil.example").Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/authn/register", map[string]any{
-		"email": "not-an-email", "password": "short",
-	}, "Origin: https://app.example").Code)
+	invalid := registrationRequestWithCaptcha(t, api, "not-an-email", "short", "")
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/authn/register", invalid,
+		"Origin: https://app.example").Code)
 
 	for range 2 {
-		response := api.Post("/authn/register", map[string]any{
-			"email": "registered@example.com", "password": "correct registration password", "display_name": "Registered User",
-		}, "Origin: https://app.example")
+		request := registrationRequestWithCaptcha(t, api, "registered@example.com", "correct registration password", "Registered User")
+		response := api.Post("/authn/register", request, "Origin: https://app.example")
 		assert.Equal(t, http.StatusAccepted, response.Code, response.Body.String())
 		assert.Contains(t, response.Body.String(), `"accepted":true`)
 	}
 	assert.Equal(t, 1, authnAPIRowCount(t, db, "iam_principals", "email = ?", "registered@example.com"))
 	assert.Equal(t, 1, authnAPIRowCount(t, db, "iam_notification_outbox", "recipient = ?", "registered@example.com"))
-	assert.Zero(t, authnAPIRowCount(t, db, "iam_tenant_members", "user_subject IN (SELECT id FROM iam_principals WHERE email = ?)", "registered@example.com"))
+	assert.Zero(t, authnAPIRowCount(t, db, "iam_tenant_members", "principal_id IN (SELECT id FROM iam_principals WHERE email = ?)", "registered@example.com"))
 
 	registration := api.OpenAPI().Paths["/authn/register"].Post
 	capabilityOperation := api.OpenAPI().Paths["/authn/capabilities"].Get
@@ -291,9 +294,35 @@ func TestRegistrationHTTPFlow(t *testing.T) {
 	_, disabledAPI := humatest.New(t)
 	authnmod.RegisterREST(disabledAPI, disabled, disabled)
 	assert.Contains(t, disabledAPI.Get("/authn/capabilities").Body.String(), `"registration":false`)
-	assert.Equal(t, http.StatusServiceUnavailable, disabledAPI.Post("/authn/register", map[string]any{
-		"email": "disabled@example.com", "password": "correct registration password",
-	}, "Origin: https://app.example").Code)
+	disabledRequest := registrationRequestWithCaptcha(t, disabledAPI, "disabled@example.com", "correct registration password", "")
+	assert.Equal(t, http.StatusServiceUnavailable, disabledAPI.Post("/authn/register", disabledRequest,
+		"Origin: https://app.example").Code)
+}
+
+func registrationRequestWithCaptcha(t *testing.T, api humatest.TestAPI, email, password, displayName string) map[string]any {
+	t.Helper()
+	for range 100 {
+		response := api.Get("/authn/captcha")
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var envelope struct {
+			Data struct {
+				Type      string `json:"type"`
+				CaptchaID string `json:"captcha_id"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
+		if envelope.Data.Type != "text" {
+			continue
+		}
+		answer := base64Captcha.DefaultMemStore.Get(envelope.Data.CaptchaID, false)
+		require.NotEmpty(t, answer)
+		return map[string]any{
+			"email": email, "password": password, "display_name": displayName,
+			"captcha_type": envelope.Data.Type, "captcha_id": envelope.Data.CaptchaID, "captcha_answer": answer,
+		}
+	}
+	t.Fatal("text captcha was not issued after 100 attempts")
+	return nil
 }
 
 func TestDisabledPasswordRecoveryHTTPFlow(t *testing.T) {
@@ -630,6 +659,8 @@ func newAuthenticationService(t *testing.T) (*bun.DB, *authnmod.WebService, stri
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	require.NoError(t, organization.EnsureTenant(context.Background(), db, testID("tenant")))
 	seed := make([]byte, ed25519.SeedSize)
 	for index := range seed {
 		seed[index] = byte(index + 1)
@@ -644,13 +675,13 @@ func newAuthenticationService(t *testing.T) (*bun.DB, *authnmod.WebService, stri
 			PostLoginURL: "https://app.example/", PostLogoutURL: "https://app.example/login",
 			AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"},
 		},
-	}, db)
+	}, db, authnmod.WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
 	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{
 		LoginName: "alice", Password: "correct horse battery staple", DisplayName: "Alice", Email: "alice@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
-	return db, web, principalID
+	return db, web, guidString(principalID)
 }
 
 func newRecoveryAuthenticationService(t *testing.T, notificationURL string, registration ...bool) (*bun.DB, *authnmod.WebService, string) {
@@ -659,20 +690,23 @@ func newRecoveryAuthenticationService(t *testing.T, notificationURL string, regi
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(context.Background(), db))
+	require.NoError(t, organization.Migrate(context.Background(), db))
+	require.NoError(t, organization.EnsureTenant(context.Background(), db, testID("tenant")))
 	seed := make([]byte, ed25519.SeedSize)
 	for index := range seed {
 		seed[index] = byte(index + 1)
 	}
 	registrationEnabled := len(registration) > 0 && registration[0]
-	options := []authnmod.WebOption{}
+	nextID := newTestIDGenerator()
+	options := []authnmod.WebOption{authnmod.WithIDGenerator(nextID)}
 	if registrationEnabled {
-		options = append(options, authnmod.WithRegistrationPrincipalCreator(func(ctx context.Context, db bun.IDB, email, passwordHash, displayName string, now time.Time) (string, error) {
-			id, createErr := identity.CreatePendingPrincipal(ctx, db, email, passwordHash, displayName, now)
+		options = append(options, authnmod.WithRegistrationPrincipalCreator(func(ctx context.Context, db bun.IDB, email, passwordHash, displayName string, now time.Time, nextID func() (guid.ID, error)) (guid.ID, error) {
+			id, createErr := identity.CreatePendingPrincipal(ctx, db, email, passwordHash, displayName, now, nextID)
 			switch {
 			case errors.Is(createErr, identity.ErrLoginConflict):
-				return "", authn.ErrRegistrationConflict
+				return 0, authn.ErrRegistrationConflict
 			case errors.Is(createErr, identity.ErrInvalid):
-				return "", authn.ErrInvalidRegistration
+				return 0, authn.ErrInvalidRegistration
 			default:
 				return id, createErr
 			}
@@ -698,9 +732,9 @@ func newRecoveryAuthenticationService(t *testing.T, notificationURL string, regi
 	require.NoError(t, err)
 	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{
 		LoginName: "alice", Password: "correct horse battery staple", DisplayName: "Alice", Email: "alice@example.com",
-	})
+	}, nextID)
 	require.NoError(t, err)
-	return db, web, principalID
+	return db, web, guidString(principalID)
 }
 
 func authnAPIRowCount(t *testing.T, db *bun.DB, table, condition string, args ...any) int {

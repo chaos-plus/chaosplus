@@ -8,9 +8,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 )
+
+const publicOperationMetadata = "authz.public"
 
 // maxBatchGUIDs bounds a single GET /guid/{count} request. Keep the "maximum" tag
 // on batchInput.Count in sync with this value (struct tags must be literals).
@@ -25,7 +26,7 @@ type batchInput struct {
 // RegisterREST mounts the guid HTTP endpoints, minting ids via next. Ids are
 // string-encoded so they survive JavaScript's 2^53 safe-integer limit.
 func RegisterREST(a huma.API, next NextFunc) {
-	authz.RegisterPublic(a, huma.Operation{
+	registerPublic(a, huma.Operation{
 		OperationID: "next-guid",
 		Method:      http.MethodGet,
 		Path:        "/guid",
@@ -41,7 +42,7 @@ func RegisterREST(a huma.API, next NextFunc) {
 		return respx.OK(ctx, strconv.FormatInt(id, 10)), nil
 	})
 
-	authz.RegisterPublic(a, huma.Operation{
+	registerPublic(a, huma.Operation{
 		OperationID: "next-guid-batch",
 		Method:      http.MethodGet,
 		Path:        "/guid/{count}",
@@ -60,4 +61,12 @@ func RegisterREST(a huma.API, next NextFunc) {
 		}
 		return respx.OK(ctx, ids), nil
 	})
+}
+
+func registerPublic[I, O any](api huma.API, operation huma.Operation, handler func(context.Context, *I) (*O, error)) {
+	if operation.Metadata == nil {
+		operation.Metadata = map[string]any{}
+	}
+	operation.Metadata[publicOperationMetadata] = true
+	huma.Register(api, operation, handler)
 }

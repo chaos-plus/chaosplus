@@ -104,7 +104,7 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Symptom: Department APIs existed in OpenAPI but returned organization_unavailable because production startup had no organization tables.
 - Root cause: The organization module was wired into the application composition root, but the privileged deployment migrator omitted its migration and runtime startup asserted only the IAM schema.
 - Prevention: Every persistent module must be added together to deployment up and rollback dispatch, runtime schema assertions, and deployment lifecycle tests before its API can be accepted.
-- Evidence: Focused race tests passed for internal/app, internal/deployment, internal/modules/organization, and cmd/chaosplus-server; rebuilt startup created iam_departments and the real Chromium department workflow passed.
+- Evidence: Focused race tests passed for the shared application, deployment, and organization packages; rebuilt startup created `iam_departments` and the real Chromium department workflow passed.
 
 
 ## L-2562be1db2b0
@@ -120,7 +120,7 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Symptom: The deployment CLI rejected -c for migration subcommands and panicked on --help.
 - Root cause: A global Cobra command parsed process arguments through the configurator during package init and registered configuration flags as root-local flags instead of inherited persistent flags.
 - Prevention: Construct a fresh Cobra tree per execution, register struct-driven configuration on persistent flags, defer help rendering to Cobra, and prove config flags both before and after a migration subcommand against a real database.
-- Evidence: go test -race ./cmd/chaosplus-server passed with real SQLite migrations for both flag positions; go run ./cmd/chaosplus-server --help exits successfully; the full backend gate passed.
+- Evidence: Race tests for the production server command passed with real SQLite migrations for both flag positions; its `--help` command exited successfully and the full backend gate passed.
 
 
 ## L-c59cffe0aa53
@@ -217,3 +217,11 @@ Evidence-backed reusable backend lessons are appended here by `skill-runtime.py 
 - Root cause: crewjam/saml indirect dependency pinned goxmldsig v1.4.0 via go.mod
 - Prevention: For SAML signing in crewjam/saml, require goxmldsig >= v1.6.0 and go.sum pinning; run govulncheck in the full gate
 - Evidence: go.mod upgraded goxmldsig@v1.6.0; go build, federation tests, and check-gates.ps1 -Scope all -Full all pass; govulncheck reports No vulnerabilities found
+
+
+## L-84dd6858feed
+
+- Symptom: Bun inserts appeared successful and returned an auto-increment value, but the intended model tables remained empty.
+- Root cause: Persistent models omitted an explicit BaseModel table tag while queries attempted to override the inferred table with Table calls, which did not reliably bind model writes to the intended table.
+- Prevention: Every Bun persistence model must declare its canonical table with bun.BaseModel and CRUD must use that model mapping without Table overrides; prove new repositories with a real database round trip.
+- Evidence: The real SQLite conversation event and projection lifecycle test now persists one event and one projection, preserves idempotency, and rebuilds the deleted projection.

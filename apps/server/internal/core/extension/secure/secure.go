@@ -3,7 +3,12 @@
 // router can mount it.
 package secure
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
+
+var ErrInvalidOrigin = errors.New("invalid HTTP origin")
 
 // hstsValue is a 1-year HSTS policy including subdomains. Only sent when HSTS is
 // enabled, which must be the case only when the API is served over HTTPS.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/uptrace/bun"
@@ -20,20 +21,20 @@ import (
 
 const maxActiveCredentials = 10
 
-type IDGenerator func() (string, error)
+type IDGenerator func() (guid.ID, error)
 
 type IdentityProvisioner interface {
-	CreateProvisionedTo(context.Context, bun.IDB, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
-	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, identity.ProvisionedPrincipalInput) (identity.Principal, error)
-	Get(context.Context, string, string) (identity.Principal, error)
+	CreateProvisionedTo(context.Context, bun.IDB, guid.ID, identity.ProvisionedPrincipalInput) (identity.Principal, error)
+	ReplaceProvisionedTo(context.Context, bun.IDB, guid.ID, guid.ID, identity.ProvisionedPrincipalInput) (identity.Principal, error)
+	Get(context.Context, guid.ID, guid.ID) (identity.Principal, error)
 }
 
 type GroupProvisioner interface {
-	CreateProvisionedTo(context.Context, bun.IDB, string, organization.ProvisionedGroupInput) (organization.Group, error)
-	ReplaceProvisionedTo(context.Context, bun.IDB, string, string, organization.ProvisionedGroupInput) (organization.Group, error)
-	DisableProvisionedTo(context.Context, bun.IDB, string, string) (organization.Group, error)
-	Get(context.Context, string, string) (organization.Group, error)
-	ListMembers(context.Context, string, string) ([]organization.GroupMember, error)
+	CreateProvisionedTo(context.Context, bun.IDB, guid.ID, organization.ProvisionedGroupInput) (organization.Group, error)
+	ReplaceProvisionedTo(context.Context, bun.IDB, guid.ID, guid.ID, organization.ProvisionedGroupInput) (organization.Group, error)
+	DisableProvisionedTo(context.Context, bun.IDB, guid.ID, guid.ID) (organization.Group, error)
+	Get(context.Context, guid.ID, guid.ID) (organization.Group, error)
+	ListMembers(context.Context, guid.ID, guid.ID) ([]organization.GroupMember, error)
 }
 
 type Service struct {
@@ -68,8 +69,8 @@ func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator, identitie
 // lockPushResource serializes push and deprovision operations for a single
 // (target, resource_type, resource_id) key so concurrent operations on the
 // same resource cannot race to stale remote state.
-func (s *Service) lockPushResource(targetID, resourceType, resourceID string) func() {
-	key := targetID + "\x00" + resourceType + "\x00" + resourceID
+func (s *Service) lockPushResource(targetID guid.ID, resourceType string, resourceID guid.ID) func() {
+	key := targetID.String() + "\x00" + resourceType + "\x00" + resourceID.String()
 	s.pushMu.Lock()
 	mu, ok := s.pushLocks[key]
 	if !ok {
@@ -81,9 +82,8 @@ func (s *Service) lockPushResource(targetID, resourceType, resourceID string) fu
 	return mu.Unlock
 }
 
-func (s *Service) ListDirectories(ctx context.Context, tenantID string) ([]Directory, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || len(tenantID) > 128 {
+func (s *Service) ListDirectories(ctx context.Context, tenantID guid.ID) ([]Directory, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidDirectory
 	}
 	rows, err := s.repo.listDirectories(ctx, tenantID)
@@ -97,13 +97,13 @@ func (s *Service) ListDirectories(ctx context.Context, tenantID string) ([]Direc
 	return result, nil
 }
 
-func (s *Service) CreateDirectory(ctx context.Context, tenantID, name string) (Directory, error) {
-	tenantID, name = strings.TrimSpace(tenantID), strings.TrimSpace(name)
-	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 {
+func (s *Service) CreateDirectory(ctx context.Context, tenantID guid.ID, name string) (Directory, error) {
+	name = strings.TrimSpace(name)
+	if tenantID.Zero() || name == "" || len(name) > 128 {
 		return Directory{}, ErrInvalidDirectory
 	}
 	id, err := s.nextID()
-	if err != nil || strings.TrimSpace(id) == "" || len(id) > 128 {
+	if err != nil || id.Zero() {
 		return Directory{}, fmt.Errorf("generate SCIM directory id: %w", firstError(err, ErrInvalidDirectory))
 	}
 	now := s.now().UTC().UnixMilli()
@@ -128,9 +128,9 @@ func (s *Service) CreateDirectory(ctx context.Context, tenantID, name string) (D
 	return directoryFromRow(row), nil
 }
 
-func (s *Service) ReplaceDirectory(ctx context.Context, tenantID, id, name, status string, version int64) (Directory, error) {
-	tenantID, id, name, status = strings.TrimSpace(tenantID), strings.TrimSpace(id), strings.TrimSpace(name), strings.TrimSpace(status)
-	if tenantID == "" || id == "" || name == "" || len(name) > 128 || version < 1 || status != DirectoryActive && status != DirectoryDisabled {
+func (s *Service) ReplaceDirectory(ctx context.Context, tenantID, id guid.ID, name, status string, version int64) (Directory, error) {
+	name, status = strings.TrimSpace(name), strings.TrimSpace(status)
+	if tenantID.Zero() || id.Zero() || name == "" || len(name) > 128 || version < 1 || status != DirectoryActive && status != DirectoryDisabled {
 		return Directory{}, ErrInvalidDirectory
 	}
 	now := s.now().UTC().UnixMilli()
@@ -164,8 +164,8 @@ func (s *Service) ReplaceDirectory(ctx context.Context, tenantID, id, name, stat
 	return directoryFromRow(updated), nil
 }
 
-func (s *Service) ListCredentials(ctx context.Context, tenantID, directoryID string) ([]Credential, error) {
-	if _, err := s.repo.getDirectory(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(directoryID)); err != nil {
+func (s *Service) ListCredentials(ctx context.Context, tenantID, directoryID guid.ID) ([]Credential, error) {
+	if _, err := s.repo.getDirectory(ctx, tenantID, directoryID); err != nil {
 		return nil, err
 	}
 	rows, err := s.repo.listCredentials(ctx, directoryID)
@@ -179,17 +179,16 @@ func (s *Service) ListCredentials(ctx context.Context, tenantID, directoryID str
 	return result, nil
 }
 
-func (s *Service) CreateCredential(ctx context.Context, tenantID, directoryID, name string, expiresAt *time.Time) (CredentialSecret, error) {
-	tenantID, directoryID, name = strings.TrimSpace(tenantID), strings.TrimSpace(directoryID), strings.TrimSpace(name)
+func (s *Service) CreateCredential(ctx context.Context, tenantID, directoryID guid.ID, name string, expiresAt *time.Time) (CredentialSecret, error) {
+	name = strings.TrimSpace(name)
 	nowTime := s.now().UTC()
-	if tenantID == "" || directoryID == "" || name == "" || len(name) > 128 || expiresAt != nil && !expiresAt.UTC().After(nowTime) {
+	if tenantID.Zero() || directoryID.Zero() || name == "" || len(name) > 128 || expiresAt != nil && !expiresAt.UTC().After(nowTime) {
 		return CredentialSecret{}, ErrInvalidDirectory
 	}
-	idPart, err := s.nextID()
-	if err != nil || idPart == "" || len(idPart) > 110 {
+	id, err := s.nextID()
+	if err != nil || id.Zero() {
 		return CredentialSecret{}, firstError(err, ErrInvalidDirectory)
 	}
-	id := "scim_" + idPart
 	secret, err := randomTokenSecret()
 	if err != nil {
 		return CredentialSecret{}, err
@@ -227,12 +226,11 @@ func (s *Service) CreateCredential(ctx context.Context, tenantID, directoryID, n
 	if err != nil {
 		return CredentialSecret{}, fmt.Errorf("create SCIM credential: %w", err)
 	}
-	return CredentialSecret{Credential: credentialFromRow(row), Token: id + "." + secret}, nil
+	return CredentialSecret{Credential: credentialFromRow(row), Token: id.String() + "." + secret}, nil
 }
 
-func (s *Service) RevokeCredential(ctx context.Context, tenantID, directoryID, id string) error {
-	tenantID, directoryID, id = strings.TrimSpace(tenantID), strings.TrimSpace(directoryID), strings.TrimSpace(id)
-	if tenantID == "" || directoryID == "" || id == "" {
+func (s *Service) RevokeCredential(ctx context.Context, tenantID, directoryID, id guid.ID) error {
+	if tenantID.Zero() || directoryID.Zero() || id.Zero() {
 		return ErrInvalidDirectory
 	}
 	now := s.now().UTC().UnixMilli()
@@ -261,10 +259,14 @@ func (s *Service) Authenticate(ctx context.Context, authorization string) (AuthC
 		return AuthContext{}, ErrUnauthorized
 	}
 	id, secret, ok := strings.Cut(fields[1], ".")
-	if !ok || !strings.HasPrefix(id, "scim_") || id == "" || secret == "" || strings.Contains(secret, ".") {
+	if !ok || secret == "" || strings.Contains(secret, ".") {
 		return AuthContext{}, ErrUnauthorized
 	}
-	row, err := s.repo.credentialForAuth(ctx, id)
+	credentialID, err := guid.Parse(id)
+	if err != nil {
+		return AuthContext{}, ErrUnauthorized
+	}
+	row, err := s.repo.credentialForAuth(ctx, credentialID)
 	if err != nil {
 		return AuthContext{}, err
 	}
@@ -276,7 +278,7 @@ func (s *Service) Authenticate(ctx context.Context, authorization string) (AuthC
 	if err != nil || !valid {
 		return AuthContext{}, ErrUnauthorized
 	}
-	if err := s.repo.touchCredential(ctx, id, now); err != nil {
+	if err := s.repo.touchCredential(ctx, credentialID, now); err != nil {
 		return AuthContext{}, fmt.Errorf("record SCIM credential use: %w", err)
 	}
 	return AuthContext{TenantID: row.TenantID, DirectoryID: row.DirectoryID, CredentialID: row.ID}, nil

@@ -36,7 +36,7 @@ func TestRootSignerRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, signer.keyID, 16)
 
-	anchor := Anchor{Schema: anchorSchema, TenantID: "tenant", HeadSequence: 1, HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC()}
+	anchor := Anchor{Schema: anchorSchema, TenantID: testID("tenant"), HeadSequence: 1, HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC()}
 	anchor.AnchorHash = computeAnchorHash(anchor)
 	require.NoError(t, signer.Sign(&anchor))
 	assert.True(t, VerifyRootSignature(anchor))
@@ -45,7 +45,7 @@ func TestRootSignerRoundTrip(t *testing.T) {
 	changed.AnchorHash = strings.Repeat("0", 64)
 	assert.False(t, VerifyRootSignature(changed), "the signature must commit the anchor hash")
 
-	unsigned := Anchor{Schema: anchorSchema, TenantID: "tenant", HeadSequence: 1, HeadHash: strings.Repeat("c", 64)}
+	unsigned := Anchor{Schema: anchorSchema, TenantID: testID("tenant"), HeadSequence: 1, HeadHash: strings.Repeat("c", 64)}
 	unsigned.AnchorHash = computeAnchorHash(unsigned)
 	assert.False(t, VerifyRootSignature(unsigned), "unsigned anchors must not verify as signed")
 
@@ -71,7 +71,7 @@ func TestRootSignerRoundTrip(t *testing.T) {
 func TestAnchorHashIsCanonical(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	anchor := Anchor{
-		Schema: anchorSchema, TenantID: "tenant-a", HeadSequence: 7, HeadHash: strings.Repeat("a", 64),
+		Schema: anchorSchema, TenantID: testID("tenant-a"), HeadSequence: 7, HeadHash: strings.Repeat("a", 64),
 		AnchoredAt: now, PreviousAnchorHash: strings.Repeat("b", 64),
 	}
 	anchor.AnchorHash = computeAnchorHash(anchor)
@@ -121,13 +121,13 @@ func TestAnchorStoreRealObjectLock(t *testing.T) {
 	})
 	require.NoError(t, err)
 	anchor := Anchor{
-		Schema: anchorSchema, TenantID: "tenant-lock", HeadSequence: 1,
+		Schema: anchorSchema, TenantID: testID("tenant-lock"), HeadSequence: 1,
 		HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC(),
 	}
 	anchor.AnchorHash = computeAnchorHash(anchor)
 	require.NoError(t, store.Put(t.Context(), anchor))
 
-	key := store.objectKey("tenant-lock", 1)
+	key := store.objectKey(testID("tenant-lock"), 1)
 	info, err := client.StatObject(t.Context(), "audit-anchor-lock", key, minio.StatObjectOptions{})
 	require.NoError(t, err)
 	assert.Greater(t, info.Size, int64(100), "anchor payload is the full JSON record")
@@ -138,7 +138,7 @@ func TestAnchorStoreRealObjectLock(t *testing.T) {
 	assert.Equal(t, minio.Compliance, *mode, "anchors must use compliance retention")
 	assert.True(t, until.After(time.Now().Add(29*24*time.Hour)), "retention must cover the configured window")
 
-	anchors, err := store.List(t.Context(), "tenant-lock")
+	anchors, err := store.List(t.Context(), testID("tenant-lock"))
 	require.NoError(t, err)
 	require.Len(t, anchors, 1)
 	assert.Equal(t, anchor.AnchorHash, anchors[0].AnchorHash)
@@ -167,23 +167,23 @@ func TestAuditAnchoringRealWORMLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
 
 	for i := 0; i < 3; i++ {
-		_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-worm", EventType: "created", TargetType: "client", TargetID: "c", Outcome: "success"})
+		_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-worm"), EventType: "created", TargetType: "client", TargetID: testID("c"), Outcome: "success"})
 		require.NoError(t, err)
 	}
-	first, err := service.Anchor(t.Context(), "tenant-worm")
+	first, err := service.Anchor(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), first.HeadSequence)
 	assert.Equal(t, "", first.PreviousAnchorHash)
 	assert.Equal(t, first.AnchorHash, computeAnchorHash(first))
 
-	same, err := service.Anchor(t.Context(), "tenant-worm")
+	same, err := service.Anchor(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.Equal(t, first, same, "anchoring an already anchored head is idempotent")
 
-	integrity, err := service.Verify(t.Context(), "tenant-worm")
+	integrity, err := service.Verify(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.True(t, integrity.Valid)
 	assert.True(t, integrity.Anchor.Enabled)
@@ -192,20 +192,20 @@ func TestAuditAnchoringRealWORMLifecycle(t *testing.T) {
 	assert.Equal(t, first.AnchorHash, integrity.Anchor.Hash)
 
 	for i := 0; i < 2; i++ {
-		_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-worm", EventType: "updated", TargetType: "client", TargetID: "c", Outcome: "success"})
+		_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-worm"), EventType: "updated", TargetType: "client", TargetID: testID("c"), Outcome: "success"})
 		require.NoError(t, err)
 	}
-	second, err := service.Anchor(t.Context(), "tenant-worm")
+	second, err := service.Anchor(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), second.HeadSequence)
 	assert.Equal(t, first.AnchorHash, second.PreviousAnchorHash, "anchors must link into a chain")
-	integrity, err = service.Verify(t.Context(), "tenant-worm")
+	integrity, err = service.Verify(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.True(t, integrity.Valid)
 	assert.True(t, integrity.Anchor.Valid)
 	assert.Equal(t, int64(5), integrity.Anchor.Sequence)
 
-	anchors, err := store.List(t.Context(), "tenant-worm")
+	anchors, err := store.List(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err)
 	assert.Equal(t, []int64{3, 5}, []int64{anchors[0].HeadSequence, anchors[1].HeadSequence})
 
@@ -214,7 +214,7 @@ func TestAuditAnchoringRealWORMLifecycle(t *testing.T) {
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 	})
 	require.NoError(t, err)
-	anchors, err = secondStore.List(t.Context(), "tenant-worm")
+	anchors, err = secondStore.List(t.Context(), testID("tenant-worm"))
 	require.NoError(t, err, "a pre-existing locked bucket must be accepted")
 	require.Len(t, anchors, 2)
 }
@@ -229,16 +229,16 @@ func TestAuditAnchorStoreUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
-	_, err = service.Anchor(t.Context(), "tenant")
+	_, err = service.Anchor(t.Context(), testID("tenant"))
 	assert.ErrorIs(t, err, ErrAnchorUnavailable)
-	_, err = service.Verify(t.Context(), "tenant")
+	_, err = service.Verify(t.Context(), testID("tenant"))
 	assert.ErrorIs(t, err, ErrAnchorUnavailable)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	header := authz.TenantHeader + ": tenant"
+	header := authz.TenantHeader + ": " + wireID("tenant")
 	response := api.Post("/iam/audit-anchor", header)
 	assert.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "audit_anchor_unavailable")
@@ -252,16 +252,16 @@ func TestAuditAnchorRequiresObjectLocking(t *testing.T) {
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 	})
 	require.NoError(t, err)
-	err = store.Put(t.Context(), Anchor{Schema: anchorSchema, TenantID: "tenant-plain", HeadSequence: 1, HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC()})
+	err = store.Put(t.Context(), Anchor{Schema: anchorSchema, TenantID: testID("tenant-plain"), HeadSequence: 1, HeadHash: strings.Repeat("a", 64), AnchoredAt: time.Now().UTC()})
 	assert.Error(t, err, "a non-locked bucket must reject retained writes")
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-lock", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-lock"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
-	_, err = service.Anchor(t.Context(), "tenant-lock")
+	_, err = service.Anchor(t.Context(), testID("tenant-lock"))
 	assert.ErrorIs(t, err, ErrAnchorUnavailable, "anchoring into a non-locked bucket must fail closed")
 }
 
@@ -276,8 +276,8 @@ func TestAuditAnchorListSkipsForeignObjectsAndFailsClosedOnCorruption(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-foreign", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-foreign"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
 	require.NoError(t, store.ensureBucket(t.Context()), "bucket must exist before raw foreign objects are written")
 
@@ -288,14 +288,14 @@ func TestAuditAnchorListSkipsForeignObjectsAndFailsClosedOnCorruption(t *testing
 	_, err = client.PutObject(t.Context(), "audit-foreign", store.prefix+"/tenant-foreign/999.json", strings.NewReader(`{"schema":"other"}`), int64(len(`{"schema":"other"}`)), minio.PutObjectOptions{})
 	require.NoError(t, err)
 
-	integrity, err := service.Verify(t.Context(), "tenant-foreign")
+	integrity, err := service.Verify(t.Context(), testID("tenant-foreign"))
 	require.NoError(t, err)
 	assert.True(t, integrity.Valid)
 	assert.True(t, integrity.Anchor.Valid, "foreign objects are skipped, not counted as anchors")
 
 	_, err = client.PutObject(t.Context(), "audit-foreign", store.prefix+"/tenant-foreign/2.json", strings.NewReader("{broken json"), int64(len("{broken json")), minio.PutObjectOptions{})
 	require.NoError(t, err)
-	_, err = service.Verify(t.Context(), "tenant-foreign")
+	_, err = service.Verify(t.Context(), testID("tenant-foreign"))
 	assert.ErrorIs(t, err, ErrAnchorUnavailable, "a corrupted anchor object must fail closed")
 }
 
@@ -310,12 +310,12 @@ func TestAuditAnchorDetectsLocalRollback(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
 	for i := 0; i < 5; i++ {
-		_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-rollback", EventType: "created", Outcome: "success"})
+		_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-rollback"), EventType: "created", Outcome: "success"})
 		require.NoError(t, err)
 	}
-	_, err = service.Anchor(t.Context(), "tenant-rollback")
+	_, err = service.Anchor(t.Context(), testID("tenant-rollback"))
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(t.Context(), `DROP TRIGGER trg_iam_audit_events_no_delete`)
@@ -327,9 +327,9 @@ func TestAuditAnchorDetectsLocalRollback(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `UPDATE iam_audit_heads SET sequence = 3, event_hash = (SELECT event_hash FROM iam_audit_events WHERE tenant_id = 'tenant-rollback' AND sequence = 3) WHERE tenant_id = 'tenant-rollback'`)
 	require.NoError(t, err)
 
-	_, err = service.Anchor(t.Context(), "tenant-rollback")
+	_, err = service.Anchor(t.Context(), testID("tenant-rollback"))
 	assert.ErrorIs(t, err, ErrIntegrity, "a local chain rolled back behind its anchors must not be re-anchored")
-	integrity, err := service.Verify(t.Context(), "tenant-rollback")
+	integrity, err := service.Verify(t.Context(), testID("tenant-rollback"))
 	require.NoError(t, err)
 	assert.False(t, integrity.Anchor.Valid, "the rolled-back chain must no longer match its anchors")
 }
@@ -345,10 +345,10 @@ func TestAuditAnchorDetectsDatabaseTampering(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	event, err := service.Append(t.Context(), EventInput{TenantID: "tenant-tamper", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	event, err := service.Append(t.Context(), EventInput{TenantID: testID("tenant-tamper"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
-	_, err = service.Anchor(t.Context(), "tenant-tamper")
+	_, err = service.Anchor(t.Context(), testID("tenant-tamper"))
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(t.Context(), `DROP TRIGGER trg_iam_audit_events_no_update`)
@@ -356,11 +356,11 @@ func TestAuditAnchorDetectsDatabaseTampering(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `UPDATE iam_audit_events SET event_hash = 'tampered' WHERE id = ?`, event.ID)
 	require.NoError(t, err)
 
-	integrity, err := service.Verify(t.Context(), "tenant-tamper")
+	integrity, err := service.Verify(t.Context(), testID("tenant-tamper"))
 	require.NoError(t, err)
 	assert.False(t, integrity.Valid, "tampered events must fail chain verification")
 	assert.False(t, integrity.Anchor.Valid, "tampered events must fail anchor verification")
-	_, err = service.Anchor(t.Context(), "tenant-tamper")
+	_, err = service.Anchor(t.Context(), testID("tenant-tamper"))
 	assert.ErrorIs(t, err, ErrIntegrity, "tampered chains must not be re-anchored")
 }
 
@@ -375,22 +375,22 @@ func TestAuditAnchorDetectsSubstitutedAnchor(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
 	for i := 0; i < 2; i++ {
-		_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-sub", EventType: "created", Outcome: "success"})
+		_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-sub"), EventType: "created", Outcome: "success"})
 		require.NoError(t, err)
 	}
-	anchored, err := service.Anchor(t.Context(), "tenant-sub")
+	anchored, err := service.Anchor(t.Context(), testID("tenant-sub"))
 	require.NoError(t, err)
 
 	substituted := anchored
 	substituted.HeadHash = strings.Repeat("0", 64)
 	payload, err := json.Marshal(substituted)
 	require.NoError(t, err)
-	_, err = client.PutObject(t.Context(), "audit-worm-substitution", store.objectKey("tenant-sub", 2), strings.NewReader(string(payload)), int64(len(payload)), minio.PutObjectOptions{ContentType: "application/json"})
+	_, err = client.PutObject(t.Context(), "audit-worm-substitution", store.objectKey(testID("tenant-sub"), 2), strings.NewReader(string(payload)), int64(len(payload)), minio.PutObjectOptions{ContentType: "application/json"})
 	require.NoError(t, err)
 
-	integrity, err := service.Verify(t.Context(), "tenant-sub")
+	integrity, err := service.Verify(t.Context(), testID("tenant-sub"))
 	require.NoError(t, err)
 	assert.False(t, integrity.Anchor.Valid, "a substituted anchor must fail self-hash verification")
 }
@@ -406,14 +406,14 @@ func TestAuditAnchorConflictObjectFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-conflict", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-conflict"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
 	require.NoError(t, store.ensureBucket(t.Context()), "bucket must exist before the conflicting object is written")
-	_, err = client.PutObject(t.Context(), "audit-worm-conflict", store.objectKey("tenant-conflict", 1), strings.NewReader(`{"schema":"other"}`), int64(len(`{"schema":"other"}`)), minio.PutObjectOptions{})
+	_, err = client.PutObject(t.Context(), "audit-worm-conflict", store.objectKey(testID("tenant-conflict"), 1), strings.NewReader(`{"schema":"other"}`), int64(len(`{"schema":"other"}`)), minio.PutObjectOptions{})
 	require.NoError(t, err)
 
-	_, err = service.Anchor(t.Context(), "tenant-conflict")
+	_, err = service.Anchor(t.Context(), testID("tenant-conflict"))
 	assert.ErrorIs(t, err, ErrAnchorUnavailable, "a non-anchor object squatting the anchor key must fail closed")
 }
 
@@ -422,10 +422,10 @@ func TestAuditAnchorDisabledAndEmpty(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewService(db)
-	_, err = service.Anchor(t.Context(), "tenant")
+	service := NewService(db, newTestIDGenerator())
+	_, err = service.Anchor(t.Context(), testID("tenant"))
 	assert.ErrorIs(t, err, ErrAnchorDisabled)
-	integrity, err := service.Verify(t.Context(), "tenant")
+	integrity, err := service.Verify(t.Context(), testID("tenant"))
 	require.NoError(t, err)
 	assert.False(t, integrity.Anchor.Enabled)
 
@@ -435,19 +435,19 @@ func TestAuditAnchorDisabledAndEmpty(t *testing.T) {
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 	})
 	require.NoError(t, err)
-	anchored := NewServiceWithAnchor(db, store)
-	_, err = anchored.Anchor(t.Context(), "tenant-empty")
+	anchored := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = anchored.Anchor(t.Context(), testID("tenant-empty"))
 	assert.ErrorIs(t, err, ErrAnchorEmpty)
-	integrity, err = anchored.Verify(t.Context(), "tenant-empty")
+	integrity, err = anchored.Verify(t.Context(), testID("tenant-empty"))
 	require.NoError(t, err)
 	assert.True(t, integrity.Anchor.Enabled)
 	assert.True(t, integrity.Anchor.Valid, "no anchors yet is not an integrity failure")
 	assert.NoError(t, anchorStoreError(nil), "nil store errors must pass through")
 
-	anchoredService := NewServiceWithAnchor(db, store)
-	_, err = anchoredService.Anchor(t.Context(), "")
+	anchoredService := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = anchoredService.Anchor(t.Context(), 0)
 	assert.ErrorIs(t, err, ErrInvalidFilter)
-	_, err = anchoredService.Anchor(t.Context(), strings.Repeat("t", 129))
+	_, err = anchoredService.Anchor(t.Context(), parseGUID(strings.Repeat("t", 129)))
 	assert.ErrorIs(t, err, ErrInvalidFilter)
 }
 
@@ -478,7 +478,7 @@ func TestAuditAnchorAPIErrorMappings(t *testing.T) {
 }
 
 func TestExportFilterAndValidationUnit(t *testing.T) {
-	input := &exportInput{TenantID: "tenant"}
+	input := &exportInput{TenantID: wireID("tenant")}
 	_, err := exportFilter(input)
 	require.NoError(t, err)
 	input.From = "not-a-time"
@@ -489,9 +489,9 @@ func TestExportFilterAndValidationUnit(t *testing.T) {
 	_, err = exportFilter(input)
 	require.Error(t, err, "an invalid RFC3339 to must be rejected")
 
-	assert.ErrorIs(t, validateFilter(Filter{TenantID: ""}, false), ErrInvalidFilter)
-	assert.ErrorIs(t, validateFilter(Filter{TenantID: "tenant"}, true), ErrInvalidFilter, "pagination requires a positive limit")
-	assert.ErrorIs(t, validateFilter(Filter{TenantID: "tenant", Limit: 50, Offset: -1}, true), ErrInvalidFilter)
+	assert.NoError(t, validateFilter(Filter{TenantID: 0}, false), "zero tenant is the platform audit scope")
+	assert.ErrorIs(t, validateFilter(Filter{TenantID: testID("tenant")}, true), ErrInvalidFilter, "pagination requires a positive limit")
+	assert.ErrorIs(t, validateFilter(Filter{TenantID: testID("tenant"), Limit: 50, Offset: -1}, true), ErrInvalidFilter)
 }
 
 func TestAuditAnchorHTTPContract(t *testing.T) {
@@ -505,8 +505,8 @@ func TestAuditAnchorHTTPContract(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
-	service := NewServiceWithAnchor(db, store)
-	_, err = service.Append(t.Context(), EventInput{TenantID: "tenant-api", EventType: "created", Outcome: "success"})
+	service := NewServiceWithAnchor(db, store, newTestIDGenerator())
+	_, err = service.Append(t.Context(), EventInput{TenantID: testID("tenant-api"), EventType: "created", Outcome: "success"})
 	require.NoError(t, err)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
@@ -535,8 +535,8 @@ func TestAuditAnchorHTTPDisabled(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	_, api := humatest.New(t)
-	RegisterREST(api, NewService(db), authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	response := api.Post("/iam/audit-anchor", authz.TenantHeader+": tenant")
+	RegisterREST(api, NewService(db, newTestIDGenerator()), authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
+	response := api.Post("/iam/audit-anchor", authz.TenantHeader + ": " + wireID("tenant"))
 	assert.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "audit_anchor_not_enabled")
 }

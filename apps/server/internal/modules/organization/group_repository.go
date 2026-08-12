@@ -8,13 +8,14 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type groupRow struct {
 	bun.BaseModel `bun:"table:iam_groups"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
 	Name          string
 	NameKey       string `bun:"name_key"`
 	GroupType     string `bun:"group_type"`
@@ -29,17 +30,17 @@ type groupRow struct {
 
 type groupMemberRow struct {
 	bun.BaseModel `bun:"table:iam_group_members"`
-	TenantID      string `bun:"tenant_id,pk"`
-	GroupID       string `bun:"group_id,pk"`
-	PrincipalID   string `bun:"principal_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	GroupID       guid.ID `bun:"group_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	StartsAt      int64
 	EndsAt        int64
 	CreatedAt     int64
 	UpdatedAt     int64
-	DisplayName   string `bun:"display_name,scanonly"`
-	Email         string `bun:"email,scanonly"`
-	DepartmentID  string `bun:"department_id,scanonly"`
-	Status        string `bun:"status,scanonly"`
+	DisplayName   string  `bun:"display_name,scanonly"`
+	Email         string  `bun:"email,scanonly"`
+	DepartmentID  guid.ID `bun:"department_id,scanonly"`
+	Status        string  `bun:"status,scanonly"`
 }
 
 type GroupRepository struct {
@@ -63,7 +64,7 @@ func (r *GroupRepository) withExecutor(executor bun.IDB) *GroupRepository {
 	return &GroupRepository{db: r.db, executor: executor, dialect: r.dialect}
 }
 
-func (r *GroupRepository) list(ctx context.Context, tenantID string) ([]groupRow, error) {
+func (r *GroupRepository) list(ctx context.Context, tenantID guid.ID) ([]groupRow, error) {
 	rows := make([]groupRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("sort_order ASC", "name_key ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
@@ -71,7 +72,7 @@ func (r *GroupRepository) list(ctx context.Context, tenantID string) ([]groupRow
 	return rows, nil
 }
 
-func (r *GroupRepository) get(ctx context.Context, tenantID, id string) (groupRow, error) {
+func (r *GroupRepository) get(ctx context.Context, tenantID, id guid.ID) (groupRow, error) {
 	var row groupRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -108,22 +109,22 @@ func (r *GroupRepository) update(ctx context.Context, row *groupRow, expectedVer
 	return nil
 }
 
-func (r *GroupRepository) listDynamicMemberCandidates(ctx context.Context, tenantID, groupID string) ([]groupMemberRow, error) {
+func (r *GroupRepository) listDynamicMemberCandidates(ctx context.Context, tenantID, groupID guid.ID) ([]groupMemberRow, error) {
 	rows := make([]groupMemberRow, 0)
 	err := r.executor.NewSelect().
 		TableExpr("iam_tenant_members AS tm").
 		ColumnExpr("? AS group_id", groupID).
-		ColumnExpr("tm.user_subject AS principal_id, tm.display_name, tm.email, COALESCE(md.department_id, '') AS department_id, tm.status, tm.created_at, tm.updated_at").
-		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.user_subject").
+		ColumnExpr("tm.principal_id, tm.display_name, tm.email, COALESCE(md.department_id, 0) AS department_id, tm.status, tm.created_at, tm.updated_at").
+		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.principal_id").
 		Where("tm.tenant_id = ? AND tm.status = ?", tenantID, StatusActive).
-		OrderExpr("tm.display_name ASC, tm.user_subject ASC").Scan(ctx, &rows)
+		OrderExpr("tm.display_name ASC, tm.principal_id ASC").Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("list dynamic group member candidates: %w", err)
 	}
 	return rows, nil
 }
 
-func (r *GroupRepository) delete(ctx context.Context, tenantID, id string, version int64) error {
+func (r *GroupRepository) delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
 	count, err := r.executor.NewSelect().Model((*groupMemberRow)(nil)).Where("tenant_id = ? AND group_id = ?", tenantID, id).Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count group members: %w", err)
@@ -155,13 +156,13 @@ func (r *GroupRepository) delete(ctx context.Context, tenantID, id string, versi
 	return nil
 }
 
-func (r *GroupRepository) listMembers(ctx context.Context, tenantID, groupID string) ([]groupMemberRow, error) {
+func (r *GroupRepository) listMembers(ctx context.Context, tenantID, groupID guid.ID) ([]groupMemberRow, error) {
 	rows := make([]groupMemberRow, 0)
 	err := r.executor.NewSelect().
 		TableExpr("iam_group_members AS gm").
 		ColumnExpr("gm.tenant_id, gm.group_id, gm.principal_id, gm.starts_at, gm.ends_at, gm.created_at, gm.updated_at").
 		ColumnExpr("tm.display_name, tm.email").
-		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.user_subject = gm.principal_id").
+		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.principal_id = gm.principal_id").
 		Where("gm.tenant_id = ? AND gm.group_id = ?", tenantID, groupID).
 		OrderExpr("tm.display_name ASC, gm.principal_id ASC").Scan(ctx, &rows)
 	if err != nil {
@@ -170,13 +171,13 @@ func (r *GroupRepository) listMembers(ctx context.Context, tenantID, groupID str
 	return rows, nil
 }
 
-func (r *GroupRepository) getMember(ctx context.Context, tenantID, groupID, principalID string) (groupMemberRow, error) {
+func (r *GroupRepository) getMember(ctx context.Context, tenantID, groupID, principalID guid.ID) (groupMemberRow, error) {
 	var row groupMemberRow
 	err := r.executor.NewSelect().
 		TableExpr("iam_group_members AS gm").
 		ColumnExpr("gm.tenant_id, gm.group_id, gm.principal_id, gm.starts_at, gm.ends_at, gm.created_at, gm.updated_at").
 		ColumnExpr("tm.display_name, tm.email").
-		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.user_subject = gm.principal_id").
+		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.principal_id = gm.principal_id").
 		Where("gm.tenant_id = ? AND gm.group_id = ? AND gm.principal_id = ?", tenantID, groupID, principalID).Scan(ctx, &row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -198,7 +199,7 @@ func (r *GroupRepository) putMember(ctx context.Context, row *groupMemberRow) er
 	return nil
 }
 
-func (r *GroupRepository) deleteMember(ctx context.Context, tenantID, groupID, principalID string) (bool, error) {
+func (r *GroupRepository) deleteMember(ctx context.Context, tenantID, groupID, principalID guid.ID) (bool, error) {
 	result, err := r.executor.NewDelete().Model((*groupMemberRow)(nil)).Where("tenant_id = ? AND group_id = ? AND principal_id = ?", tenantID, groupID, principalID).Exec(ctx)
 	if err != nil {
 		return false, fmt.Errorf("delete group member: %w", err)

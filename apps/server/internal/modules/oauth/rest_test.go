@@ -70,7 +70,7 @@ func TestOAuthErrorsUseProtocolBody(t *testing.T) {
 
 func TestOAuthHTTPAuthorizationCodeLifecycle(t *testing.T) {
 	service, authentication, _ := newOAuthTestService(t)
-	client, _, err := service.CreateClient(t.Context(), "tenant", "Browser", []string{"https://client.example/callback"}, []string{"authorization_code", "refresh_token"}, []string{"openid", "profile"}, true)
+	client, _, err := service.CreateClient(t.Context(), testID("tenant"), "Browser", []string{"https://client.example/callback"}, []string{"authorization_code", "refresh_token"}, []string{"openid", "profile"}, true)
 	require.NoError(t, err)
 	session, _, err := authentication.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestOAuthHTTPAuthorizationCodeLifecycle(t *testing.T) {
 	require.NotEmpty(t, tokens.IDToken)
 	assert.Equal(t, http.StatusOK, api.Get("/oauth/userinfo", "Authorization: Bearer "+tokens.AccessToken).Code)
 
-	resource, secret, err := service.CreateClient(t.Context(), "tenant", "Resource Server", nil, []string{"client_credentials"}, []string{"introspect"}, false)
+	resource, secret, err := service.CreateClient(t.Context(), testID("tenant"), "Resource Server", nil, []string{"client_credentials"}, []string{"introspect"}, false)
 	require.NoError(t, err)
 	basic := base64.StdEncoding.EncodeToString([]byte(resource.ID + ":" + secret))
 	introspection := api.Post("/oauth/introspect", "Authorization: Basic "+basic, "Content-Type: application/x-www-form-urlencoded", strings.NewReader(url.Values{"token": {tokens.AccessToken}}.Encode()))
@@ -126,7 +126,7 @@ func TestOAuthClientManagementHTTPWorkflow(t *testing.T) {
 	service, _, _ := newOAuthTestService(t)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant"
+	tenant := authz.TenantHeader + ": " + wireID("tenant")
 
 	created := api.Post("/iam/oauth-clients", tenant, map[string]any{
 		"name": "Worker", "grant_types": []string{"client_credentials"},
@@ -170,23 +170,23 @@ func TestOAuthManagementDatabaseFailures(t *testing.T) {
 	service, _, _ := newOAuthTestService(t)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant"
+	tenant := authz.TenantHeader + ": " + wireID("tenant")
 	require.NoError(t, service.db.Close())
 
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Get("/iam/oauth-clients", tenant).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/oauth-clients", tenant, map[string]any{
 		"name": "Worker", "grant_types": []string{"client_credentials"}, "scopes": []string{"jobs.read"}, "public_client": false,
 	}).Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/oauth-clients/client", tenant, map[string]any{
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/oauth-clients/"+wireID("client"), tenant, map[string]any{
 		"name": "Worker", "grant_types": []string{"client_credentials"}, "scopes": []string{"jobs.read"}, "public_client": false, "status": "active",
 	}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Post("/iam/oauth-clients/client/rotate-secret", tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/oauth-clients/client", tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Post("/iam/oauth-clients/"+wireID("client")+"/rotate-secret", tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/oauth-clients/"+wireID("client"), tenant).Code)
 }
 
 func TestOAuthHTTPProtocolFailureBranches(t *testing.T) {
 	service, authentication, _ := newOAuthTestService(t)
-	client, _, err := service.CreateClient(t.Context(), "tenant", "Browser", []string{"https://client.example/callback"}, []string{"authorization_code"}, []string{"openid"}, true)
+	client, _, err := service.CreateClient(t.Context(), testID("tenant"), "Browser", []string{"https://client.example/callback"}, []string{"authorization_code"}, []string{"openid"}, true)
 	require.NoError(t, err)
 	session, _, err := authentication.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestOAuthHTTPProtocolFailureBranches(t *testing.T) {
 
 func TestOAuthHTTPTokenServerFailure(t *testing.T) {
 	service, authentication, _ := newOAuthTestService(t)
-	client, _, err := service.CreateClient(t.Context(), "tenant", "Browser", []string{"https://client.example/callback"}, []string{"authorization_code"}, []string{"openid"}, true)
+	client, _, err := service.CreateClient(t.Context(), testID("tenant"), "Browser", []string{"https://client.example/callback"}, []string{"authorization_code"}, []string{"openid"}, true)
 	require.NoError(t, err)
 	session, _, err := authentication.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)

@@ -4,14 +4,22 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseGovernanceID(value string) (guid.ID, error) {
+	id, err := guid.Parse(value)
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
 
 type tenantInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
@@ -47,7 +55,11 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		OperationID: "governance-list-requestable-roles", Method: http.MethodGet, Path: "/iam/requestable-roles",
 		Summary: "List tenant roles available for access requests", Tags: []string{"governance"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]RequestableRole], error) {
-		items, err := service.RequestableRoles(ctx, in.TenantID)
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.RequestableRoles(ctx, tenantID)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -59,12 +71,20 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Request time-limited membership in a tenant role", Tags: []string{"governance"}, DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *createRequestInput) (*respx.Body[AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
 		principalID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.Create(ctx, in.TenantID, principalID, CreateAccessRequest{
-			RoleID: in.Body.RoleID, Reason: in.Body.Reason, AccessExpiresAt: in.Body.AccessExpiresAt,
+		roleID, err := parseGovernanceID(in.Body.RoleID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Create(ctx, tenantID, principalID, CreateAccessRequest{
+			RoleID: roleID, Reason: in.Body.Reason, AccessExpiresAt: in.Body.AccessExpiresAt,
 		})
 		if err != nil {
 			return nil, governanceError(err)
@@ -76,11 +96,15 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		OperationID: "governance-list-my-access-requests", Method: http.MethodGet, Path: "/iam/my/access-requests",
 		Summary: "List the current principal's tenant access requests", Tags: []string{"governance"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
 		principalID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		items, err := service.List(ctx, in.TenantID, principalID)
+		items, err := service.List(ctx, tenantID, principalID)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -91,7 +115,11 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		OperationID: "governance-list-access-requests", Method: http.MethodGet, Path: "/iam/access-requests",
 		Summary: "List tenant access requests for approval", Tags: []string{"governance"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_request", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[[]AccessRequest], error) {
-		items, err := service.List(ctx, in.TenantID, "")
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.List(ctx, tenantID, 0)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -103,11 +131,19 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Approve an access request and activate its temporary role grant", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_request", Verb: "approve"}, func(ctx context.Context, in *decisionInput) (*respx.Body[AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
 		actorID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.Approve(ctx, in.TenantID, in.ID, actorID, in.Body.Note)
+		item, err := service.Approve(ctx, tenantID, id, actorID, in.Body.Note)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -119,11 +155,19 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Reject a pending access request", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_request", Verb: "approve"}, func(ctx context.Context, in *decisionInput) (*respx.Body[AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
 		actorID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.Reject(ctx, in.TenantID, in.ID, actorID, in.Body.Note)
+		item, err := service.Reject(ctx, tenantID, id, actorID, in.Body.Note)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -135,11 +179,19 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Revoke an approved temporary role grant", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, authz.Guard{Resource: "access_request", Verb: "approve"}, func(ctx context.Context, in *revokeInput) (*respx.Body[AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
 		actorID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.Revoke(ctx, in.TenantID, in.ID, actorID, in.Body.Reason)
+		item, err := service.Revoke(ctx, tenantID, id, actorID, in.Body.Reason)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -151,11 +203,19 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Withdraw a pending request or relinquish its approved access", Tags: []string{"governance"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *revokeInput) (*respx.Body[AccessRequest], error) {
+		tenantID, err := parseGovernanceID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseGovernanceID(in.ID)
+		if err != nil {
+			return nil, err
+		}
 		principalID, err := humanPrincipal(ctx)
 		if err != nil {
 			return nil, err
 		}
-		item, err := service.Withdraw(ctx, in.TenantID, in.ID, principalID, in.Body.Reason)
+		item, err := service.Withdraw(ctx, tenantID, id, principalID, in.Body.Reason)
 		if err != nil {
 			return nil, governanceError(err)
 		}
@@ -165,12 +225,12 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	registerReviewREST(api, service, registrar)
 }
 
-func humanPrincipal(ctx context.Context) (string, error) {
+func humanPrincipal(ctx context.Context) (guid.ID, error) {
 	claims, ok := authnext.FromContext(ctx)
-	if !ok || claims.SubjectType != authnext.SubjectTypePrincipal || strings.TrimSpace(claims.Subject) == "" {
-		return "", huma.Error403Forbidden("human_principal_required")
+	if !ok || claims == nil || claims.SubjectType != authnext.SubjectTypePrincipal || claims.PrincipalID.Zero() {
+		return 0, huma.Error403Forbidden("human_principal_required")
 	}
-	return claims.Subject, nil
+	return claims.PrincipalID, nil
 }
 
 func governanceError(err error) error {

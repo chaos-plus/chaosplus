@@ -116,7 +116,7 @@ function AgentFields({ data, onChange }: { data: Record<string, unknown>; onChan
       <SelectField
         label="Executor"
         value={(agent.executor as string) ?? "claude"}
-        options={["claude", "codex", "mastra", "mock", "script", "http"]}
+        options={["claude", "codex", "mastra", "script", "http"]}
         onChange={(v) => onChange({ agent: { ...agent, executor: v } })}
       />
       <div>

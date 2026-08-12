@@ -3,6 +3,8 @@ package federation
 import (
 	"errors"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -38,8 +40,8 @@ var (
 // federation. Only the OIDC authorization-code flow is implemented; SAML is a
 // separate future delivery and must never reuse this code path.
 type Provider struct {
-	ID              string    `json:"id"`
-	TenantID        string    `json:"tenant_id"`
+	ID              guid.ID   `json:"id"`
+	TenantID        guid.ID   `json:"tenant_id"`
 	Name            string    `json:"name"`
 	ProviderType    string    `json:"provider_type"`
 	Issuer          string    `json:"issuer"`
@@ -47,7 +49,7 @@ type Provider struct {
 	ClientSecretSet bool      `json:"client_secret_set"`
 	Scopes          string    `json:"scopes"`
 	AutoProvision   bool      `json:"auto_provision"`
-	DefaultRoleID   string    `json:"default_role_id,omitempty"`
+	DefaultRoleID   guid.ID   `json:"default_role_id,omitempty"`
 	Status          string    `json:"status"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -62,7 +64,7 @@ type ProviderInput struct {
 	ClientSecret  string
 	Scopes        string
 	AutoProvision bool
-	DefaultRoleID string
+	DefaultRoleID guid.ID
 	Status        string
 }
 
@@ -86,8 +88,8 @@ type IdentityLink struct {
 // document is the source of truth for entity ID, assertion consumer, and
 // single-logout endpoints.
 type SAMLServiceProvider struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
+	ID          guid.ID   `json:"id"`
+	TenantID    guid.ID   `json:"tenant_id"`
 	Name        string    `json:"name"`
 	EntityID    string    `json:"entity_id"`
 	MetadataXML string    `json:"metadata_xml"`

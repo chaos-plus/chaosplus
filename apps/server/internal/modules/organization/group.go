@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -46,8 +47,8 @@ func (rule *MembershipRule) UnmarshalJSON(data []byte) error {
 }
 
 type Group struct {
-	ID          string         `json:"id"`
-	TenantID    string         `json:"tenant_id"`
+	ID          guid.ID        `json:"id"`
+	TenantID    guid.ID        `json:"tenant_id"`
 	Name        string         `json:"name"`
 	Type        string         `json:"type"`
 	Rule        MembershipRule `json:"membership_rule,omitempty"`
@@ -78,8 +79,8 @@ type UpdateGroup struct {
 }
 
 type GroupMember struct {
-	GroupID     string     `json:"group_id"`
-	PrincipalID string     `json:"principal_id"`
+	GroupID     guid.ID    `json:"group_id"`
+	PrincipalID guid.ID    `json:"principal_id"`
 	DisplayName string     `json:"display_name"`
 	Email       string     `json:"email,omitempty"`
 	StartsAt    *time.Time `json:"starts_at,omitempty"`
@@ -90,8 +91,7 @@ type GroupMember struct {
 
 type GroupMemberWindow = MembershipWindow
 
-func normalizeGroupCreate(tenantID string, input CreateGroup) (string, CreateGroup, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func normalizeGroupCreate(tenantID guid.ID, input CreateGroup) (guid.ID, CreateGroup, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
 	if input.Type == "" {
@@ -100,53 +100,52 @@ func normalizeGroupCreate(tenantID string, input CreateGroup) (string, CreateGro
 	if input.Status == "" {
 		input.Status = StatusActive
 	}
-	if !validTenant(tenantID) || !validName(input.Name) || (input.Type != GroupTypeStatic && input.Type != GroupTypeDynamic) || len(input.Description) > maxGroupDescriptionLength || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
-		return "", CreateGroup{}, ErrGroupInvalid
+	if tenantID.Zero() || !validName(input.Name) || (input.Type != GroupTypeStatic && input.Type != GroupTypeDynamic) || len(input.Description) > maxGroupDescriptionLength || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
+		return 0, CreateGroup{}, ErrGroupInvalid
 	}
 	if input.Type == GroupTypeStatic {
 		if len(strings.TrimSpace(string(input.Rule))) > 0 {
-			return "", CreateGroup{}, ErrGroupRuleType
+			return 0, CreateGroup{}, ErrGroupRuleType
 		}
 		input.Rule = nil
 		return tenantID, input, nil
 	}
 	canonical, err := policyx.CanonicalMemberRule(json.RawMessage(input.Rule))
 	if err != nil {
-		return "", CreateGroup{}, ErrGroupRuleInvalid
+		return 0, CreateGroup{}, ErrGroupRuleInvalid
 	}
 	input.Rule = MembershipRule(canonical)
 	return tenantID, input, nil
 }
 
-func normalizeGroupUpdate(tenantID, id string, input UpdateGroup) (string, string, UpdateGroup, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) || input.Version < 1 || (input.Name == nil && input.Description == nil && input.Status == nil && input.SortOrder == nil && input.Rule == nil) {
-		return "", "", UpdateGroup{}, ErrGroupInvalid
+func normalizeGroupUpdate(tenantID, id guid.ID, input UpdateGroup) (guid.ID, guid.ID, UpdateGroup, error) {
+	if tenantID.Zero() || id.Zero() || input.Version < 1 || (input.Name == nil && input.Description == nil && input.Status == nil && input.SortOrder == nil && input.Rule == nil) {
+		return 0, 0, UpdateGroup{}, ErrGroupInvalid
 	}
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		if !validName(value) {
-			return "", "", UpdateGroup{}, ErrGroupInvalid
+			return 0, 0, UpdateGroup{}, ErrGroupInvalid
 		}
 		input.Name = &value
 	}
 	if input.Description != nil {
 		value := strings.TrimSpace(*input.Description)
 		if len(value) > maxGroupDescriptionLength {
-			return "", "", UpdateGroup{}, ErrGroupInvalid
+			return 0, 0, UpdateGroup{}, ErrGroupInvalid
 		}
 		input.Description = &value
 	}
 	if input.Status != nil && !validStatus(*input.Status) {
-		return "", "", UpdateGroup{}, ErrGroupInvalid
+		return 0, 0, UpdateGroup{}, ErrGroupInvalid
 	}
 	if input.SortOrder != nil && !validSortOrder(*input.SortOrder) {
-		return "", "", UpdateGroup{}, ErrGroupInvalid
+		return 0, 0, UpdateGroup{}, ErrGroupInvalid
 	}
 	if input.Rule != nil {
 		canonical, err := policyx.CanonicalMemberRule(json.RawMessage(*input.Rule))
 		if err != nil {
-			return "", "", UpdateGroup{}, ErrGroupRuleInvalid
+			return 0, 0, UpdateGroup{}, ErrGroupRuleInvalid
 		}
 		value := MembershipRule(canonical)
 		input.Rule = &value
@@ -154,16 +153,14 @@ func normalizeGroupUpdate(tenantID, id string, input UpdateGroup) (string, strin
 	return tenantID, id, input, nil
 }
 
-func normalizeGroupMember(tenantID, groupID, principalID string, input GroupMemberWindow) (string, string, string, GroupMemberWindow, error) {
-	tenantID, groupID = trimPair(tenantID, groupID)
-	principalID = strings.TrimSpace(principalID)
-	if !validTenant(tenantID) || !validID(groupID) || principalID == "" || len(principalID) > 255 {
-		return "", "", "", GroupMemberWindow{}, ErrGroupInvalid
+func normalizeGroupMember(tenantID, groupID, principalID guid.ID, input GroupMemberWindow) (guid.ID, guid.ID, guid.ID, GroupMemberWindow, error) {
+	if tenantID.Zero() || groupID.Zero() || principalID.Zero() {
+		return 0, 0, 0, GroupMemberWindow{}, ErrGroupInvalid
 	}
 	input.StartsAt = normalizeOptionalTime(input.StartsAt)
 	input.EndsAt = normalizeOptionalTime(input.EndsAt)
 	if (input.StartsAt != nil && input.StartsAt.IsZero()) || (input.EndsAt != nil && input.EndsAt.IsZero()) || (input.StartsAt != nil && input.EndsAt != nil && !input.EndsAt.After(*input.StartsAt)) {
-		return "", "", "", GroupMemberWindow{}, ErrGroupInvalid
+		return 0, 0, 0, GroupMemberWindow{}, ErrGroupInvalid
 	}
 	return tenantID, groupID, principalID, input, nil
 }

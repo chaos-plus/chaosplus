@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform runtime for repository skill validation and learning."""
+"""仓库 Skill 校验、事实刷新和受控学习的跨平台运行时。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from typing import Iterator, TextIO
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_PATTERN = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
+CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 ALLOWED_FIELDS = {"name", "description"}
 DOMAINS = {"backend", "frontend", "docs", "quality-gate"}
 SECRET_PATTERNS = (
@@ -75,6 +76,8 @@ def validate_skill(skill_dir: Path) -> list[str]:
         errors.append(f"{skill_file}: name exceeds 64 characters")
     elif name != skill_dir.name:
         errors.append(f"{skill_file}: name must match directory {skill_dir.name!r}")
+    elif not name.startswith("dev-"):
+        errors.append(f"{skill_file}: repository skill names must use the dev- prefix")
 
     if not description:
         errors.append(f"{skill_file}: missing description")
@@ -82,6 +85,11 @@ def validate_skill(skill_dir: Path) -> list[str]:
         errors.append(f"{skill_file}: description exceeds 1024 characters")
     elif "<" in description or ">" in description:
         errors.append(f"{skill_file}: description cannot contain angle brackets")
+    elif CJK_PATTERN.search(description) is None:
+        errors.append(f"{skill_file}: description must be written in Chinese")
+
+    if CJK_PATTERN.search(skill_file.read_text(encoding="utf-8-sig")) is None:
+        errors.append(f"{skill_file}: skill instructions must be written in Chinese")
 
     agent_file = skill_dir / "agents" / "openai.yaml"
     if not agent_file.is_file():
@@ -93,16 +101,92 @@ def validate_skill(skill_dir: Path) -> list[str]:
             "display_name": r'(?m)^  display_name:\s*"[^"\r\n]+"\s*$',
             "short_description": r'(?m)^  short_description:\s*"[^"\r\n]+"\s*$',
             "default_prompt": rf'(?m)^  default_prompt:\s*"[^"\r\n]*\${re.escape(name)}[^"\r\n]*"\s*$',
+            "allow_implicit_invocation": r"(?m)^  allow_implicit_invocation:\s*true\s*$",
         }
         for field, pattern in required_patterns.items():
             if not re.search(pattern, agent_source):
                 errors.append(f"{agent_file}: missing or invalid {field!r}")
+        for field in ("display_name", "short_description", "default_prompt"):
+            match = re.search(rf'(?m)^  {field}:\s*"([^"\r\n]+)"\s*$', agent_source)
+            if match is not None and CJK_PATTERN.search(match.group(1)) is None:
+                errors.append(f"{agent_file}: {field!r} must be written in Chinese")
     return errors
 
 
 def validate_skills(skills_root: Path, skill_dirs: list[Path] | None = None) -> list[str]:
     selected = skill_dirs or sorted(path for path in skills_root.iterdir() if path.is_dir())
-    return [error for skill_dir in selected for error in validate_skill(skill_dir)]
+    errors = [error for skill_dir in selected for error in validate_skill(skill_dir)]
+    repo_root = skills_root.parents[1]
+    brand_terms = repository_brand_terms(repo_root)
+    for skill_dir in selected:
+        scan_files = [skill_dir / "SKILL.md", skill_dir / "agents/openai.yaml"]
+        scan_files.extend(sorted((skill_dir / "scripts").glob("*")) if (skill_dir / "scripts").is_dir() else [])
+        scan_files.extend(
+            path
+            for path in sorted((skill_dir / "references").glob("*"))
+            if path.name != "repository-facts.md"
+        )
+        errors.extend(find_hard_coded_brand_terms(scan_files, brand_terms))
+
+    policy_files = [repo_root / "AGENTS.md"]
+    policy_root = repo_root / ".rules"
+    if policy_root.is_dir():
+        policy_files.extend(sorted(path for path in policy_root.rglob("*") if path.is_file()))
+    errors.extend(find_hard_coded_brand_terms(policy_files, brand_terms))
+    errors.extend(validate_skill_discovery(repo_root, selected))
+    return errors
+
+
+def validate_skill_discovery(repo_root: Path, skill_dirs: list[Path]) -> list[str]:
+    errors: list[str] = []
+    legacy_root = repo_root / ".codex" / "skills"
+    if legacy_root.exists() or legacy_root.is_symlink():
+        errors.append(f"{legacy_root}: legacy repository skill root must not exist")
+
+    discovery_root = repo_root / ".agents" / "skills"
+    for skill_dir in skill_dirs:
+        if skill_dir.parent.resolve() != (repo_root / ".claude" / "skills").resolve():
+            continue
+        link = discovery_root / skill_dir.name
+        if not link.is_symlink():
+            errors.append(f"{link}: repository skill discovery entry must be a symbolic link")
+            continue
+        try:
+            if link.resolve(strict=True) != skill_dir.resolve(strict=True):
+                errors.append(f"{link}: symbolic link must target {skill_dir}")
+        except FileNotFoundError:
+            errors.append(f"{link}: symbolic link target does not exist")
+    return errors
+
+
+def find_hard_coded_brand_terms(paths: list[Path], brand_terms: set[str]) -> list[str]:
+    errors: list[str] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            source = path.read_text(encoding="utf-8-sig").casefold()
+        except UnicodeDecodeError:
+            continue
+        for term in brand_terms:
+            if term in source:
+                errors.append(f"{path}: repository policy hard-codes brand term {term!r}")
+    return errors
+
+
+def repository_brand_terms(repo_root: Path) -> set[str]:
+    terms: set[str] = set()
+    root_name = repo_root.name.casefold().strip()
+    if len(root_name) >= 4:
+        terms.add(root_name)
+    go_mod = repo_root / "apps/server/go.mod"
+    if go_mod.is_file():
+        match = re.search(r"(?m)^module\s+(\S+)", go_mod.read_text(encoding="utf-8-sig"))
+        if match:
+            leaf = match.group(1).rstrip("/").rsplit("/", 1)[-1].casefold()
+            if len(leaf) >= 4:
+                terms.add(leaf)
+    return terms
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -132,47 +216,47 @@ def render_repository_facts(repo_root: Path) -> str:
     docs = _read_json(repo_root / "apps" / "docs" / "package.json")
     workspaces = ", ".join(str(value) for value in admin["workspaces"])
 
-    return f"""# Dev Repository Facts
+    return f"""# Dev 仓库事实
 
-This file is generated from repository manifests and source trees. Do not edit it manually.
+本文件由仓库 manifest 和 source tree 自动生成，严禁手工编辑。
 
-## Backend
+## 后端
 
-- Go module: `{module_match.group(1)}`
-- Go version: `{version_match.group(1)}`
-- Go package directories: {len(go_packages)}
-- Feature modules: {', '.join(modules)}
-- IAM SQL dialects: {', '.join(dialects)}
-- HTTP framework: Huma v2 on chi
-- Persistence: Bun plus Goose
-- Primary configuration: `apps/server/internal/app/config.go`
-- Composition root: `apps/server/internal/app`
+- Go module：`{module_match.group(1)}`
+- Go 版本：`{version_match.group(1)}`
+- Go package 目录数：{len(go_packages)}
+- 功能模块：{', '.join(modules)}
+- IAM SQL 方言：{', '.join(dialects)}
+- HTTP 框架：基于 chi 的 Huma v2
+- 持久化：Bun + Goose
+- 主配置：`apps/server/internal/app/config.go`
+- 组合根：`apps/server/internal/app`
 
-## Frontend
+## 前端
 
-- Workspace: `{admin['name']}`
-- Package manager: `{admin['packageManager']}`
-- Workspaces: {workspaces}
-- Application: `apps/admin-ai/apps/platform` (React, Vite, TypeScript)
-- Shared UI: `apps/admin/packages/ui`
-- App test command: `{admin_app['scripts']['test']}`
+- Workspace：`{admin['name']}`
+- 包管理器：`{admin['packageManager']}`
+- Workspaces：{workspaces}
+- 应用：`apps/admin-ai/apps/platform`（React、Vite、TypeScript）
+- 共享 UI：`apps/admin/packages/ui`
+- 应用测试命令：`{admin_app['scripts']['test']}`
 
-## Documentation
+## 文档
 
-- Package: `{docs['name']}`
-- Site: `apps/docs`
-- Generator: Astro {docs['dependencies']['astro']}
-- Theme: Starlight {docs['dependencies']['@astrojs/starlight']}
-- Authoritative engineering sources: `README.md` and `apps/docs/*.md`
+- Package：`{docs['name']}`
+- 站点：`apps/docs`
+- 生成器：Astro {docs['dependencies']['astro']}
+- 主题：Starlight {docs['dependencies']['@astrojs/starlight']}
+- 权威工程来源：`README.md` 和 `apps/docs/*.md`
 
-## Required Invariants
+## 强制不变量
 
-- Database configuration uses `type` plus `dsn` or `dsn_file` for SQLite, MySQL, and PostgreSQL.
-- No YAML belongs under `internal/app`.
-- Every Go `name_test.go` has sibling `name.go`.
-- Tests use real dependencies and real listeners; mocks, fakes, stubs, and miniredis are forbidden.
-- Full Go acceptance coverage is at least 90%.
-- Future business hierarchy is tenant -> entity -> business resources.
+- SQLite、MySQL、PostgreSQL 数据库配置使用 `type` 加 `dsn` 或 `dsn_file`。
+- `internal/app` 下严禁 YAML。
+- 每个 Go `name_test.go` 必须有同目录 `name.go`。
+- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 miniredis。
+- Go 完整验收覆盖率至少 90%。
+- 业务层级为 tenant -> entity -> business resources。
 """
 
 
@@ -299,16 +383,16 @@ def main(arguments: list[str]) -> int:
         selected = [Path(value).resolve() for value in args.skills] or None
         errors = validate_skills(repo_root / ".claude" / "skills", selected)
         if errors:
-            print("Skill validation failed:", file=sys.stderr)
+            print("Skill 校验失败：", file=sys.stderr)
             for error in errors:
                 print(f"- {error}", file=sys.stderr)
             return 1
         count = len(selected) if selected is not None else len(list((repo_root / ".claude" / "skills").iterdir()))
-        print(f"Validated {count} repository skill(s).")
+        print(f"已校验 {count} 个仓库 Skill。")
         return 0
     if args.command == "refresh":
         changed = refresh_context(args.repo_root.resolve())
-        print("Repository facts updated." if changed else "Repository facts are current.")
+        print("仓库事实已更新。" if changed else "仓库事实已是最新。")
         return 0
     lesson_id, added = record_learning(
         repo_root / ".claude" / "skills",

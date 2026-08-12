@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_saml_service_providers (
-    id VARCHAR(128) PRIMARY KEY,
-    tenant_id VARCHAR(128) NOT NULL,
+    id BIGINT PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
     name VARCHAR(128) NOT NULL,
     entity_id VARCHAR(255) NOT NULL,
     metadata_xml TEXT NOT NULL,

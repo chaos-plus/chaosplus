@@ -36,7 +36,7 @@ func TestGenerateAndValidateConfig(t *testing.T) {
 	assert.False(t, cfg.Migrations.Auto)
 	assert.False(t, cfg.Audit.Anchor.Enabled)
 	assert.Equal(t, 365, cfg.Audit.Anchor.RetentionDays)
-	assert.Equal(t, "chaosplus-audit", cfg.Audit.Anchor.Bucket)
+	assert.Equal(t, "audit-anchors", cfg.Audit.Anchor.Bucket)
 
 	require.Len(t, cfg.Database, 1)
 	for _, ds := range cfg.Database {

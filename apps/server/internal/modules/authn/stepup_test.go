@@ -26,7 +26,7 @@ func TestStepUpElevatesSession(t *testing.T) {
 	assert.Equal(t, []string{"totp", "recovery_code"}, options.Methods)
 	var row stepUpChallengeRow
 	require.NoError(t, service.db.NewSelect().Model(&row).Where("id_hash = ?", tokenHash(options.ChallengeID)).Scan(t.Context()))
-	assert.Equal(t, principalID, row.PrincipalID)
+	assert.Equal(t, parseGUID(principalID), row.PrincipalID)
 	assert.Equal(t, currentSessionHash(cookie, service.web.CookieName), row.SessionHash)
 
 	result, err := service.VerifyStepUp(t.Context(), "", cookie, options.ChallengeID, mustTOTP(t, enrollment.Secret, now))

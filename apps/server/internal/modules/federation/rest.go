@@ -11,8 +11,17 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseFederationID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
 
 type providerListInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
@@ -58,28 +67,60 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 func RegisterAdminREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	guard := authz.Guard{Resource: "identity_provider", Verb: "view"}
 	authz.Register(registrar, api, huma.Operation{OperationID: "federation-list-identity-providers", Method: http.MethodGet, Path: "/iam/identity-providers", Summary: "List tenant identity providers", Tags: []string{"federation"}}, guard, func(ctx context.Context, in *providerListInput) (*respx.Body[[]Provider], error) {
-		items, err := service.ListProviders(ctx, in.TenantID)
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListProviders(ctx, tenantID)
 		if err != nil {
 			return nil, federationError(err)
 		}
 		return respx.OK(ctx, items), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "federation-create-identity-provider", Method: http.MethodPost, Path: "/iam/identity-providers", Summary: "Create an OIDC identity provider", Tags: []string{"federation"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "identity_provider", Verb: "create"}, func(ctx context.Context, in *providerCreateInput) (*respx.Body[Provider], error) {
-		item, err := service.CreateProvider(ctx, in.TenantID, providerInputFromBody(in.Body))
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		input, err := providerInputFromBody(in.Body)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.CreateProvider(ctx, tenantID, input)
 		if err != nil {
 			return nil, federationError(err)
 		}
 		return respx.OK(ctx, item), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "federation-update-identity-provider", Method: http.MethodPut, Path: "/iam/identity-providers/{provider_id}", Summary: "Replace an OIDC identity provider", Tags: []string{"federation"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "identity_provider", Verb: "update"}, func(ctx context.Context, in *providerReplaceInput) (*respx.Body[Provider], error) {
-		item, err := service.UpdateProvider(ctx, in.TenantID, in.ProviderID, providerInputFromBody(in.Body))
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		providerID, err := parseFederationID(in.ProviderID)
+		if err != nil {
+			return nil, err
+		}
+		input, err := providerInputFromBody(in.Body)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.UpdateProvider(ctx, tenantID, providerID, input)
 		if err != nil {
 			return nil, federationError(err)
 		}
 		return respx.OK(ctx, item), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "federation-delete-identity-provider", Method: http.MethodDelete, Path: "/iam/identity-providers/{provider_id}", Summary: "Delete an OIDC identity provider and its identity links", Tags: []string{"federation"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "identity_provider", Verb: "delete"}, func(ctx context.Context, in *providerIDInput) (*respx.Body[map[string]bool], error) {
-		if err := service.DeleteProvider(ctx, in.TenantID, in.ProviderID); err != nil {
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		providerID, err := parseFederationID(in.ProviderID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.DeleteProvider(ctx, tenantID, providerID); err != nil {
 			return nil, federationError(err)
 		}
 		return respx.OK(ctx, map[string]bool{"deleted": true}), nil
@@ -103,7 +144,12 @@ func RegisterBrowserREST(api huma.API, service *Service) {
 	start.Responses = browserResponses(api.OpenAPI().Components.Schemas)
 	api.OpenAPI().AddOperation(&start)
 	api.Adapter().Handle(&start, func(ctx huma.Context) {
-		result, err := service.StartLogin(ctx.Context(), ctx.Param("provider_id"), ctx.Query("return_url"), requestCallbackURL(ctx, ctx.Param("provider_id")))
+		providerID, err := parseFederationID(ctx.Param("provider_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		result, err := service.StartLogin(ctx.Context(), providerID, ctx.Query("return_url"), requestCallbackURL(ctx, providerID))
 		if err != nil {
 			writeFederationError(api, ctx, err)
 			return
@@ -126,7 +172,12 @@ func RegisterBrowserREST(api huma.API, service *Service) {
 	callback.Responses = browserResponses(api.OpenAPI().Components.Schemas)
 	api.OpenAPI().AddOperation(&callback)
 	api.Adapter().Handle(&callback, func(ctx huma.Context) {
-		result, err := service.CompleteLogin(ctx.Context(), ctx.Param("provider_id"), ctx.Query("code"), ctx.Query("state"), ctx.Header("Cookie"), requestCallbackURL(ctx, ctx.Param("provider_id")))
+		providerID, err := parseFederationID(ctx.Param("provider_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		result, err := service.CompleteLogin(ctx.Context(), providerID, ctx.Query("code"), ctx.Query("state"), ctx.Header("Cookie"), requestCallbackURL(ctx, providerID))
 		if err != nil {
 			ctx.AppendHeader("Set-Cookie", service.StateClearCookie())
 			writeFederationError(api, ctx, err)
@@ -149,6 +200,11 @@ func RegisterBrowserREST(api huma.API, service *Service) {
 	samlCallback.Responses = browserResponses(api.OpenAPI().Components.Schemas)
 	api.OpenAPI().AddOperation(&samlCallback)
 	api.Adapter().Handle(&samlCallback, func(ctx huma.Context) {
+		providerID, err := parseFederationID(ctx.Param("provider_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), samlFlateLimit))
 		if err != nil {
 			writeFederationError(api, ctx, ErrOIDCState)
@@ -159,7 +215,7 @@ func RegisterBrowserREST(api huma.API, service *Service) {
 			writeFederationError(api, ctx, ErrOIDCState)
 			return
 		}
-		sessionToken, returnURL, err := service.CompleteSAMLLogin(ctx.Context(), ctx.Param("provider_id"), values.Get("SAMLResponse"), ctx.Header("Cookie"), requestCallbackURL(ctx, ctx.Param("provider_id")))
+		sessionToken, returnURL, err := service.CompleteSAMLLogin(ctx.Context(), providerID, values.Get("SAMLResponse"), ctx.Header("Cookie"), requestCallbackURL(ctx, providerID))
 		if err != nil {
 			ctx.AppendHeader("Set-Cookie", service.StateClearCookie())
 			writeFederationError(api, ctx, err)
@@ -202,13 +258,29 @@ func writeFederationError(api huma.API, ctx huma.Context, err error) {
 
 func intPointer(value int) *int { return &value }
 
-func providerInputFromBody(body providerBody) ProviderInput {
-	return ProviderInput(body)
+func providerInputFromBody(body providerBody) (ProviderInput, error) {
+	defaultRoleID, err := parseOptionalFederationID(body.DefaultRoleID)
+	if err != nil {
+		return ProviderInput{}, err
+	}
+	return ProviderInput{
+		Name: body.Name, ProviderType: body.ProviderType, Issuer: body.Issuer, ClientID: body.ClientID,
+		ClientSecret: body.ClientSecret, Scopes: body.Scopes, AutoProvision: body.AutoProvision,
+		DefaultRoleID: defaultRoleID, Status: body.Status,
+	}, nil
+}
+
+func parseOptionalFederationID(value string) (guid.ID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	return parseFederationID(value)
 }
 
 // requestCallbackURL reconstructs the externally visible callback URL from the
 // request so the redirect_uri sent to the IdP always matches this deployment.
-func requestCallbackURL(ctx huma.Context, providerID string) string {
+func requestCallbackURL(ctx huma.Context, providerID guid.ID) string {
 	scheme := "http"
 	if proto := strings.TrimSpace(ctx.Header("X-Forwarded-Proto")); proto == "https" {
 		scheme = "https"

@@ -3,15 +3,15 @@ package organization
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
-type IDGenerator func() (string, error)
+type IDGenerator func() (guid.ID, error)
 
 type Service struct {
 	repo   *Repository
@@ -27,9 +27,8 @@ func NewService(db *bun.DB, audit auditx.Appender, nextID IDGenerator) *Service 
 	return &Service{repo: NewRepository(db), audit: audit, nextID: nextID, now: time.Now}
 }
 
-func (s *Service) List(ctx context.Context, tenantID string) ([]Department, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if !validTenant(tenantID) {
+func (s *Service) List(ctx context.Context, tenantID guid.ID) ([]Department, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalid
 	}
 	rows, err := s.repo.list(ctx, tenantID)
@@ -39,9 +38,8 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]Department, erro
 	return orderDepartments(rows)
 }
 
-func (s *Service) Get(ctx context.Context, tenantID, id string) (Department, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) {
+func (s *Service) Get(ctx context.Context, tenantID, id guid.ID) (Department, error) {
+	if tenantID.Zero() || !validID(id) {
 		return Department{}, ErrInvalid
 	}
 	row, err := s.repo.get(ctx, tenantID, id)
@@ -55,7 +53,7 @@ func (s *Service) Get(ctx context.Context, tenantID, id string) (Department, err
 	return departmentFromRow(row, depth), nil
 }
 
-func (s *Service) Create(ctx context.Context, tenantID string, input CreateDepartment) (Department, error) {
+func (s *Service) Create(ctx context.Context, tenantID guid.ID, input CreateDepartment) (Department, error) {
 	tenantID, input, err := normalizeCreate(tenantID, input)
 	if err != nil {
 		return Department{}, err
@@ -75,7 +73,7 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateDepar
 	}
 	event := auditx.NewEvent(ctx, tenantID, "department_created", "department", id)
 	event.Detail["status"] = input.Status
-	event.Detail["has_parent"] = input.ParentID != ""
+	event.Detail["has_parent"] = !input.ParentID.Zero()
 	createdDepth := 0
 	err = s.repo.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		repo := s.repo.withExecutor(tx)
@@ -98,7 +96,7 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateDepar
 	return departmentFromRow(row, createdDepth), nil
 }
 
-func (s *Service) Update(ctx context.Context, tenantID, id string, input UpdateDepartment) (Department, error) {
+func (s *Service) Update(ctx context.Context, tenantID, id guid.ID, input UpdateDepartment) (Department, error) {
 	tenantID, id, input, err := normalizeUpdate(tenantID, id, input)
 	if err != nil {
 		return Department{}, err
@@ -130,7 +128,7 @@ func (s *Service) Update(ctx context.Context, tenantID, id string, input UpdateD
 			updated.SortOrder = *input.SortOrder
 		}
 		if updated.ParentID != current.ParentID {
-			if updated.ParentID != "" {
+			if !updated.ParentID.Zero() {
 				if _, err := repo.get(ctx, tenantID, updated.ParentID); err != nil {
 					return err
 				}
@@ -181,9 +179,8 @@ func (s *Service) Update(ctx context.Context, tenantID, id string, input UpdateD
 	return departmentFromRow(updated, updatedDepth), nil
 }
 
-func (s *Service) Delete(ctx context.Context, tenantID, id string, version int64) error {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) || version < 1 {
+func (s *Service) Delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
+	if tenantID.Zero() || !validID(id) || version < 1 {
 		return ErrInvalid
 	}
 	now := s.now().UTC().UnixMilli()
@@ -200,7 +197,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string, version int64
 		if err := repo.delete(ctx, tenantID, id, version); err != nil {
 			return err
 		}
-		event.Detail["had_parent"] = current.ParentID != ""
+		event.Detail["had_parent"] = !current.ParentID.Zero()
 		if err := policyx.Advance(ctx, tx, repo.dialect, tenantID, now); err != nil {
 			return err
 		}
@@ -212,7 +209,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string, version int64
 	return nil
 }
 
-func (s *Service) depth(ctx context.Context, tenantID, id string) (int, error) {
+func (s *Service) depth(ctx context.Context, tenantID, id guid.ID) (int, error) {
 	ancestors, err := s.repo.ancestors(ctx, tenantID, id)
 	if err != nil {
 		return 0, err
@@ -224,7 +221,3 @@ func (s *Service) depth(ctx context.Context, tenantID, id string) (int, error) {
 }
 
 func unixTime(milliseconds int64) time.Time { return time.UnixMilli(milliseconds).UTC() }
-
-func trimPair(left, right string) (string, string) {
-	return strings.TrimSpace(left), strings.TrimSpace(right)
-}

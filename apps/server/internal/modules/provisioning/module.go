@@ -8,6 +8,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
 )
@@ -85,7 +86,7 @@ func (m *Module) syncLoop(ctx context.Context) {
 }
 
 func (m *Module) reconcileAll(ctx context.Context) {
-	var tenants []string
+	var tenants []guid.ID
 	if err := m.db.NewSelect().Table("iam_tenants").Column("id").Where("status = 'active'").Scan(ctx, &tenants); err != nil {
 		slog.Warn("scim sync: list tenants failed", "error", err)
 		return
@@ -100,7 +101,13 @@ func (m *Module) reconcileAll(ctx context.Context) {
 			if t.Status != TargetActive {
 				continue
 			}
-			n, err := m.service.SyncTarget(ctx, t.TenantID, t.ID)
+			tenantID, tenantErr := guid.Parse(t.TenantID)
+			targetID, targetErr := guid.Parse(t.ID)
+			if tenantErr != nil || targetErr != nil {
+				slog.Warn("scim sync: invalid target identifiers", "target", t.ID, "error", firstError(tenantErr, targetErr))
+				continue
+			}
+			n, err := m.service.SyncTarget(ctx, tenantID, targetID)
 			if err != nil {
 				slog.Warn("scim sync: target reconcile failed", "target", t.ID, "error", err)
 				continue

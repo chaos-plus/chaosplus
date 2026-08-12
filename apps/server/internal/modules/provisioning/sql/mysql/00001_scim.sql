@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_scim_directories (
-    id VARCHAR(128) NOT NULL PRIMARY KEY,
-    tenant_id VARCHAR(128) NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
     name VARCHAR(128) NOT NULL,
     name_key VARCHAR(128) NOT NULL,
     status VARCHAR(16) NOT NULL,
@@ -16,8 +16,8 @@ CREATE TABLE iam_scim_directories (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_scim_credentials (
-    id VARCHAR(128) NOT NULL PRIMARY KEY,
-    directory_id VARCHAR(128) NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    directory_id BIGINT NOT NULL,
     name VARCHAR(128) NOT NULL,
     token_hash TEXT NOT NULL,
     expires_at BIGINT NOT NULL DEFAULT 0,
@@ -30,9 +30,9 @@ CREATE TABLE iam_scim_credentials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_scim_resources (
-    directory_id VARCHAR(128) NOT NULL,
+    directory_id BIGINT NOT NULL,
     resource_type VARCHAR(16) NOT NULL,
-    resource_id VARCHAR(128) NOT NULL,
+    resource_id BIGINT NOT NULL,
     external_id VARCHAR(512) NOT NULL DEFAULT '',
     external_key VARCHAR(512) NOT NULL,
     version BIGINT NOT NULL DEFAULT 1,

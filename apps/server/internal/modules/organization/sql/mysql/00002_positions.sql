@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_positions (
-    tenant_id VARCHAR(128) NOT NULL,
-    id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
     code VARCHAR(64) NOT NULL,
     name VARCHAR(128) NOT NULL,
     status VARCHAR(16) NOT NULL,
@@ -18,9 +18,9 @@ CREATE TABLE iam_positions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_position_members (
-    tenant_id VARCHAR(128) NOT NULL,
-    position_id VARCHAR(128) NOT NULL,
-    principal_id VARCHAR(255) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    position_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
     starts_at BIGINT NOT NULL DEFAULT 0,
     ends_at BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL,
@@ -28,7 +28,7 @@ CREATE TABLE iam_position_members (
     PRIMARY KEY (tenant_id, position_id, principal_id),
     KEY idx_iam_position_members_principal (tenant_id, principal_id, starts_at, ends_at, position_id),
     CONSTRAINT fk_iam_position_members_position FOREIGN KEY (tenant_id, position_id) REFERENCES iam_positions (tenant_id, id) ON DELETE CASCADE,
-    CONSTRAINT fk_iam_position_members_principal FOREIGN KEY (tenant_id, principal_id) REFERENCES iam_tenant_members (tenant_id, user_subject) ON DELETE CASCADE,
+    CONSTRAINT fk_iam_position_members_principal FOREIGN KEY (tenant_id, principal_id) REFERENCES iam_tenant_members (tenant_id, principal_id) ON DELETE CASCADE,
     CONSTRAINT chk_iam_position_members_starts CHECK (starts_at >= 0),
     CONSTRAINT chk_iam_position_members_ends CHECK (ends_at >= 0 AND (ends_at = 0 OR starts_at = 0 OR ends_at > starts_at))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

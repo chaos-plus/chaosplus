@@ -49,14 +49,14 @@ func TestSAMLServiceProviderLoginFlow(t *testing.T) {
 	// The upstream IdP answers for the *next* SP: register it with an ACS
 	// pointing at this provider's callback, then create the provider so we can
 	// derive the callback URL from its generated ID.
-	provider, err := env.service.CreateProvider(t.Context(), "tenant-a", ProviderInput{
-		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: server.URL + samlMetadataPath("tenant-a"),
+	provider, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), ProviderInput{
+		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: server.URL + samlMetadataPath(testID("tenant-a")),
 		ClientID: spEntityID, AutoProvision: true, Status: ProviderActive,
 	})
 	require.NoError(t, err)
-	callback := "https://iam.example/federation/" + provider.ID + "/callback"
+	callback := "https://iam.example/federation/" + provider.ID.String() + "/callback"
 
-	_, err = env.service.CreateSAMLServiceProvider(t.Context(), "tenant-a", SAMLServiceProviderInput{
+	_, err = env.service.CreateSAMLServiceProvider(t.Context(), testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "upstream-sp", EntityID: spEntityID, MetadataXML: spLoginMetadata(t, tsp, spEntityID, callback), Status: samlSPStatusActive,
 	})
 	require.NoError(t, err)
@@ -69,11 +69,11 @@ func TestSAMLServiceProviderLoginFlow(t *testing.T) {
 	require.NotEmpty(t, parsed.Query().Get("SAMLRequest"))
 	require.NotEmpty(t, parsed.Query().Get("SigAlg"))
 	require.NotEmpty(t, parsed.Query().Get("Signature"))
-	assert.Equal(t, server.URL+samlSSOPath("tenant-a"), parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	assert.Equal(t, server.URL+samlSSOPath(testID("tenant-a")), parsed.Scheme+"://"+parsed.Host+parsed.Path)
 
 	// Hand the request to the upstream IdP with an authenticated browser session.
 	_, idpCookie := samlSessionCookie(t, env)
-	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSSOPath("tenant-a")+"?SAMLRequest="+url.QueryEscape(parsed.Query().Get("SAMLRequest")), idpCookie)
+	response := samlBrowserRequest(t, server, http.MethodGet, server.URL+samlSSOPath(testID("tenant-a"))+"?SAMLRequest="+url.QueryEscape(parsed.Query().Get("SAMLRequest")), idpCookie)
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	samlResponse := extractSAMLResponse(t, samlReadBody(t, response))
 
@@ -92,7 +92,7 @@ func TestSAMLServiceProviderLoginFlow(t *testing.T) {
 
 	var link identityLinkRow
 	require.NoError(t, env.db.NewSelect().Model(&link).Where("provider_id = ?", provider.ID).Scan(t.Context()))
-	assert.Equal(t, claims.Subject, link.PrincipalID)
+	assert.Equal(t, parseGUID(claims.Subject), link.PrincipalID)
 	assert.Equal(t, "alice@example.com", link.Email)
 }
 
@@ -103,27 +103,27 @@ func TestSAMLServiceProviderLoginDenials(t *testing.T) {
 	server := newSAMLServer(t, env)
 
 	// A non-SAML provider is rejected by the SP flow.
-	oidc, err := env.service.CreateProvider(t.Context(), "tenant-a", ProviderInput{
+	oidc, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), ProviderInput{
 		Name: "OIDC Only", ProviderType: ProviderOIDC, Issuer: "https://oidc.example", ClientID: "app",
 		AutoProvision: true, Status: ProviderActive,
 	})
 	require.NoError(t, err)
-	_, _, err = env.service.StartSAMLLogin(t.Context(), oidc.ID, "https://app.example/", "https://iam.example/federation/"+oidc.ID+"/callback")
+	_, _, err = env.service.StartSAMLLogin(t.Context(), oidc.ID, "https://app.example/", "https://iam.example/federation/"+oidc.ID.String()+"/callback")
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
 	// A SAML provider whose metadata is unreachable fails fast at start.
-	missing, err := env.service.CreateProvider(t.Context(), "tenant-a", ProviderInput{
+	missing, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), ProviderInput{
 		Name: "Missing Metadata", ProviderType: ProviderSAML, Issuer: server.URL + "/nope/metadata",
 		ClientID: "sp", AutoProvision: true, Status: ProviderActive,
 	})
 	require.NoError(t, err)
-	_, _, err = env.service.StartSAMLLogin(t.Context(), missing.ID, "https://app.example/", "https://iam.example/federation/"+missing.ID+"/callback")
+	_, _, err = env.service.StartSAMLLogin(t.Context(), missing.ID, "https://app.example/", "https://iam.example/federation/"+missing.ID.String()+"/callback")
 	assert.ErrorIs(t, err, ErrSAMLResponse)
 
 	// A SAML provider with a callback that is not this provider's path is
 	// rejected before any upstream call.
-	samlProvider, err := env.service.CreateProvider(t.Context(), "tenant-a", ProviderInput{
-		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: server.URL + samlMetadataPath("tenant-a"),
+	samlProvider, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), ProviderInput{
+		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: server.URL + samlMetadataPath(testID("tenant-a")),
 		ClientID: "sp", AutoProvision: true, Status: ProviderActive,
 	})
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestSAMLServiceProviderLoginDenials(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
 	// A bogus SAMLResponse with a valid state cookie is rejected.
-	cb := "https://iam.example/federation/" + samlProvider.ID + "/callback"
+	cb := "https://iam.example/federation/" + samlProvider.ID.String() + "/callback"
 	redirectURL, stateCookie, err := env.service.StartSAMLLogin(t.Context(), samlProvider.ID, "https://app.example/", cb)
 	require.NoError(t, err)
 	require.NotEmpty(t, redirectURL)
@@ -168,25 +168,25 @@ func TestSAMLServiceProviderLoginHTTPFlow(t *testing.T) {
 
 	spEntityID := "https://iam.example/federation/sp"
 	tsp := newSAMLSPServer(t)
-	provider, err := env.service.CreateProvider(t.Context(), "tenant-a", ProviderInput{
-		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: idpServer.URL + samlMetadataPath("tenant-a"),
+	provider, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), ProviderInput{
+		Name: "Upstream SAML IdP", ProviderType: ProviderSAML, Issuer: idpServer.URL + samlMetadataPath(testID("tenant-a")),
 		ClientID: spEntityID, AutoProvision: true, Status: ProviderActive,
 	})
 	require.NoError(t, err)
-	callback := fedServer.URL + "/federation/" + provider.ID + "/callback"
-	_, err = env.service.CreateSAMLServiceProvider(t.Context(), "tenant-a", SAMLServiceProviderInput{
+	callback := fedServer.URL + "/federation/" + provider.ID.String() + "/callback"
+	_, err = env.service.CreateSAMLServiceProvider(t.Context(), testID("tenant-a"), SAMLServiceProviderInput{
 		Name: "upstream-sp", EntityID: spEntityID, MetadataXML: spLoginMetadata(t, tsp, spEntityID, callback), Status: samlSPStatusActive,
 	})
 	require.NoError(t, err)
 
 	// GET /start redirects the browser to the upstream IdP with a signed request.
-	startURL := fedServer.URL + "/federation/" + provider.ID + "/start?return_url=" + url.QueryEscape("https://app.example/")
+	startURL := fedServer.URL + "/federation/" + provider.ID.String() + "/start?return_url=" + url.QueryEscape("https://app.example/")
 	response, err := client.Get(startURL)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, response.StatusCode)
 	location, err := url.Parse(response.Header.Get("Location"))
 	require.NoError(t, err)
-	assert.Equal(t, idpServer.URL+samlSSOPath("tenant-a"), location.Scheme+"://"+location.Host+location.Path)
+	assert.Equal(t, idpServer.URL+samlSSOPath(testID("tenant-a")), location.Scheme+"://"+location.Host+location.Path)
 	require.NotEmpty(t, location.Query().Get("SAMLRequest"))
 	require.NotEmpty(t, location.Query().Get("Signature"))
 	var stateCookie *http.Cookie
@@ -200,13 +200,13 @@ func TestSAMLServiceProviderLoginHTTPFlow(t *testing.T) {
 
 	// The upstream IdP answers with a signed assertion for the authenticated user.
 	_, idpCookie := samlSessionCookie(t, env)
-	idpResponse := samlBrowserRequest(t, idpServer, http.MethodGet, idpServer.URL+samlSSOPath("tenant-a")+"?SAMLRequest="+url.QueryEscape(location.Query().Get("SAMLRequest")), idpCookie)
+	idpResponse := samlBrowserRequest(t, idpServer, http.MethodGet, idpServer.URL+samlSSOPath(testID("tenant-a"))+"?SAMLRequest="+url.QueryEscape(location.Query().Get("SAMLRequest")), idpCookie)
 	require.Equal(t, http.StatusOK, idpResponse.StatusCode)
 	samlResponse := extractSAMLResponse(t, samlReadBody(t, idpResponse))
 
 	// POST /callback completes the flow and sets the browser session.
 	form := url.Values{"SAMLResponse": {samlResponse}}.Encode()
-	callbackRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fedServer.URL+"/federation/"+provider.ID+"/callback", strings.NewReader(form))
+	callbackRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fedServer.URL+"/federation/" + provider.ID.String()+"/callback", strings.NewReader(form))
 	require.NoError(t, err)
 	callbackRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	callbackRequest.Header.Set("Cookie", stateCookieName+"="+stateCookie.Value)

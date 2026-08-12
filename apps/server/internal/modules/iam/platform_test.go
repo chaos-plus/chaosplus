@@ -11,6 +11,7 @@ import (
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 )
@@ -89,50 +90,50 @@ func TestPaginateListBoundsResults(t *testing.T) {
 	assert.Len(t, paginateList(t.Context(), items, 2, 0).Body.Data, 3)
 }
 
-func seedPlatformPrincipal(t *testing.T, repo *Repository, principalID string) {
+func seedPlatformPrincipal(t *testing.T, repo *Repository, principalID guid.ID) {
 	t.Helper()
 	now := repo.now().UTC().UnixMilli()
 	_, err := repo.db.ExecContext(t.Context(), `INSERT INTO iam_principals
 		(id, login_name, email, display_name, status, created_at, updated_at, disabled_at)
 		VALUES (?, ?, ?, ?, 'active', ?, ?, 0)`,
-		principalID, principalID, principalID+"@example.test", principalID, now, now)
+		principalID, principalID.String(), principalID.String()+"@example.test", principalID.String(), now, now)
 	require.NoError(t, err)
 }
 
 func newPlatformService(t *testing.T) (*Service, *Repository) {
 	t.Helper()
 	repo := newIAMRepository(t)
-	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "t1"))
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, testID("t1")))
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	return service, repo
 }
 
 func TestCheckPlatformHonorsPermissionCode(t *testing.T) {
 	service, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "restricted")
-	seedPlatformPrincipal(t, repo, "full")
+	seedPlatformPrincipal(t, repo, testID("restricted"))
+	seedPlatformPrincipal(t, repo, testID("full"))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 	authorizer := NewAuthorizer(repo.db)
 
-	_, err := service.SetPlatformAdministrator(ctx, "full", true, nil)
+	_, err := service.SetPlatformAdministrator(ctx, testID("full"), true, nil)
 	require.NoError(t, err)
-	_, err = service.SetPlatformAdministrator(ctx, "restricted", false, []string{"tenant_view"})
+	_, err = service.SetPlatformAdministrator(ctx, testID("restricted"), false, []string{"tenant_view"})
 	require.NoError(t, err)
 
 	// A restricted principal holds exactly the granted code and nothing else.
-	allowed, err := authorizer.CheckPlatform(t.Context(), "tenant_view", "restricted")
+	allowed, err := authorizer.CheckPlatform(t.Context(), "tenant_view", testID("restricted"))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	allowed, err = authorizer.CheckPlatform(t.Context(), "tenant_delete", "restricted")
+	allowed, err = authorizer.CheckPlatform(t.Context(), "tenant_delete", testID("restricted"))
 	require.NoError(t, err)
 	assert.False(t, allowed, "restricted platform principal must not inherit other platform permissions")
-	allowed, err = authorizer.CheckPlatform(t.Context(), "platform_administer", "restricted")
+	allowed, err = authorizer.CheckPlatform(t.Context(), "platform_administer", testID("restricted"))
 	require.NoError(t, err)
 	assert.False(t, allowed)
 
 	// A full administrator still holds every declared platform permission.
 	for _, code := range []string{"tenant_view", "tenant_create", "tenant_update", "tenant_delete", "platform_administer"} {
-		allowed, err = authorizer.CheckPlatform(t.Context(), code, "full")
+		allowed, err = authorizer.CheckPlatform(t.Context(), code, testID("full"))
 		require.NoError(t, err)
 		assert.True(t, allowed, code)
 	}
@@ -140,72 +141,72 @@ func TestCheckPlatformHonorsPermissionCode(t *testing.T) {
 
 func TestCheckPlatformFailsClosedForNonPlatformCodes(t *testing.T) {
 	service, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "full")
+	seedPlatformPrincipal(t, repo, testID("full"))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
-	_, err := service.SetPlatformAdministrator(ctx, "full", true, nil)
+	_, err := service.SetPlatformAdministrator(ctx, testID("full"), true, nil)
 	require.NoError(t, err)
 	authorizer := NewAuthorizer(repo.db)
 
 	// Tenant-scoped and unknown codes must never be satisfied by platform state.
 	for _, code := range []string{"store_view", "tenant_administer", "not_a_real_permission"} {
-		allowed, err := authorizer.CheckPlatform(t.Context(), code, "full")
+		allowed, err := authorizer.CheckPlatform(t.Context(), code, testID("full"))
 		require.NoError(t, err)
 		assert.False(t, allowed, code)
 	}
-	_, err = authorizer.CheckPlatform(t.Context(), "", "full")
+	_, err = authorizer.CheckPlatform(t.Context(), "", testID("full"))
 	assert.Error(t, err)
 }
 
 func TestCheckPlatformIgnoresDisabledPrincipal(t *testing.T) {
 	service, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "restricted")
+	seedPlatformPrincipal(t, repo, testID("restricted"))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
-	_, err := service.SetPlatformAdministrator(ctx, "restricted", false, []string{"tenant_view"})
+	_, err := service.SetPlatformAdministrator(ctx, testID("restricted"), false, []string{"tenant_view"})
 	require.NoError(t, err)
 	authorizer := NewAuthorizer(repo.db)
 
-	allowed, err := authorizer.CheckPlatform(t.Context(), "tenant_view", "restricted")
+	allowed, err := authorizer.CheckPlatform(t.Context(), "tenant_view", testID("restricted"))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	_, err = repo.db.ExecContext(t.Context(), "UPDATE iam_principals SET status = 'disabled' WHERE id = ?", "restricted")
+	_, err = repo.db.ExecContext(t.Context(), "UPDATE iam_principals SET status = 'disabled' WHERE id = ?", testID("restricted"))
 	require.NoError(t, err)
-	allowed, err = authorizer.CheckPlatform(t.Context(), "tenant_view", "restricted")
+	allowed, err = authorizer.CheckPlatform(t.Context(), "tenant_view", testID("restricted"))
 	require.NoError(t, err)
 	assert.False(t, allowed)
 }
 
 func TestServiceSetPlatformAdministratorRejectsInvalidPermissions(t *testing.T) {
 	service, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "candidate")
+	seedPlatformPrincipal(t, repo, testID("candidate"))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 
-	_, err := service.SetPlatformAdministrator(ctx, "candidate", false, []string{"store_view"})
+	_, err := service.SetPlatformAdministrator(ctx, testID("candidate"), false, []string{"store_view"})
 	assert.ErrorIs(t, err, ErrPlatformPermissionScope)
-	_, err = service.SetPlatformAdministrator(ctx, "candidate", false, []string{"not_a_real_permission"})
+	_, err = service.SetPlatformAdministrator(ctx, testID("candidate"), false, []string{"not_a_real_permission"})
 	assert.ErrorIs(t, err, ErrPermissionNotFound)
-	_, err = service.SetPlatformAdministrator(ctx, "candidate", false, nil)
+	_, err = service.SetPlatformAdministrator(ctx, testID("candidate"), false, nil)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
-	_, err = service.SetPlatformAdministrator(ctx, "candidate", true, []string{"tenant_view"})
+	_, err = service.SetPlatformAdministrator(ctx, testID("candidate"), true, []string{"tenant_view"})
 	assert.ErrorIs(t, err, ErrInvalidArgument)
-	_, err = service.SetPlatformAdministrator(ctx, "", true, nil)
+	_, err = service.SetPlatformAdministrator(ctx, 0, true, nil)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
 }
 
 func TestServicePlatformAdministratorLifecycleKeepsOneFullAdministrator(t *testing.T) {
 	service, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "first")
-	seedPlatformPrincipal(t, repo, "second")
+	seedPlatformPrincipal(t, repo, testID("first"))
+	seedPlatformPrincipal(t, repo, testID("second"))
 	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: "operator"})
 
-	first, err := service.SetPlatformAdministrator(ctx, "first", true, nil)
+	first, err := service.SetPlatformAdministrator(ctx, testID("first"), true, nil)
 	require.NoError(t, err)
 	assert.True(t, first.FullAdministrator)
 	assert.Empty(t, first.Permissions)
 
 	// The only full administrator can neither be demoted nor removed.
-	_, err = service.SetPlatformAdministrator(ctx, "first", false, []string{"tenant_view"})
+	_, err = service.SetPlatformAdministrator(ctx, testID("first"), false, []string{"tenant_view"})
 	assert.ErrorIs(t, err, ErrLastPlatformAdministrator)
-	_, err = service.DeletePlatformAdministrator(ctx, "first")
+	_, err = service.DeletePlatformAdministrator(ctx, testID("first"))
 	assert.ErrorIs(t, err, ErrLastPlatformAdministrator)
 	stored, err := service.ListPlatformAdministrators(t.Context())
 	require.NoError(t, err)
@@ -213,41 +214,41 @@ func TestServicePlatformAdministratorLifecycleKeepsOneFullAdministrator(t *testi
 	assert.True(t, stored[0].FullAdministrator, "a refused demotion must roll back")
 
 	// A second full administrator unlocks both operations.
-	_, err = service.SetPlatformAdministrator(ctx, "second", true, nil)
+	_, err = service.SetPlatformAdministrator(ctx, testID("second"), true, nil)
 	require.NoError(t, err)
-	demoted, err := service.SetPlatformAdministrator(ctx, "first", false, []string{"tenant_view", "tenant_view", "tenant_create"})
+	demoted, err := service.SetPlatformAdministrator(ctx, testID("first"), false, []string{"tenant_view", "tenant_view", "tenant_create"})
 	require.NoError(t, err)
 	assert.False(t, demoted.FullAdministrator)
 	assert.Equal(t, []string{"tenant_create", "tenant_view"}, demoted.Permissions, "codes are deduplicated and sorted")
 
-	changed, err := service.DeletePlatformAdministrator(ctx, "first")
+	changed, err := service.DeletePlatformAdministrator(ctx, testID("first"))
 	require.NoError(t, err)
 	assert.True(t, changed)
-	_, err = service.DeletePlatformAdministrator(ctx, "first")
+	_, err = service.DeletePlatformAdministrator(ctx, testID("first"))
 	assert.ErrorIs(t, err, ErrPlatformAdministratorNotFound)
 
 	remaining, err := service.ListPlatformAdministrators(t.Context())
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
-	assert.Equal(t, "second", remaining[0].PrincipalID)
+	assert.Equal(t, testID("second"), remaining[0].PrincipalID)
 }
 
 func TestRepositoryPlatformAdministratorLookups(t *testing.T) {
 	_, repo := newPlatformService(t)
-	seedPlatformPrincipal(t, repo, "someone")
+	seedPlatformPrincipal(t, repo, testID("someone"))
 
-	_, err := repo.GetPlatformAdministrator(t.Context(), "someone")
+	_, err := repo.GetPlatformAdministrator(t.Context(), testID("someone"))
 	assert.ErrorIs(t, err, ErrPlatformAdministratorNotFound)
-	_, err = repo.GetPlatformAdministrator(t.Context(), "")
+	_, err = repo.GetPlatformAdministrator(t.Context(), 0)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
-	_, err = repo.SetPlatformAdministrator(t.Context(), "", false, []string{"tenant_view"})
+	_, err = repo.SetPlatformAdministrator(t.Context(), 0, false, []string{"tenant_view"})
 	assert.ErrorIs(t, err, ErrInvalidArgument)
-	_, err = repo.SetPlatformAdministrator(t.Context(), "someone", false, nil)
+	_, err = repo.SetPlatformAdministrator(t.Context(), testID("someone"), false, nil)
 	assert.ErrorIs(t, err, ErrPlatformAdministratorNotFound)
-	_, err = repo.DeletePlatformAdministrator(t.Context(), "")
+	_, err = repo.DeletePlatformAdministrator(t.Context(), 0)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
 
-	changed, err := repo.DeletePlatformAdministrator(t.Context(), "someone")
+	changed, err := repo.DeletePlatformAdministrator(t.Context(), testID("someone"))
 	require.NoError(t, err)
 	assert.False(t, changed)
 
@@ -256,15 +257,15 @@ func TestRepositoryPlatformAdministratorLookups(t *testing.T) {
 	assert.Equal(t, 0, count)
 
 	// Switching between full and restricted must not leave stale rows behind.
-	_, err = repo.SetPlatformAdministrator(t.Context(), "someone", true, nil)
+	_, err = repo.SetPlatformAdministrator(t.Context(), testID("someone"), true, nil)
 	require.NoError(t, err)
-	restricted, err := repo.SetPlatformAdministrator(t.Context(), "someone", false, []string{"tenant_view"})
+	restricted, err := repo.SetPlatformAdministrator(t.Context(), testID("someone"), false, []string{"tenant_view"})
 	require.NoError(t, err)
 	assert.False(t, restricted.FullAdministrator)
 	count, err = repo.CountFullPlatformAdministrators(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
-	promoted, err := repo.SetPlatformAdministrator(t.Context(), "someone", true, nil)
+	promoted, err := repo.SetPlatformAdministrator(t.Context(), testID("someone"), true, nil)
 	require.NoError(t, err)
 	assert.True(t, promoted.FullAdministrator)
 	assert.Empty(t, promoted.Permissions, "promotion clears explicit grants")

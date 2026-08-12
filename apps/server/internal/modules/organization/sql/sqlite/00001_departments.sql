@@ -1,8 +1,8 @@
 -- +goose Up
 CREATE TABLE iam_departments (
-    tenant_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    parent_id TEXT NOT NULL DEFAULT '',
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
+    parent_id BIGINT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     name_key TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
@@ -16,9 +16,9 @@ CREATE TABLE iam_departments (
 CREATE INDEX idx_iam_departments_parent ON iam_departments (tenant_id, parent_id, sort_order, name_key, id);
 
 CREATE TABLE iam_department_closure (
-    tenant_id TEXT NOT NULL,
-    ancestor_id TEXT NOT NULL,
-    descendant_id TEXT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    ancestor_id BIGINT NOT NULL,
+    descendant_id BIGINT NOT NULL,
     depth INTEGER NOT NULL CHECK (depth >= 0),
     PRIMARY KEY (tenant_id, ancestor_id, descendant_id),
     FOREIGN KEY (tenant_id, ancestor_id) REFERENCES iam_departments (tenant_id, id) ON DELETE CASCADE,

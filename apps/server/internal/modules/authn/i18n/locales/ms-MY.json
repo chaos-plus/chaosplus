@@ -31,5 +31,8 @@
   "mfa_not_enabled": "Pengesahan berbilang faktor belum didayakan untuk akaun ini. Dayakannya sebelum menjalankan operasi ini.",
   "registration_request_rejected": "Asal permintaan pendaftaran tidak dibenarkan. Gunakan alamat aplikasi yang dikonfigurasi atau hubungi pentadbir.",
   "invalid_registration": "Data pendaftaran tidak sah. Masukkan alamat e-mel yang sah, kata laluan sekurang-kurangnya 12 aksara dan nama paparan tidak melebihi 128 aksara.",
-  "registration_unavailable": "Pendaftaran layan diri tidak tersedia. Hubungi pentadbir untuk mendapatkan akses atau cuba lagi kemudian."
+  "registration_unavailable": "Pendaftaran layan diri tidak tersedia. Hubungi pentadbir untuk mendapatkan akses atau cuba lagi kemudian.",
+  "captcha_unavailable": "Cabaran pendaftaran tidak tersedia buat sementara waktu. Cuba lagi kemudian.",
+  "captcha_invalid": "Cabaran pendaftaran tidak sah atau telah tamat tempoh. Dapatkan cabaran baharu dan cuba lagi.",
+  "registration_conflict": "Permintaan pendaftaran bercanggah dengan keadaan akaun semasa. Log masuk, pulihkan akaun atau hubungi pentadbir."
 }

@@ -9,16 +9,17 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type tenantMemberRow struct {
 	bun.BaseModel `bun:"table:iam_tenant_members"`
-	TenantID      string `bun:"tenant_id,pk"`
-	UserSubject   string `bun:"user_subject,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	DisplayName   string
 	Email         string
-	DepartmentID  string `bun:"department_id"`
+	DepartmentID  guid.ID `bun:"department_id"`
 	Status        string
 	CreatedAt     int64
 	UpdatedAt     int64
@@ -27,9 +28,9 @@ type tenantMemberRow struct {
 
 type menuRow struct {
 	bun.BaseModel  `bun:"table:iam_menus"`
-	TenantID       string  `bun:"tenant_id,pk"`
-	ID             string  `bun:"id,pk"`
-	ParentID       *string `bun:"parent_id"`
+	TenantID       guid.ID  `bun:"tenant_id,pk"`
+	ID             guid.ID  `bun:"id,pk"`
+	ParentID       *guid.ID `bun:"parent_id"`
 	Label          string
 	Route          *string
 	Icon           string
@@ -50,31 +51,31 @@ func (r *Repository) PutMember(ctx context.Context, member TenantMember) (Tenant
 	if query == "" {
 		return TenantMember{}, fmt.Errorf("unsupported iam database dialect %q", r.dialect)
 	}
-	if _, err := r.executor.ExecContext(ctx, query, member.TenantID, member.Subject, member.DisplayName, member.Email, member.Status, now, now, disabledAt); err != nil {
+	if _, err := r.executor.ExecContext(ctx, query, member.TenantID, member.PrincipalID, member.DisplayName, member.Email, member.Status, now, now, disabledAt); err != nil {
 		return TenantMember{}, fmt.Errorf("upsert tenant member: %w", err)
 	}
-	return r.GetMember(ctx, member.TenantID, member.Subject)
+	return r.GetMember(ctx, member.TenantID, member.PrincipalID)
 }
 
 func memberUpsertSQL(dialect string) string {
 	const insert = `INSERT INTO iam_tenant_members
- (tenant_id, user_subject, display_name, email, status, created_at, updated_at, disabled_at)
+ (tenant_id, principal_id, display_name, email, status, created_at, updated_at, disabled_at)
  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	if dialect == "mysql" {
 		return insert + ` ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), email = VALUES(email), status = VALUES(status), updated_at = VALUES(updated_at), disabled_at = VALUES(disabled_at)`
 	}
 	if dialect == "sqlite" || dialect == "postgres" {
-		return insert + ` ON CONFLICT (tenant_id, user_subject) DO UPDATE SET display_name = excluded.display_name, email = excluded.email, status = excluded.status, updated_at = excluded.updated_at, disabled_at = excluded.disabled_at`
+		return insert + ` ON CONFLICT (tenant_id, principal_id) DO UPDATE SET display_name = excluded.display_name, email = excluded.email, status = excluded.status, updated_at = excluded.updated_at, disabled_at = excluded.disabled_at`
 	}
 	return ""
 }
 
-func (r *Repository) GetMember(ctx context.Context, tenantID, subject string) (TenantMember, error) {
+func (r *Repository) GetMember(ctx context.Context, tenantID, principalID guid.ID) (TenantMember, error) {
 	var row tenantMemberRow
 	if err := r.executor.NewSelect().Model(&row).ModelTableExpr("iam_tenant_members AS tm").ColumnExpr("tm.*").
-		ColumnExpr("COALESCE(md.department_id, '') AS department_id").
-		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.user_subject").
-		Where("tm.tenant_id = ? AND tm.user_subject = ?", tenantID, subject).Scan(ctx); err != nil {
+		ColumnExpr("COALESCE(md.department_id, 0) AS department_id").
+		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.principal_id").
+		Where("tm.tenant_id = ? AND tm.principal_id = ?", tenantID, principalID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return TenantMember{}, ErrMemberNotFound
 		}
@@ -83,24 +84,24 @@ func (r *Repository) GetMember(ctx context.Context, tenantID, subject string) (T
 	return memberFromRow(row), nil
 }
 
-func (r *Repository) ListMembersPage(ctx context.Context, tenantID string, filter MemberFilter) ([]TenantMember, int64, error) {
+func (r *Repository) ListMembersPage(ctx context.Context, tenantID guid.ID, filter MemberFilter) ([]TenantMember, int64, error) {
 	query := r.executor.NewSelect().Model((*tenantMemberRow)(nil)).ModelTableExpr("iam_tenant_members AS tm").ColumnExpr("tm.*").
-		ColumnExpr("COALESCE(md.department_id, '') AS department_id").
-		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.user_subject").
+		ColumnExpr("COALESCE(md.department_id, 0) AS department_id").
+		Join("LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.principal_id").
 		Where("tm.tenant_id = ?", tenantID)
 	if filter.Status != "" {
 		query = query.Where("tm.status = ?", filter.Status)
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		like := "%" + strings.ToLower(search) + "%"
-		query = query.Where("(LOWER(tm.display_name) LIKE ? OR LOWER(tm.email) LIKE ? OR LOWER(tm.user_subject) LIKE ?)", like, like, like)
+		query = query.Where("(LOWER(tm.display_name) LIKE ? OR LOWER(tm.email) LIKE ?)", like, like)
 	}
 	count, err := query.Clone().Count(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count tenant members: %w", err)
 	}
 	var rows []tenantMemberRow
-	if err := query.Order("tm.display_name ASC", "tm.user_subject ASC").Offset(filter.Offset).Limit(filter.Limit).Scan(ctx, &rows); err != nil {
+	if err := query.Order("tm.display_name ASC", "tm.principal_id ASC").Offset(filter.Offset).Limit(filter.Limit).Scan(ctx, &rows); err != nil {
 		return nil, 0, fmt.Errorf("list tenant members: %w", err)
 	}
 	members := make([]TenantMember, 0, len(rows))
@@ -110,8 +111,8 @@ func (r *Repository) ListMembersPage(ctx context.Context, tenantID string, filte
 	return members, int64(count), nil
 }
 
-func (r *Repository) SetMemberStatus(ctx context.Context, tenantID, subject string, status MemberStatus) (TenantMember, error) {
-	member, err := r.GetMember(ctx, tenantID, subject)
+func (r *Repository) SetMemberStatus(ctx context.Context, tenantID, principalID guid.ID, status MemberStatus) (TenantMember, error) {
+	member, err := r.GetMember(ctx, tenantID, principalID)
 	if err != nil {
 		return TenantMember{}, err
 	}
@@ -119,23 +120,23 @@ func (r *Repository) SetMemberStatus(ctx context.Context, tenantID, subject stri
 	return r.PutMember(ctx, member)
 }
 
-func (r *Repository) IsMemberActive(ctx context.Context, tenantID, subject string) (bool, error) {
-	count, err := r.executor.NewSelect().Model((*tenantMemberRow)(nil)).Where("tenant_id = ? AND user_subject = ? AND status = ?", tenantID, subject, MemberActive).Count(ctx)
+func (r *Repository) IsMemberActive(ctx context.Context, tenantID, principalID guid.ID) (bool, error) {
+	count, err := r.executor.NewSelect().Model((*tenantMemberRow)(nil)).Where("tenant_id = ? AND principal_id = ? AND status = ?", tenantID, principalID, MemberActive).Count(ctx)
 	if err != nil {
 		return false, fmt.Errorf("check tenant member: %w", err)
 	}
 	return count == 1, nil
 }
 
-func (r *Repository) ListMemberRoleIDs(ctx context.Context, tenantID, subject string) ([]string, error) {
-	ids := make([]string, 0)
+func (r *Repository) ListMemberRoleIDs(ctx context.Context, tenantID, principalID guid.ID) ([]guid.ID, error) {
+	ids := make([]guid.ID, 0)
 	now := r.now().UTC().UnixMilli()
 	if err := r.executor.NewRaw(`
-SELECT role_id FROM iam_role_members WHERE tenant_id = ? AND user_subject = ?
+SELECT role_id FROM iam_role_members WHERE tenant_id = ? AND principal_id = ?
 UNION
 SELECT role_id FROM iam_temporary_role_grants
 WHERE tenant_id = ? AND principal_id = ? AND starts_at <= ? AND ends_at > ?
-ORDER BY role_id ASC`, tenantID, subject, tenantID, subject, now, now).Scan(ctx, &ids); err != nil {
+ORDER BY role_id ASC`, tenantID, principalID, tenantID, principalID, now, now).Scan(ctx, &ids); err != nil {
 		return nil, fmt.Errorf("list tenant member roles: %w", err)
 	}
 	return ids, nil
@@ -158,7 +159,7 @@ func (r *Repository) CreateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	return menuFromRow(row), nil
 }
 
-func (r *Repository) GetMenu(ctx context.Context, tenantID, menuID string) (Menu, error) {
+func (r *Repository) GetMenu(ctx context.Context, tenantID, menuID guid.ID) (Menu, error) {
 	var row menuRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, menuID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -169,7 +170,7 @@ func (r *Repository) GetMenu(ctx context.Context, tenantID, menuID string) (Menu
 	return menuFromRow(row), nil
 }
 
-func (r *Repository) ListMenus(ctx context.Context, tenantID string, activeOnly bool) ([]Menu, error) {
+func (r *Repository) ListMenus(ctx context.Context, tenantID guid.ID, activeOnly bool) ([]Menu, error) {
 	query := r.executor.NewSelect().Model((*menuRow)(nil)).Where("tenant_id = ?", tenantID)
 	if activeOnly {
 		query = query.Where("status = ?", MenuActive)
@@ -202,7 +203,7 @@ func (r *Repository) UpdateMenu(ctx context.Context, menu Menu) (Menu, error) {
 	return r.GetMenu(ctx, menu.TenantID, menu.ID)
 }
 
-func (r *Repository) DeleteMenu(ctx context.Context, tenantID, menuID string) error {
+func (r *Repository) DeleteMenu(ctx context.Context, tenantID, menuID guid.ID) error {
 	children, err := r.executor.NewSelect().Model((*menuRow)(nil)).Where("tenant_id = ? AND parent_id = ?", tenantID, menuID).Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count menu children: %w", err)
@@ -221,7 +222,7 @@ func (r *Repository) DeleteMenu(ctx context.Context, tenantID, menuID string) er
 }
 
 func memberFromRow(row tenantMemberRow) TenantMember {
-	member := TenantMember{TenantID: row.TenantID, Subject: row.UserSubject, DisplayName: row.DisplayName, Email: row.Email, DepartmentID: row.DepartmentID, Status: MemberStatus(row.Status), CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}
+	member := TenantMember{TenantID: row.TenantID, PrincipalID: row.PrincipalID, DisplayName: row.DisplayName, Email: row.Email, DepartmentID: row.DepartmentID, Status: MemberStatus(row.Status), CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}
 	if row.DisabledAt > 0 {
 		member.DisabledAt = time.UnixMilli(row.DisabledAt).UTC()
 	}
@@ -229,8 +230,9 @@ func memberFromRow(row tenantMemberRow) TenantMember {
 }
 
 func menuToRow(menu Menu) menuRow {
-	var parentID, route *string
-	if menu.ParentID != "" {
+	var parentID *guid.ID
+	var route *string
+	if !menu.ParentID.Zero() {
 		parentID = &menu.ParentID
 	}
 	if menu.Route != "" {

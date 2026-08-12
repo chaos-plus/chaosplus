@@ -64,7 +64,7 @@ authn:
         post_logout_url: "http://localhost:8092/login"
         allowed_return_urls: ["http://localhost:8092/", "http://localhost:8092/login"]
         allowed_origins: ["http://localhost:8092"]
-        cookie_name: cp_session # opaque session cookie name
+        cookie_name: session # opaque session cookie name
         cookie_secure: false # local dev over http
         session_ttl: 8h # absolute browser session lifetime
         idle_ttl: 30m # browser session inactivity lifetime
@@ -113,7 +113,7 @@ audit:
     anchor:
         enabled: false # anchor verified audit heads into an external S3-compatible object lock store
         endpoint: "" # S3-compatible endpoint, e.g. http://127.0.0.1:9000
-        bucket: chaosplus-audit # bucket holding audit anchors; created with object locking when it does not exist
+        bucket: audit-anchors # bucket holding audit anchors; created with object locking when it does not exist
         region: "" # signing region; empty is fine for MinIO
         access_key: "" # S3 access key
         secret_key: "" # S3 secret key
@@ -153,7 +153,7 @@ bootstrap:
     lock_timeout: 30s # maximum wait for the deployment advisory lock
     database:
         type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
-        dsn: "./chaosplus-iam.db" # dsn
+        dsn: "./iam.db" # dsn
         dsn_file: "" # file containing the DSN; mutually exclusive with dsn
         writable: true # writable
         readable: true # readable
@@ -171,7 +171,7 @@ bootstrap:
 database:
     dbkey: # example entry — rename to your key
         type: sqlite # database dialect: sqlite | mysql | postgres (pg/pgsql/postgresql aliases accepted)
-        dsn: "./chaosplus-iam.db" # dsn
+        dsn: "./iam.db" # dsn
         dsn_file: "" # file containing the DSN; mutually exclusive with dsn
         writable: true # writable
         readable: true # readable

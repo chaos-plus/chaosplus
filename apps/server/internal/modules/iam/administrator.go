@@ -3,10 +3,10 @@ package iam
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -22,8 +22,8 @@ func NewAdministratorGuard() *AdministratorGuard {
 
 // RemoveRoleMember removes the exact role membership captured by a caller's
 // transaction while preserving at least one durable tenant administrator.
-func (g *AdministratorGuard) RemoveRoleMember(ctx context.Context, db bun.IDB, dialect, tenantID, roleID, principalID string, createdAt int64) (bool, error) {
-	if db == nil || strings.TrimSpace(roleID) == "" || strings.TrimSpace(principalID) == "" || createdAt < 0 {
+func (g *AdministratorGuard) RemoveRoleMember(ctx context.Context, db bun.IDB, dialect string, tenantID, roleID, principalID guid.ID, createdAt int64) (bool, error) {
+	if db == nil || roleID.Zero() || principalID.Zero() || createdAt < 0 {
 		return false, fmt.Errorf("invalid role membership removal")
 	}
 	verify, err := g.Protect(ctx, db, dialect, tenantID)
@@ -31,7 +31,7 @@ func (g *AdministratorGuard) RemoveRoleMember(ctx context.Context, db bun.IDB, d
 		return false, err
 	}
 	result, err := db.NewDelete().Table("iam_role_members").
-		Where("tenant_id = ? AND role_id = ? AND user_subject = ? AND created_at = ?", tenantID, roleID, principalID, createdAt).
+		Where("tenant_id = ? AND role_id = ? AND principal_id = ? AND created_at = ?", tenantID, roleID, principalID, createdAt).
 		Exec(ctx)
 	if err != nil {
 		return false, fmt.Errorf("delete reviewed role member: %w", err)
@@ -49,8 +49,8 @@ func (g *AdministratorGuard) RemoveRoleMember(ctx context.Context, db bun.IDB, d
 // Protect locks one tenant and snapshots whether it currently has a durable
 // administrator. The returned verifier must run after the mutation and before
 // the transaction commits.
-func (g *AdministratorGuard) Protect(ctx context.Context, db bun.IDB, dialect, tenantID string) (func() error, error) {
-	if g == nil || g.now == nil || db == nil || strings.TrimSpace(tenantID) == "" {
+func (g *AdministratorGuard) Protect(ctx context.Context, db bun.IDB, dialect string, tenantID guid.ID) (func() error, error) {
+	if g == nil || g.now == nil || db == nil || tenantID.Zero() {
 		return nil, fmt.Errorf("invalid tenant administrator guard configuration")
 	}
 	if err := policyx.Lock(ctx, db, dialect, tenantID); err != nil {
@@ -75,13 +75,13 @@ func (g *AdministratorGuard) Protect(ctx context.Context, db bun.IDB, dialect, t
 	}, nil
 }
 
-func (g *AdministratorGuard) hasDurableAdministrator(ctx context.Context, db bun.IDB, tenantID string) (bool, error) {
+func (g *AdministratorGuard) hasDurableAdministrator(ctx context.Context, db bun.IDB, tenantID guid.ID) (bool, error) {
 	var count int64
 	now := g.now().UTC().UnixMilli()
 	err := db.NewRaw(`
 SELECT COUNT(DISTINCT administrators.principal_id)
 FROM (
-    SELECT members.user_subject AS principal_id
+    SELECT members.principal_id
     FROM iam_role_members AS members
     JOIN iam_role_permissions AS permissions
       ON permissions.tenant_id = members.tenant_id AND permissions.role_id = members.role_id
@@ -114,7 +114,7 @@ FROM (
 JOIN iam_principals AS principals
   ON principals.id = administrators.principal_id AND principals.status = 'active'
 JOIN iam_tenant_members AS tenant_members
-  ON tenant_members.tenant_id = ? AND tenant_members.user_subject = administrators.principal_id AND tenant_members.status = 'active'`,
+  ON tenant_members.tenant_id = ? AND tenant_members.principal_id = administrators.principal_id AND tenant_members.status = 'active'`,
 		tenantID, "tenant_administer", "platform_administer",
 		tenantID, "tenant_administer", "platform_administer", now,
 		tenantID, "tenant_administer", "platform_administer", now,

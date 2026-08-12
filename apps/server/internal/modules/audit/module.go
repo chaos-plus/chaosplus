@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
 )
@@ -14,17 +15,19 @@ type Module struct {
 	registrar *authz.Registrar
 	db        *bun.DB
 	anchorCfg Config
+	nextID    func() (guid.ID, error)
 }
 
-func NewModule(db *bun.DB, registrar *authz.Registrar, cfg Config) *Module {
-	if db == nil || registrar == nil {
-		panic("audit module requires database and authz registrar")
+func NewModule(db *bun.DB, registrar *authz.Registrar, cfg Config, nextID func() (guid.ID, error)) *Module {
+	if db == nil || registrar == nil || nextID == nil {
+		panic("audit module requires database, authz registrar, and id generator")
 	}
 	return &Module{
-		service:   NewService(db),
+		service:   NewService(db, nextID),
 		registrar: registrar,
 		db:        db,
 		anchorCfg: cfg,
+		nextID:    nextID,
 	}
 }
 
@@ -38,13 +41,13 @@ func (m *Module) Start(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("audit anchor configuration: %w", err)
 	}
-	svc := NewServiceWithAnchor(m.db, store)
+	svc := NewServiceWithAnchor(m.db, store, m.nextID)
 	if m.anchorCfg.Anchor.SigningKey != "" {
 		signer, err := NewRootSigner(m.anchorCfg.Anchor.SigningKey)
 		if err != nil {
 			return fmt.Errorf("audit anchor signing key: %w", err)
 		}
-		svc = NewServiceWithAnchorAndSigner(m.db, store, signer)
+		svc = NewServiceWithAnchorAndSigner(m.db, store, signer, m.nextID)
 	}
 	m.service = svc
 	return nil

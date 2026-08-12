@@ -52,7 +52,11 @@ func RegisterSAMLREST(api huma.API, service *Service, registrar *authz.Registrar
 func RegisterSAMLAdminREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	list := huma.Operation{OperationID: "federation-list-saml-service-providers", Method: http.MethodGet, Path: "/iam/saml/service-providers", Summary: "List tenant SAML service providers", Tags: []string{"federation"}}
 	authz.Register(registrar, api, list, authz.Guard{Resource: "identity_provider", Verb: "view"}, func(ctx context.Context, in *samlSPListInput) (*respx.Body[[]SAMLServiceProvider], error) {
-		items, err := service.ListSAMLServiceProviders(ctx, in.TenantID)
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListSAMLServiceProviders(ctx, tenantID)
 		if err != nil {
 			return nil, samlError(err)
 		}
@@ -61,7 +65,11 @@ func RegisterSAMLAdminREST(api huma.API, service *Service, registrar *authz.Regi
 
 	create := huma.Operation{OperationID: "federation-create-saml-service-provider", Method: http.MethodPost, Path: "/iam/saml/service-providers", Summary: "Register a SAML service provider from its metadata", Tags: []string{"federation"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}
 	authz.Register(registrar, api, create, authz.Guard{Resource: "identity_provider", Verb: "create"}, func(ctx context.Context, in *samlSPCreateInput) (*respx.Body[SAMLServiceProvider], error) {
-		item, err := service.CreateSAMLServiceProvider(ctx, in.TenantID, samlSPInputFromBody(in.Body))
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.CreateSAMLServiceProvider(ctx, tenantID, samlSPInputFromBody(in.Body))
 		if err != nil {
 			return nil, samlError(err)
 		}
@@ -70,7 +78,15 @@ func RegisterSAMLAdminREST(api huma.API, service *Service, registrar *authz.Regi
 
 	replace := huma.Operation{OperationID: "federation-update-saml-service-provider", Method: http.MethodPut, Path: "/iam/saml/service-providers/{sp_id}", Summary: "Replace a SAML service provider", Tags: []string{"federation"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}
 	authz.Register(registrar, api, replace, authz.Guard{Resource: "identity_provider", Verb: "update"}, func(ctx context.Context, in *samlSPReplaceInput) (*respx.Body[SAMLServiceProvider], error) {
-		item, err := service.UpdateSAMLServiceProvider(ctx, in.TenantID, in.ServiceProviderID, samlSPInputFromBody(in.Body))
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		spID, err := parseFederationID(in.ServiceProviderID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.UpdateSAMLServiceProvider(ctx, tenantID, spID, samlSPInputFromBody(in.Body))
 		if err != nil {
 			return nil, samlError(err)
 		}
@@ -79,7 +95,15 @@ func RegisterSAMLAdminREST(api huma.API, service *Service, registrar *authz.Regi
 
 	remove := huma.Operation{OperationID: "federation-delete-saml-service-provider", Method: http.MethodDelete, Path: "/iam/saml/service-providers/{sp_id}", Summary: "Delete a SAML service provider", Tags: []string{"federation"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}
 	authz.Register(registrar, api, remove, authz.Guard{Resource: "identity_provider", Verb: "delete"}, func(ctx context.Context, in *samlSPIDInput) (*respx.Body[map[string]bool], error) {
-		if err := service.DeleteSAMLServiceProvider(ctx, in.TenantID, in.ServiceProviderID); err != nil {
+		tenantID, err := parseFederationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		spID, err := parseFederationID(in.ServiceProviderID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.DeleteSAMLServiceProvider(ctx, tenantID, spID); err != nil {
 			return nil, samlError(err)
 		}
 		return respx.OK(ctx, map[string]bool{"deleted": true}), nil
@@ -111,7 +135,12 @@ func RegisterSAMLBrowserREST(api huma.API, service *Service) {
 	authz.Public(&sso)
 	api.OpenAPI().AddOperation(&sso)
 	api.Adapter().Handle(&sso, func(ctx huma.Context) {
-		service.ServeSAMLSSO(api, ctx, ctx.Param("tenant_id"))
+		tenantID, err := parseFederationID(ctx.Param("tenant_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		service.ServeSAMLSSO(api, ctx, tenantID)
 	})
 
 	ssoPost := huma.Operation{
@@ -124,7 +153,12 @@ func RegisterSAMLBrowserREST(api huma.API, service *Service) {
 	authz.Public(&ssoPost)
 	api.OpenAPI().AddOperation(&ssoPost)
 	api.Adapter().Handle(&ssoPost, func(ctx huma.Context) {
-		service.ServeSAMLSSO(api, ctx, ctx.Param("tenant_id"))
+		tenantID, err := parseFederationID(ctx.Param("tenant_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		service.ServeSAMLSSO(api, ctx, tenantID)
 	})
 
 	slo := huma.Operation{
@@ -139,7 +173,12 @@ func RegisterSAMLBrowserREST(api huma.API, service *Service) {
 	authz.Public(&slo)
 	api.OpenAPI().AddOperation(&slo)
 	api.Adapter().Handle(&slo, func(ctx huma.Context) {
-		service.ServeSAMLSLO(api, ctx, ctx.Param("tenant_id"))
+		tenantID, err := parseFederationID(ctx.Param("tenant_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		service.ServeSAMLSLO(api, ctx, tenantID)
 	})
 
 	sloPost := huma.Operation{
@@ -152,7 +191,12 @@ func RegisterSAMLBrowserREST(api huma.API, service *Service) {
 	authz.Public(&sloPost)
 	api.OpenAPI().AddOperation(&sloPost)
 	api.Adapter().Handle(&sloPost, func(ctx huma.Context) {
-		service.ServeSAMLSLO(api, ctx, ctx.Param("tenant_id"))
+		tenantID, err := parseFederationID(ctx.Param("tenant_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		service.ServeSAMLSLO(api, ctx, tenantID)
 	})
 
 	metadata := huma.Operation{
@@ -165,7 +209,12 @@ func RegisterSAMLBrowserREST(api huma.API, service *Service) {
 	authz.Public(&metadata)
 	api.OpenAPI().AddOperation(&metadata)
 	api.Adapter().Handle(&metadata, func(ctx huma.Context) {
-		service.ServeSAMLMetadata(api, ctx, ctx.Param("tenant_id"))
+		tenantID, err := parseFederationID(ctx.Param("tenant_id"))
+		if err != nil {
+			writeFederationError(api, ctx, err)
+			return
+		}
+		service.ServeSAMLMetadata(api, ctx, tenantID)
 	})
 }
 

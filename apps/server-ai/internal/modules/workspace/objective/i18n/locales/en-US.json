@@ -1,0 +1,6 @@
+{
+  "workspace.objective.invalid": "The objective is invalid.",
+  "workspace.objective.not_found": "The objective was not found.",
+  "workspace.objective.version_conflict": "The objective was changed by another request. Reload it and try again.",
+  "workspace.objective.unavailable": "The objective service is unavailable."
+}

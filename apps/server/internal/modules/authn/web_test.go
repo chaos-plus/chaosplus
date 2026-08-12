@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
@@ -43,7 +45,7 @@ func TestWebServiceSessionAndReturnURLHelpers(t *testing.T) {
 	assert.ErrorIs(t, err, authnext.ErrReturnURL)
 
 	// A session created directly authenticates like any browser session.
-	token, err := service.CreateSession(t.Context(), principalID, time.Now().UTC(), authnext.Assurance{AuthTime: time.Now().UTC(), Level: 1, Methods: []string{"pwd"}})
+	token, err := service.CreateSession(t.Context(), parseGUID(principalID), time.Now().UTC(), authnext.Assurance{AuthTime: time.Now().UTC(), Level: 1, Methods: []string{"pwd"}})
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	claims, err := service.Authenticate(t.Context(), "", service.SessionCookie(token))
@@ -53,7 +55,7 @@ func TestWebServiceSessionAndReturnURLHelpers(t *testing.T) {
 	// A disabled service refuses both helpers instead of silently succeeding.
 	disabled, err := NewWebService(authnext.Config{}, nil)
 	require.NoError(t, err)
-	_, err = disabled.CreateSession(t.Context(), principalID, time.Now().UTC(), authnext.Assurance{})
+	_, err = disabled.CreateSession(t.Context(), parseGUID(principalID), time.Now().UTC(), authnext.Assurance{})
 	assert.ErrorIs(t, err, authnext.ErrDisabled)
 	_, err = disabled.ResolveReturnURL("https://app.example/")
 	assert.ErrorIs(t, err, authnext.ErrDisabled)
@@ -93,6 +95,12 @@ func TestWebServicePropagatesDatabaseFailures(t *testing.T) {
 	})
 }
 
+var authnIdentityIDCounter atomic.Int64
+
+func authnIdentityNextID() (guid.ID, error) {
+	return guid.ID(authnIdentityIDCounter.Add(1) + 1_000_000), nil
+}
+
 func newLocalService(t *testing.T) (*WebService, string) {
 	t.Helper()
 	db, err := bunxtest.Memory()
@@ -110,11 +118,12 @@ func newLocalService(t *testing.T) (*WebService, string) {
 		Passkey: authnext.PasskeyConfig{Enabled: true, RPID: "app.example", DisplayName: "Chaosplus", Origins: []string{"https://app.example"}},
 		Web:     authnext.WebConfig{Enabled: true, CookieName: "cp_session", SessionTTL: time.Hour, IdleTTL: 10 * time.Minute, PostLoginURL: "https://app.example/", PostLogoutURL: "https://app.example/login", AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"}, CookieSecure: true},
 	}
-	service, err := NewWebService(cfg, db)
+	nextID := newTestIDGenerator()
+	service, err := NewWebService(cfg, db, WithIDGenerator(nextID))
 	require.NoError(t, err)
-	principalID, err := EnsureBootstrapPrincipal(context.Background(), db, BootstrapPrincipal{LoginName: "Admin", Password: "correct horse battery staple", DisplayName: "Administrator", Email: "admin@example.com"})
+	principalID, err := EnsureBootstrapPrincipal(context.Background(), db, BootstrapPrincipal{LoginName: "Admin", Password: "correct horse battery staple", DisplayName: "Administrator", Email: "admin@example.com"}, nextID)
 	require.NoError(t, err)
-	return service, principalID
+	return service, guidString(principalID)
 }
 
 func TestLocalLoginSessionLogout(t *testing.T) {
@@ -142,7 +151,7 @@ func TestLocalLoginSessionLogout(t *testing.T) {
 
 func TestLocalAccessToken(t *testing.T) {
 	service, principalID := newLocalService(t)
-	token, expires, err := service.IssueAccessToken(context.Background(), principalID, "api", "openid profile")
+	token, expires, err := service.IssueAccessToken(context.Background(), parseGUID(principalID), "api", "openid profile")
 	require.NoError(t, err)
 	assert.Equal(t, int64(60), expires)
 	claims, err := service.Authenticate(context.Background(), "Bearer "+token, "")
@@ -200,12 +209,12 @@ func TestSessionAndPasswordSecurityCenter(t *testing.T) {
 	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(third))
 	assert.ErrorIs(t, err, ErrInvalidSession)
 
-	auditService := auditmod.NewService(service.db)
+	auditService := auditmod.NewService(service.db, newTestIDGenerator())
 	for _, eventType := range []string{"session_revoke", "password_change", "logout_all"} {
 		events, total, auditErr := auditService.List(t.Context(), auditmod.Filter{TenantID: authnAuditTenant, EventType: eventType, Offset: 0, Limit: 50})
 		require.NoError(t, auditErr)
 		require.Equal(t, int64(1), total)
-		require.Equal(t, principalID, events[0].PrincipalID)
+		require.Equal(t, parseGUID(principalID), events[0].PrincipalID)
 	}
 	integrity, err := auditService.Verify(t.Context(), authnAuditTenant)
 	require.NoError(t, err)
@@ -236,7 +245,9 @@ func TestPasswordHistoryRetainsPolicyWindow(t *testing.T) {
 
 func TestDisabledPrincipalInvalidatesBearerToken(t *testing.T) {
 	service, principalID := newLocalService(t)
-	token, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	require.NoError(t, organization.Migrate(t.Context(), service.db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, testID("tenant")))
+	token, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "openid")
 	require.NoError(t, err)
 	_, err = service.db.NewUpdate().Table("iam_principals").Set("status = 'disabled'").Where("id = ?", principalID).Exec(t.Context())
 	require.NoError(t, err)
@@ -244,7 +255,9 @@ func TestDisabledPrincipalInvalidatesBearerToken(t *testing.T) {
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
 
 	deletedService, deletedPrincipalID := newLocalService(t)
-	deletedToken, _, err := deletedService.IssueAccessToken(t.Context(), deletedPrincipalID, "api", "openid")
+	require.NoError(t, organization.Migrate(t.Context(), deletedService.db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), deletedService.db, testID("tenant")))
+	deletedToken, _, err := deletedService.IssueAccessToken(t.Context(), parseGUID(deletedPrincipalID), "api", "openid")
 	require.NoError(t, err)
 	_, err = deletedService.db.NewDelete().Table("iam_principals").Where("id = ?", deletedPrincipalID).Exec(t.Context())
 	require.NoError(t, err)
@@ -311,7 +324,7 @@ func TestSubjectAndIDTokenVariants(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "tenant", claims.OrganizationID)
 
-	idToken, err := service.IssueIDToken(t.Context(), principalID, "browser", "nonce")
+	idToken, err := service.IssueIDToken(t.Context(), parseGUID(principalID), "browser", "nonce")
 	require.NoError(t, err)
 	idTokenParts := strings.Split(idToken, ".")
 	require.Len(t, idTokenParts, 3)
@@ -320,39 +333,41 @@ func TestSubjectAndIDTokenVariants(t *testing.T) {
 	var idClaims map[string]any
 	require.NoError(t, json.Unmarshal(idTokenPayload, &idClaims))
 	assert.Equal(t, true, idClaims["email_verified"])
-	tenantIDToken, err := service.IssueTenantIDToken(t.Context(), principalID, "tenant", "browser", "")
+	tenantIDToken, err := service.IssueTenantIDToken(t.Context(), parseGUID(principalID), "tenant", "browser", "")
 	require.NoError(t, err)
 	assert.Len(t, strings.Split(tenantIDToken, "."), 3)
 }
 
 func TestOAuthClientBearerSubjectLifecycle(t *testing.T) {
 	service, _ := newLocalService(t)
+	require.NoError(t, organization.Migrate(t.Context(), service.db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, testID("tenant")))
 	now := time.Now().UTC().UnixMilli()
 	_, err := service.db.ExecContext(t.Context(), `INSERT INTO iam_oauth_clients
- (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, "worker", "tenant", "Worker", now, now)
+ (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, testID("worker"), testID("tenant"), "Worker", now, now)
 	require.NoError(t, err)
 
-	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), wireID("worker"), wireID("tenant"), "api", "jobs.read", "Worker")
 	require.NoError(t, err)
 	claims, err := service.Authenticate(t.Context(), "Bearer "+token, "")
 	require.NoError(t, err)
 	assert.Equal(t, authnext.SubjectTypeOAuthClient, claims.SubjectType)
-	assert.Equal(t, "client:worker", claims.Subject)
-	assert.Equal(t, "tenant", claims.OrganizationID)
+	assert.Equal(t, "client:"+wireID("worker"), claims.Subject)
+	assert.Equal(t, wireID("tenant"), claims.OrganizationID)
 
-	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), "worker", "other-tenant", "api", "jobs.read", "Worker")
+	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), wireID("worker"), wireID("other-tenant"), "api", "jobs.read", "Worker")
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
-	_, err = service.db.NewUpdate().Table("iam_oauth_clients").Set("status = 'disabled'").Where("id = 'worker'").Exec(t.Context())
+	_, err = service.db.NewUpdate().Table("iam_oauth_clients").Set("status = 'disabled'").Where("id = ?", testID("worker")).Exec(t.Context())
 	require.NoError(t, err)
 	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
-	_, err = service.db.NewDelete().Table("iam_oauth_clients").Where("id = 'worker'").Exec(t.Context())
+	_, err = service.db.NewDelete().Table("iam_oauth_clients").Where("id = ?", testID("worker")).Exec(t.Context())
 	require.NoError(t, err)
 	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
 
-	for _, subject := range []string{"worker", "client:"} {
-		malformed, _, issueErr := service.issueSubjectToken(t.Context(), authnext.SubjectTypeOAuthClient, subject, "tenant", "api", "", 0, "", "", false, authnext.Assurance{})
+	for _, subject := range []string{wireID("worker"), "client:"} {
+		malformed, _, issueErr := service.issueSubjectToken(t.Context(), authnext.SubjectTypeOAuthClient, subject, wireID("tenant"), "api", "", 0, "", "", false, authnext.Assurance{})
 		require.NoError(t, issueErr)
 		_, authenticateErr := service.Authenticate(t.Context(), "Bearer "+malformed, "")
 		assert.ErrorIs(t, authenticateErr, authnext.ErrInvalidToken)
@@ -365,23 +380,23 @@ func TestOAuthClientBearerSubjectLifecycle(t *testing.T) {
 func TestServiceAccountBearerSubjectLifecycle(t *testing.T) {
 	service, _ := newLocalService(t)
 	require.NoError(t, organization.Migrate(t.Context(), service.db))
-	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, "tenant"))
-	identities := identity.NewService(service.db, authnAuditAppender(auditmod.NewService(service.db)), iam.NewAdministratorGuard())
-	account, err := identities.CreateServiceAccount(t.Context(), "tenant", "automation", "Automation", "", nil)
+	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, testID("tenant")))
+	identities := identity.NewService(service.db, authnAuditAppender(auditmod.NewService(service.db, newTestIDGenerator())), iam.NewAdministratorGuard(), authnIdentityNextID)
+	account, err := identities.CreateServiceAccount(t.Context(), testID("tenant"), "automation", "Automation", "", nil)
 	require.NoError(t, err)
 
-	token, _, err := service.IssueTenantServiceAccountToken(t.Context(), account.ID, "tenant", "api", "jobs.read", account.LoginName, 1)
+	token, _, err := service.IssueTenantServiceAccountToken(t.Context(), guidString(account.ID), wireID("tenant"), "api", "jobs.read", account.LoginName, 1)
 	require.NoError(t, err)
 	claims, err := service.Authenticate(t.Context(), "Bearer "+token, "")
 	require.NoError(t, err)
 	assert.Equal(t, authnext.SubjectTypeServiceAccount, claims.SubjectType)
-	assert.Equal(t, account.ID, claims.Subject)
+	assert.Equal(t, guidString(account.ID), claims.Subject)
 
-	wrongTenant, _, err := service.IssueTenantServiceAccountToken(t.Context(), account.ID, "other", "api", "jobs.read", account.LoginName, 1)
+	wrongTenant, _, err := service.IssueTenantServiceAccountToken(t.Context(), guidString(account.ID), "other", "api", "jobs.read", account.LoginName, 1)
 	require.NoError(t, err)
 	_, err = service.Authenticate(t.Context(), "Bearer "+wrongTenant, "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
-	_, err = identities.ReplaceServiceAccount(t.Context(), "tenant", account.ID, account.DisplayName, "", "disabled", nil, account.Version)
+	_, err = identities.ReplaceServiceAccount(t.Context(), testID("tenant"), account.ID, account.DisplayName, "", "disabled", nil, account.Version)
 	require.NoError(t, err)
 	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
 	assert.ErrorIs(t, err, authnext.ErrInvalidToken)
@@ -389,18 +404,20 @@ func TestServiceAccountBearerSubjectLifecycle(t *testing.T) {
 
 func TestOAuthClientBearerSubjectStorageFailure(t *testing.T) {
 	service, _ := newLocalService(t)
+	require.NoError(t, organization.Migrate(t.Context(), service.db))
+	require.NoError(t, organization.EnsureTenant(t.Context(), service.db, testID("tenant")))
 	now := time.Now().UTC().UnixMilli()
 	_, err := service.db.ExecContext(t.Context(), `INSERT INTO iam_oauth_clients
- (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, "worker", "tenant", "Worker", now, now)
+ (id, tenant_id, name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`, testID("worker"), testID("tenant"), "Worker", now, now)
 	require.NoError(t, err)
-	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	token, _, err := service.IssueTenantOAuthClientToken(t.Context(), wireID("worker"), wireID("tenant"), "api", "jobs.read", "Worker")
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(t.Context(), "DROP TABLE iam_oauth_clients")
 	require.NoError(t, err)
 
 	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
 	assert.ErrorIs(t, err, authnext.ErrUnavailable)
-	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), "worker", "tenant", "api", "jobs.read", "Worker")
+	_, _, err = service.IssueTenantOAuthClientToken(t.Context(), wireID("worker"), wireID("tenant"), "api", "jobs.read", "Worker")
 	assert.ErrorIs(t, err, authnext.ErrUnavailable)
 }
 
@@ -408,7 +425,7 @@ func TestTokenAndSessionExpiration(t *testing.T) {
 	service, principalID := newLocalService(t)
 	issuedAt := time.Now().UTC()
 	service.now = func() time.Time { return issuedAt }
-	token, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	token, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "openid")
 	require.NoError(t, err)
 	service.now = func() time.Time { return issuedAt.Add(2 * time.Minute) }
 	_, err = service.Authenticate(t.Context(), "Bearer "+token, "")
@@ -433,7 +450,7 @@ func TestPrincipalSecurityStatesAndReconciliation(t *testing.T) {
 	oldSession, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
 	oldCookie := service.SessionCookie(oldSession)
-	oldAccess, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	oldAccess, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "openid")
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO iam_password_recovery_tokens (token_hmac, principal_id, created_at, expires_at, consumed_at) VALUES (?, ?, 1, 9999999999999, 0)`, strings.Repeat("a", 64), principalID)
 	require.NoError(t, err)
@@ -446,9 +463,9 @@ func TestPrincipalSecurityStatesAndReconciliation(t *testing.T) {
 
 	reconciled, err := EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{
 		LoginName: "admin", Password: "new correct horse battery staple", DisplayName: "Updated", Email: "UPDATED@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
-	assert.Equal(t, principalID, reconciled)
+	assert.Equal(t, parseGUID(principalID), reconciled)
 	var reconciledPrincipal principalRow
 	require.NoError(t, service.db.NewSelect().Model(&reconciledPrincipal).Where("id = ?", principalID).Scan(t.Context()))
 	assert.Equal(t, "updated@example.com", reconciledPrincipal.Email)
@@ -467,16 +484,16 @@ func TestPrincipalSecurityStatesAndReconciliation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{
 		LoginName: "admin", Password: "new correct horse battery staple", DisplayName: "Updated", Email: "updated@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
 	var unchangedCredentialVersion int64
 	require.NoError(t, service.db.NewSelect().Table("iam_credentials").Column("credential_version").Where("principal_id = ?", principalID).Scan(t.Context(), &unchangedCredentialVersion))
 	assert.Equal(t, credentialVersion, unchangedCredentialVersion)
 	assert.Error(t, func() error {
-		_, err := EnsureBootstrapPrincipal(t.Context(), nil, BootstrapPrincipal{})
+		_, err := EnsureBootstrapPrincipal(t.Context(), nil, BootstrapPrincipal{}, newTestIDGenerator())
 		return err
 	}())
-	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{LoginName: "", Password: "short"})
+	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{LoginName: "", Password: "short"}, newTestIDGenerator())
 	assert.Error(t, err)
 }
 
@@ -514,16 +531,16 @@ func TestWebServiceDefaultsAndValidation(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	seed := make([]byte, ed25519.SeedSize)
 	encoded := base64.RawStdEncoding.EncodeToString(seed)
-	_, err = NewWebService(authnext.Config{Enabled: true, SigningKey: encoded}, db)
+	_, err = NewWebService(authnext.Config{Enabled: true, SigningKey: encoded}, db, WithIDGenerator(newTestIDGenerator()))
 	assert.ErrorContains(t, err, "issuer is required")
-	_, err = NewWebService(authnext.Config{Enabled: true, Issuer: "https://iam.example"}, db)
+	_, err = NewWebService(authnext.Config{Enabled: true, Issuer: "https://iam.example"}, db, WithIDGenerator(newTestIDGenerator()))
 	assert.ErrorContains(t, err, "signing key is required")
 
 	service, err := NewWebService(authnext.Config{
 		Enabled: true, Issuer: " https://iam.example/ ", SigningKey: encoded,
 		MFA: authnext.MFAConfig{EncryptionKey: encoded},
 		Web: authnext.WebConfig{Enabled: true, SessionTTL: time.Minute, IdleTTL: time.Hour},
-	}, db, nil)
+	}, db, WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
 	assert.Equal(t, "https://iam.example", service.Issuer())
 	assert.Equal(t, []string{"chaosplus-api"}, service.cfg.Audience)
@@ -593,7 +610,7 @@ func TestWebServiceRejectsUnsafeSecurityConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := service.cfg
 			test.mutate(&cfg)
-			_, err := NewWebService(cfg, service.db)
+			_, err := NewWebService(cfg, service.db, WithIDGenerator(newTestIDGenerator()))
 			assert.ErrorContains(t, err, test.match)
 		})
 	}
@@ -646,14 +663,14 @@ func TestAuthenticationDatabaseUnavailable(t *testing.T) {
 	service, principalID := newLocalService(t)
 	session, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
-	principalToken, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "")
+	principalToken, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 	require.NoError(t, err)
 	require.NoError(t, service.db.Close())
 	_, err = service.Authenticate(t.Context(), "", service.SessionCookie(session))
 	assert.ErrorIs(t, err, authnext.ErrUnavailable)
 	_, err = service.Authenticate(t.Context(), "Bearer "+principalToken, "")
 	assert.ErrorIs(t, err, authnext.ErrUnavailable)
-	_, _, err = service.IssueTenantAccessToken(t.Context(), "missing", "tenant", "api", "")
+	_, _, err = service.IssueTenantAccessToken(t.Context(), testID("missing"), "tenant", "api", "")
 	assert.ErrorIs(t, err, authnext.ErrUnavailable)
 }
 
@@ -668,9 +685,9 @@ func TestDisabledServiceAndLoginValidation(t *testing.T) {
 	service, _ = newLocalService(t)
 	_, _, err = service.Login(t.Context(), "admin", "correct horse battery staple", "https://evil.example/")
 	assert.ErrorContains(t, err, "return URL is not allowed")
-	_, _, err = service.IssueAccessToken(t.Context(), "missing", "api", "")
+	_, _, err = service.IssueAccessToken(t.Context(), testID("missing"), "api", "")
 	assert.ErrorIs(t, err, ErrInvalidSession)
-	_, err = service.IssueIDToken(t.Context(), "missing", "client", "")
+	_, err = service.IssueIDToken(t.Context(), testID("missing"), "client", "")
 	assert.ErrorIs(t, err, ErrInvalidSession)
 }
 
@@ -805,7 +822,7 @@ func TestSecurityCenterAuthenticationAndReadFailures(t *testing.T) {
 
 	t.Run("session list storage", func(t *testing.T) {
 		storage, principalID := newLocalService(t)
-		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 		require.NoError(t, issueErr)
 		_, dropErr := storage.db.ExecContext(t.Context(), "DROP TABLE iam_sessions")
 		require.NoError(t, dropErr)
@@ -815,7 +832,7 @@ func TestSecurityCenterAuthenticationAndReadFailures(t *testing.T) {
 
 	t.Run("missing credential", func(t *testing.T) {
 		storage, principalID := newLocalService(t)
-		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 		require.NoError(t, issueErr)
 		_, deleteErr := storage.db.NewDelete().Model((*credentialRow)(nil)).Where("principal_id = ?", principalID).Exec(t.Context())
 		require.NoError(t, deleteErr)
@@ -825,7 +842,7 @@ func TestSecurityCenterAuthenticationAndReadFailures(t *testing.T) {
 
 	t.Run("corrupt credential", func(t *testing.T) {
 		storage, principalID := newLocalService(t)
-		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 		require.NoError(t, issueErr)
 		_, updateErr := storage.db.NewUpdate().Model((*credentialRow)(nil)).Set("password_hash = 'invalid'").Where("principal_id = ?", principalID).Exec(t.Context())
 		require.NoError(t, updateErr)
@@ -835,7 +852,7 @@ func TestSecurityCenterAuthenticationAndReadFailures(t *testing.T) {
 
 	t.Run("password history storage", func(t *testing.T) {
 		storage, principalID := newLocalService(t)
-		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), principalID, "api", "")
+		bearer, _, issueErr := storage.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 		require.NoError(t, issueErr)
 		_, dropErr := storage.db.ExecContext(t.Context(), "DROP TABLE iam_password_history")
 		require.NoError(t, dropErr)

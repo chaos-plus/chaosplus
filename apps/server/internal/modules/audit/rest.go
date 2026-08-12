@@ -7,13 +7,31 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseAuditID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
+
+func parseOptionalAuditID(value string) (guid.ID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	return parseAuditID(value)
+}
 
 type listInput struct {
 	TenantID    string `header:"X-Tenant-Id" maxLength:"128"`
@@ -58,8 +76,19 @@ type retentionInput struct {
 
 func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-list-events", Method: http.MethodGet, Path: "/iam/audit-events", Summary: "List tenant audit events", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *listInput) (*respx.Body[[]Event], error) {
-		filter := Filter{TenantID: in.TenantID, PrincipalID: in.PrincipalID, EventType: in.EventType, Outcome: in.Outcome, TargetType: in.TargetType, TargetID: in.TargetID, Offset: in.Offset, Limit: in.Limit}
-		var err error
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		principalID, err := parseOptionalAuditID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		targetID, err := parseOptionalAuditID(in.TargetID)
+		if err != nil {
+			return nil, err
+		}
+		filter := Filter{TenantID: tenantID, PrincipalID: principalID, EventType: in.EventType, Outcome: in.Outcome, TargetType: in.TargetType, TargetID: targetID, Offset: in.Offset, Limit: in.Limit}
 		if filter.From, err = optionalTime(in.From); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid_audit_time")
 		}
@@ -80,9 +109,12 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		if _, err = service.PrepareExport(ctx, filter); err != nil {
 			return nil, auditAPIError(err)
 		}
-		principalID, _ := authnext.SubjectFromContext(ctx)
+		var principalID guid.ID
+		if claims, ok := authnext.FromContext(ctx); ok && claims != nil {
+			principalID = claims.PrincipalID
+		}
 		if _, err = service.Append(ctx, EventInput{
-			TenantID: in.TenantID, PrincipalID: principalID, EventType: "audit_export_requested",
+			TenantID: filter.TenantID, PrincipalID: principalID, EventType: "audit_export_requested",
 			TargetType: "audit_event", Outcome: "success", Detail: map[string]any{"filter": exportCriteriaOf(filter)},
 		}); err != nil {
 			return nil, auditAPIError(err)
@@ -91,7 +123,7 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
-		filename := fmt.Sprintf("chaosplus-audit-%s.ndjson", snapshot.GeneratedAt.Format("20060102T150405Z"))
+		filename := fmt.Sprintf("audit-%s.ndjson", snapshot.GeneratedAt.Format("20060102T150405Z"))
 		return &huma.StreamResponse{Body: func(stream huma.Context) {
 			stream.SetHeader("Content-Type", "application/x-ndjson")
 			stream.SetHeader("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
@@ -102,42 +134,70 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		}}, nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-get-event", Method: http.MethodGet, Path: "/iam/audit-events/{id}", Summary: "Get a tenant audit event", Tags: []string{"audit"}, Errors: []int{http.StatusNotFound, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *eventInput) (*respx.Body[Event], error) {
-		event, err := service.Get(ctx, in.TenantID, in.ID)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseAuditID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		event, err := service.Get(ctx, tenantID, id)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
 		return respx.OK(ctx, event), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-verify-integrity", Method: http.MethodGet, Path: "/iam/audit-integrity", Summary: "Verify the tenant audit hash chain", Tags: []string{"audit"}, Errors: []int{http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Integrity], error) {
-		result, err := service.Verify(ctx, in.TenantID)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		result, err := service.Verify(ctx, tenantID)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
 		return respx.OK(ctx, result), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-anchor-current", Method: http.MethodPost, Path: "/iam/audit-anchor", Summary: "Anchor the current verified audit head into the WORM store", Tags: []string{"audit"}, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "anchor"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Anchor], error) {
-		anchor, err := service.Anchor(ctx, in.TenantID)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := service.Anchor(ctx, tenantID)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
 		return respx.OK(ctx, anchor), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-get-governance", Method: http.MethodGet, Path: "/iam/audit/governance", Summary: "Get WORM governance status: retention policy, chain integrity and anchor chain", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "view"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Governance], error) {
-		report, err := service.Governance(ctx, in.TenantID)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		report, err := service.Governance(ctx, tenantID)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
 		return respx.OK(ctx, report), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-set-retention", Method: http.MethodPut, Path: "/iam/audit/retention", Summary: "Configure the tenant audit retention policy", Tags: []string{"audit"}, Errors: []int{http.StatusUnprocessableEntity, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "manage"}, func(ctx context.Context, in *retentionInput) (*respx.Body[RetentionPolicy], error) {
-		policy, err := service.SetRetentionPolicy(ctx, in.TenantID, in.Body.MinDays, in.Body.ArchiveAfterDays)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		policy, err := service.SetRetentionPolicy(ctx, tenantID, in.Body.MinDays, in.Body.ArchiveAfterDays)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
 		return respx.OK(ctx, policy), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "audit-sign-root", Method: http.MethodPost, Path: "/iam/audit/roots/sign", Summary: "Anchor and sign the current verified audit head as a WORM root commitment", Tags: []string{"audit"}, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError}}, authz.Guard{Resource: "audit_event", Verb: "manage"}, func(ctx context.Context, in *tenantInput) (*respx.Body[Anchor], error) {
-		anchor, err := service.SignRoot(ctx, in.TenantID)
+		tenantID, err := parseAuditID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := service.SignRoot(ctx, tenantID)
 		if err != nil {
 			return nil, auditAPIError(err)
 		}
@@ -162,8 +222,19 @@ func exportOperation() huma.Operation {
 }
 
 func exportFilter(in *exportInput) (Filter, error) {
-	filter := Filter{TenantID: in.TenantID, PrincipalID: in.PrincipalID, EventType: in.EventType, Outcome: in.Outcome, TargetType: in.TargetType, TargetID: in.TargetID}
-	var err error
+	tenantID, err := parseAuditID(in.TenantID)
+	if err != nil {
+		return Filter{}, err
+	}
+	principalID, err := parseOptionalAuditID(in.PrincipalID)
+	if err != nil {
+		return Filter{}, err
+	}
+	targetID, err := parseOptionalAuditID(in.TargetID)
+	if err != nil {
+		return Filter{}, err
+	}
+	filter := Filter{TenantID: tenantID, PrincipalID: principalID, EventType: in.EventType, Outcome: in.Outcome, TargetType: in.TargetType, TargetID: targetID}
 	if filter.From, err = optionalTime(in.From); err != nil {
 		return Filter{}, err
 	}

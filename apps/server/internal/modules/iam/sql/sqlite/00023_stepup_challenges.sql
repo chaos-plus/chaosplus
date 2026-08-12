@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_stepup_challenges (
     id_hash TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
     session_hash TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

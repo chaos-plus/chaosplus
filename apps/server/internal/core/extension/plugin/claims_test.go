@@ -105,7 +105,7 @@ func TestSignedWASMClaimsEnrichRealToken(t *testing.T) {
 	seed := make([]byte, ed25519.SeedSize)
 	issuer, err := authnmod.NewWebService(authnext.Config{
 		Enabled: true, Issuer: "https://iam.example", Audience: []string{"api"}, SigningKey: base64.RawStdEncoding.EncodeToString(seed), AccessTokenTTL: time.Hour,
-	}, db, authnmod.WithClaimEnricher(chain))
+	}, db, authnmod.WithClaimEnricher(chain), authnmod.WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
 	token, _, err := issuer.IssueTenantSubjectToken(context.Background(), "alice", "tenant", "api", "orders.read", "Alice", "")
 	require.NoError(t, err)

@@ -1,12 +1,11 @@
 package organization
 
 import (
-	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -82,12 +81,12 @@ func TestTenantUpdateDeleteValidationAndAuditRollback(t *testing.T) {
 		_, err = service.Update(t.Context(), tenant.ID, input)
 		assert.ErrorIs(t, err, ErrInvalidTenant)
 	}
-	_, err = service.Update(t.Context(), "", UpdateTenant{Name: stringPointer("Name"), Version: 1})
+	_, err = service.Update(t.Context(), 0, UpdateTenant{Name: stringPointer("Name"), Version: 1})
 	assert.ErrorIs(t, err, ErrInvalidTenant)
-	_, err = service.Update(t.Context(), "missing", UpdateTenant{Name: stringPointer("Name"), Version: 1})
+	_, err = service.Update(t.Context(), testID("missing"), UpdateTenant{Name: stringPointer("Name"), Version: 1})
 	assert.ErrorIs(t, err, ErrTenantNotFound)
-	assert.ErrorIs(t, service.Delete(t.Context(), "", 1), ErrInvalidTenant)
-	assert.ErrorIs(t, service.Delete(t.Context(), "missing", 1), ErrTenantNotFound)
+	assert.ErrorIs(t, service.Delete(t.Context(), 0, 1), ErrInvalidTenant)
+	assert.ErrorIs(t, service.Delete(t.Context(), testID("missing"), 1), ErrTenantNotFound)
 
 	unchanged, err := service.Update(t.Context(), tenant.ID, UpdateTenant{Name: &tenant.Name, Version: tenant.Version})
 	require.NoError(t, err)
@@ -118,14 +117,14 @@ func TestTenantStorageFailures(t *testing.T) {
 	db, service := newTenantService(t)
 	_, healthy := newTenantService(t)
 	require.NoError(t, db.Close())
-	assert.Error(t, EnsureTenant(t.Context(), db, "tenant"))
-	_, err := service.Get(t.Context(), "tenant")
+	assert.Error(t, EnsureTenant(t.Context(), db, testID("tenant")))
+	_, err := service.Get(t.Context(), testID("tenant"))
 	assert.Error(t, err)
 	_, err = service.Create(t.Context(), CreateTenant{Slug: "tenant", Name: "Tenant"})
 	assert.Error(t, err)
-	assert.Error(t, service.Delete(t.Context(), "tenant", 1))
-	assert.Error(t, EnsureTenant(t.Context(), nil, "tenant"))
-	assert.ErrorIs(t, EnsureTenant(t.Context(), db, ""), ErrInvalidTenant)
+	assert.Error(t, service.Delete(t.Context(), testID("tenant"), 1))
+	assert.Error(t, EnsureTenant(t.Context(), nil, testID("tenant")))
+	assert.ErrorIs(t, EnsureTenant(t.Context(), db, 0), ErrInvalidTenant)
 	assert.Panics(t, func() { NewTenantService(nil, healthy.audit, healthy.nextID) })
 	assert.Panics(t, func() { NewTenantService(healthy.repo.db, nil, healthy.nextID) })
 	assert.Panics(t, func() { NewTenantService(healthy.repo.db, healthy.audit, nil) })
@@ -133,24 +132,25 @@ func TestTenantStorageFailures(t *testing.T) {
 
 func TestEnsureTenantDerivesStableValidSlugs(t *testing.T) {
 	db, _ := newTenantService(t)
-	for _, id := range []string{"tenant-a", "t1", "Tenant With Spaces", strings.Repeat("x", 128), "租户"} {
+	for _, id := range []guid.ID{testID("tenant-a"), testID("t1"), testID("long")} {
 		require.NoError(t, EnsureTenant(t.Context(), db, id))
 		stored, err := getTenantRow(t.Context(), db, id)
 		require.NoError(t, err)
 		assert.True(t, validTenantSlug(stored.Slug), stored.Slug)
+		assert.Equal(t, id.String(), stored.Slug)
 		assert.LessOrEqual(t, len(stored.Slug), 63)
 	}
-	row, err := getTenantRow(t.Context(), db, "t1")
+	row, err := getTenantRow(t.Context(), db, testID("t1"))
 	require.NoError(t, err)
-	assert.Equal(t, "tenant-t1", row.Slug)
-	require.NoError(t, EnsureTenant(t.Context(), db, "t1"))
+	assert.Equal(t, row.ID.String(), row.Slug)
+	require.NoError(t, EnsureTenant(t.Context(), db, testID("t1")))
 }
 
 func newTenantService(t *testing.T) (*bun.DB, *TenantService) {
 	t.Helper()
 	db, _ := newOrganizationService(t)
 	var sequence atomic.Int64
-	return db, NewTenantService(db, realOrganizationAuditAppender(db), func() (string, error) {
-		return fmt.Sprintf("tenant-%d", sequence.Add(1)), nil
+	return db, NewTenantService(db, realOrganizationAuditAppender(db), func() (guid.ID, error) {
+		return guid.ID(sequence.Add(1)), nil
 	})
 }

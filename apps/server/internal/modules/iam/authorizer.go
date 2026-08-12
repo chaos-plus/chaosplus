@@ -13,6 +13,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
 
@@ -22,49 +23,57 @@ const policySnapshotAttempts = 3
 // primary. Decisions are not cached, so committed revocations are immediately
 // visible.
 type Authorizer struct {
-	db  *bun.DB
-	now func() time.Time
+	db       *bun.DB
+	registry *authz.Registry
+	now      func() time.Time
 }
 
 type tenantGrant struct {
-	PermissionCode string `bun:"permission_code"`
-	RoleID         string `bun:"role_id"`
-	SourceType     string `bun:"source_type"`
-	SourceID       string `bun:"source_id"`
-	DataScope      string `bun:"data_scope"`
-	ConditionJSON  string `bun:"condition_json"`
+	PermissionCode string  `bun:"permission_code"`
+	RoleID         guid.ID `bun:"role_id"`
+	SourceType     string  `bun:"source_type"`
+	SourceID       guid.ID `bun:"source_id"`
+	DataScope      string  `bun:"data_scope"`
+	ConditionJSON  string  `bun:"condition_json"`
 }
 
 type scopedGrant struct {
-	PermissionCode string `bun:"permission_code"`
-	RoleID         string `bun:"role_id"`
-	Effect         string `bun:"effect"`
-	ScopeID        string `bun:"scope_id"`
-	EntityID       string `bun:"entity_id"`
-	Depth          int    `bun:"depth"`
-	ConditionJSON  string `bun:"condition_json"`
+	PermissionCode string  `bun:"permission_code"`
+	RoleID         guid.ID `bun:"role_id"`
+	Effect         string  `bun:"effect"`
+	ScopeID        guid.ID `bun:"scope_id"`
+	EntityID       guid.ID `bun:"entity_id"`
+	Depth          int     `bun:"depth"`
+	ConditionJSON  string  `bun:"condition_json"`
 }
 
 type authorizationSnapshot struct {
 	revision           int64
 	tenantActive       bool
 	memberActive       bool
-	entityIDs          []string
+	entityIDs          []guid.ID
 	tenantGrants       []tenantGrant
 	scopedGrants       []scopedGrant
 	relationshipGrants []relationshipGrant
-	ownerIDs           []string
-	departmentIDs      []string
+	ownerIDs           []guid.ID
+	departmentIDs      []guid.ID
 }
 
 func NewAuthorizer(db *bun.DB) *Authorizer {
+	return NewAuthorizerWithRegistry(db, authz.DefaultRegistry())
+}
+
+func NewAuthorizerWithRegistry(db *bun.DB, registry *authz.Registry) *Authorizer {
 	if db == nil {
 		panic("iam authorizer requires database")
 	}
-	return &Authorizer{db: db, now: time.Now}
+	if registry == nil {
+		panic("iam authorizer requires authorization registry")
+	}
+	return &Authorizer{db: db, registry: registry, now: time.Now}
 }
 
-func (a *Authorizer) Check(ctx context.Context, tenantID, permission, subject string) (bool, error) {
+func (a *Authorizer) Check(ctx context.Context, tenantID guid.ID, permission string, subject guid.ID) (bool, error) {
 	result, err := a.CheckBulk(ctx, tenantID, []string{permission}, subject)
 	return result[permission], err
 }
@@ -75,14 +84,14 @@ func (a *Authorizer) Check(ctx context.Context, tenantID, permission, subject st
 // restricted principal holds only its explicit iam_platform_grants rows.
 // Mutable principal state is rechecked on every request so disabling a
 // principal revokes platform access immediately.
-func (a *Authorizer) CheckPlatform(ctx context.Context, permission, subject string) (bool, error) {
-	if permission == "" || subject == "" || len(permission) > 128 || len(subject) > 255 {
+func (a *Authorizer) CheckPlatform(ctx context.Context, permission string, subject guid.ID) (bool, error) {
+	if permission == "" || subject.Zero() || len(permission) > 128 {
 		return false, fmt.Errorf("platform permission and subject are required")
 	}
 	// Fail closed for codes that are not declared platform actions. Route
 	// registration already rejects them, so reaching this branch means a
 	// caller bypassed the declaration gate.
-	if action, ok := authz.DefaultRegistry().Find(permission); !ok || action.Scope != "platform" {
+	if action, ok := a.registry.Find(permission); !ok || action.Scope != "platform" {
 		return false, nil
 	}
 	count, err := a.db.NewSelect().TableExpr("iam_principals AS p").
@@ -96,14 +105,14 @@ func (a *Authorizer) CheckPlatform(ctx context.Context, permission, subject stri
 	return count == 1, nil
 }
 
-func (a *Authorizer) CheckBulk(ctx context.Context, tenantID string, permissions []string, subject string) (map[string]bool, error) {
+func (a *Authorizer) CheckBulk(ctx context.Context, tenantID guid.ID, permissions []string, subject guid.ID) (map[string]bool, error) {
 	allowed := make(map[string]bool, len(permissions))
 	if len(permissions) == 0 {
 		return allowed, nil
 	}
 	tenantPermissions := make([]string, 0, len(permissions))
 	for _, permission := range permissions {
-		if action, ok := authz.DefaultRegistry().Find(permission); !ok || action.Scope != "platform" {
+		if action, ok := a.registry.Find(permission); !ok || action.Scope != "platform" {
 			tenantPermissions = append(tenantPermissions, permission)
 		}
 	}
@@ -132,7 +141,7 @@ func (a *Authorizer) CheckBulk(ctx context.Context, tenantID string, permissions
 		return nil, err
 	}
 	for _, permission := range permissions {
-		if action, ok := authz.DefaultRegistry().Find(permission); ok && action.Scope == "platform" {
+		if action, ok := a.registry.Find(permission); ok && action.Scope == "platform" {
 			allowed[permission] = platformAdministrator
 		} else {
 			allowed[permission] = grantSet[permission] || grantSet["tenant_administer"] || platformAdministrator
@@ -144,14 +153,14 @@ func (a *Authorizer) CheckBulk(ctx context.Context, tenantID string, permissions
 // Constraint compiles tenant roles and inherited entity bindings into a
 // parameter-only filter. ResourceIDs and DeniedIDs contain concrete entity IDs,
 // so business repositories never need per-row authorization calls.
-func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subject string) (authz.DataConstraint, error) {
-	if err := validateAuthorizationRequest(tenantID, "", permission, subject); err != nil {
+func (a *Authorizer) Constraint(ctx context.Context, tenantID guid.ID, permission string, subject guid.ID) (authz.DataConstraint, error) {
+	if err := validateAuthorizationRequest(tenantID, 0, permission, subject); err != nil {
 		return authz.DataConstraint{}, err
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
 	// Constraint returns concrete identifiers, so it genuinely needs the full
 	// tenant enumeration.
-	snapshot, err := a.snapshot(ctx, tenantID, "", permission, subject, true, trusted)
+	snapshot, err := a.snapshot(ctx, tenantID, 0, permission, subject, true, trusted)
 	if err != nil {
 		return authz.DataConstraint{}, err
 	}
@@ -161,21 +170,21 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subje
 	if !snapshot.memberActive {
 		return constraint, nil
 	}
-	constraint.OwnerIDs = snapshot.ownerIDs
-	constraint.DepartmentIDs = snapshot.departmentIDs
+	constraint.OwnerIDs = guidStrings(snapshot.ownerIDs)
+	constraint.DepartmentIDs = guidStrings(snapshot.departmentIDs)
 
 	tenantRequested, tenantAdmin := tenantCapabilities(snapshot.tenantGrants, permission)
-	action, _ := authz.DefaultRegistry().Find(permission)
+	action, _ := a.registry.Find(permission)
 	relationshipsByEntity := allowedRelationshipsByEntity(action, snapshot.relationshipGrants)
 	constraint.AllowAll = tenantRequested || tenantAdmin
-	ancestorSet := map[string]bool{}
+	ancestorSet := map[guid.ID]bool{}
 	for _, grant := range snapshot.scopedGrants {
 		if grant.Effect == "allow" && (grant.PermissionCode == permission || isAdministratorPermission(grant.PermissionCode)) {
 			ancestorSet[grant.ScopeID] = true
 		}
 	}
 	for id := range ancestorSet {
-		constraint.Ancestors = append(constraint.Ancestors, authz.ResourceRef{Type: "entity", ID: id})
+		constraint.Ancestors = append(constraint.Ancestors, authz.ResourceRef{Type: "entity", ID: id.String()})
 	}
 	sort.Slice(constraint.Ancestors, func(i, j int) bool { return constraint.Ancestors[i].ID < constraint.Ancestors[j].ID })
 
@@ -184,10 +193,10 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subje
 		allowed, explicitlyDenied, _ := decideEntity(permission, tenantRequested, tenantAdmin, grantsByEntity[entityID], relationshipsByEntity[entityID])
 		if allowed {
 			if !constraint.AllowAll {
-				constraint.ResourceIDs = append(constraint.ResourceIDs, entityID)
+				constraint.ResourceIDs = append(constraint.ResourceIDs, entityID.String())
 			}
 		} else if explicitlyDenied {
-			constraint.DeniedIDs = append(constraint.DeniedIDs, entityID)
+			constraint.DeniedIDs = append(constraint.DeniedIDs, entityID.String())
 		}
 	}
 	return constraint, nil
@@ -195,7 +204,7 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID, permission, subje
 
 // ExplainEntity returns the persisted matches and reason from the same
 // evaluation used by CheckEntity.
-func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID, permission, subject string) (authz.Explanation, error) {
+func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID guid.ID, permission string, subject guid.ID) (authz.Explanation, error) {
 	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil {
 		return authz.Explanation{}, err
 	}
@@ -207,16 +216,16 @@ func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID, perm
 	if !contains(snapshot.entityIDs, entityID) {
 		return a.inactiveOrMissingEntity(ctx, tenantID, entityID, snapshot.revision)
 	}
-	return explainAuthorization(snapshot, tenantID, entityID, "", "", permission), nil
+	return explainAuthorization(a.registry, snapshot, tenantID, entityID, "", 0, permission), nil
 }
 
-func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID, resourceType, resourceID, permission, subject string) (authz.Explanation, error) {
-	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil || resourceType == "" || resourceID == "" || len(resourceType) > 64 || len(resourceID) > 255 {
+func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID guid.ID, resourceType string, resourceID guid.ID, permission string, subject guid.ID) (authz.Explanation, error) {
+	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil || resourceType == "" || resourceID.Zero() || len(resourceType) > 64 {
 		return authz.Explanation{}, fmt.Errorf("%w: invalid business resource authorization request", iamdomain.ErrInvalidArgument)
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
 	trusted.Resource.Type = resourceType
-	trusted.Resource.ID = resourceID
+	trusted.Resource.ID = resourceID.String()
 	snapshot, err := a.snapshot(ctx, tenantID, entityID, permission, subject, false, trusted)
 	if err != nil {
 		return authz.Explanation{}, err
@@ -224,10 +233,10 @@ func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID, re
 	if !contains(snapshot.entityIDs, entityID) {
 		return a.inactiveOrMissingEntity(ctx, tenantID, entityID, snapshot.revision)
 	}
-	return explainAuthorization(snapshot, tenantID, entityID, resourceType, resourceID, permission), nil
+	return explainAuthorization(a.registry, snapshot, tenantID, entityID, resourceType, resourceID, permission), nil
 }
 
-func (a *Authorizer) inactiveOrMissingEntity(ctx context.Context, tenantID, entityID string, revision int64) (authz.Explanation, error) {
+func (a *Authorizer) inactiveOrMissingEntity(ctx context.Context, tenantID, entityID guid.ID, revision int64) (authz.Explanation, error) {
 	count, err := a.db.NewSelect().Table("iam_entities").Where("tenant_id = ? AND id = ?", tenantID, entityID).Count(ctx)
 	if err != nil {
 		return authz.Explanation{}, fmt.Errorf("get authorization entity state: %w", err)
@@ -238,7 +247,7 @@ func (a *Authorizer) inactiveOrMissingEntity(ctx context.Context, tenantID, enti
 	return authz.Explanation{Reason: "inactive_resource", Revision: revision, Matches: []authz.DecisionMatch{}}, nil
 }
 
-func explainAuthorization(snapshot authorizationSnapshot, tenantID, entityID, resourceType, resourceID, permission string) authz.Explanation {
+func explainAuthorization(registry *authz.Registry, snapshot authorizationSnapshot, tenantID, entityID guid.ID, resourceType string, resourceID guid.ID, permission string) authz.Explanation {
 	explanation := authz.Explanation{Reason: "no_matching_grant", Revision: snapshot.revision, Matches: []authz.DecisionMatch{}}
 	if !snapshot.memberActive {
 		if !snapshot.tenantActive {
@@ -249,23 +258,23 @@ func explainAuthorization(snapshot authorizationSnapshot, tenantID, entityID, re
 		return explanation
 	}
 	tenantRequested, tenantAdmin := tenantCapabilities(snapshot.tenantGrants, permission)
-	action, _ := authz.DefaultRegistry().Find(permission)
+	action, _ := registry.Find(permission)
 	for _, grant := range snapshot.tenantGrants {
 		explanation.Matches = append(explanation.Matches, authz.DecisionMatch{
-			PermissionCode: grant.PermissionCode, RoleID: grant.RoleID, SourceType: grant.SourceType, SourceID: grant.SourceID,
-			ScopeType: "tenant", ScopeID: tenantID, Effect: "allow",
+			PermissionCode: grant.PermissionCode, RoleID: grant.RoleID.String(), SourceType: grant.SourceType, SourceID: grant.SourceID.String(),
+			ScopeType: "tenant", ScopeID: tenantID.String(), Effect: "allow",
 		})
 	}
 	scoped := scopedByEntity(snapshot.scopedGrants)[entityID]
 	for _, grant := range scoped {
 		explanation.Matches = append(explanation.Matches, authz.DecisionMatch{
-			PermissionCode: grant.PermissionCode, RoleID: grant.RoleID, SourceType: "entity_binding", SourceID: grant.ScopeID,
-			ScopeType: "entity", ScopeID: grant.ScopeID, Effect: grant.Effect, Inherited: grant.Depth > 0,
+			PermissionCode: grant.PermissionCode, RoleID: grant.RoleID.String(), SourceType: "entity_binding", SourceID: grant.ScopeID.String(),
+			ScopeType: "entity", ScopeID: grant.ScopeID.String(), Effect: grant.Effect, Inherited: grant.Depth > 0,
 		})
 	}
 	relationshipGranted := false
 	for _, grant := range snapshot.relationshipGrants {
-		entityTarget := resourceType == "" && grant.EntityID == "" && grant.ResourceID == entityID
+		entityTarget := resourceType == "" && grant.EntityID.Zero() && grant.ResourceID == entityID
 		resourceTarget := resourceType != "" && grant.EntityID == entityID && grant.ResourceType == resourceType && grant.ResourceID == resourceID
 		if (!entityTarget && !resourceTarget) || !relationshipAllowed(action, grant) {
 			continue
@@ -273,7 +282,7 @@ func explainAuthorization(snapshot authorizationSnapshot, tenantID, entityID, re
 		relationshipGranted = true
 		explanation.Matches = append(explanation.Matches, authz.DecisionMatch{
 			PermissionCode: permission, SourceType: "relationship", SourceID: grant.Path[0].SubjectID,
-			ScopeType: grant.ResourceType, ScopeID: grant.ResourceID, Effect: "allow", Relation: grant.Relation, Path: grant.Path,
+			ScopeType: grant.ResourceType, ScopeID: grant.ResourceID.String(), Effect: "allow", Relation: grant.Relation, Path: grant.Path,
 		})
 	}
 	explanation.Allowed, _, explanation.Reason = decideEntity(permission, tenantRequested, tenantAdmin, scoped, relationshipGranted)
@@ -293,12 +302,12 @@ func explainAuthorization(snapshot authorizationSnapshot, tenantID, entityID, re
 	return explanation
 }
 
-func (a *Authorizer) CheckEntity(ctx context.Context, tenantID, entityID, permission, subject string) (bool, error) {
+func (a *Authorizer) CheckEntity(ctx context.Context, tenantID, entityID guid.ID, permission string, subject guid.ID) (bool, error) {
 	explanation, err := a.ExplainEntity(ctx, tenantID, entityID, permission, subject)
 	return explanation.Allowed, err
 }
 
-func (a *Authorizer) CheckResource(ctx context.Context, tenantID, entityID, resourceType, resourceID, permission, subject string) (bool, error) {
+func (a *Authorizer) CheckResource(ctx context.Context, tenantID, entityID guid.ID, resourceType string, resourceID guid.ID, permission string, subject guid.ID) (bool, error) {
 	explanation, err := a.ExplainResource(ctx, tenantID, entityID, resourceType, resourceID, permission, subject)
 	return explanation.Allowed, err
 }
@@ -308,7 +317,7 @@ func (a *Authorizer) CheckResource(ctx context.Context, tenantID, entityID, reso
 // the full tenant enumeration, while per-entity checks just need to know
 // whether their target is active. Loading every entity for those was O(tenant
 // entities) on the hot authorization path.
-func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, permission, subject string, includeDataScope bool, trusted policyx.TrustedContext) (authorizationSnapshot, error) {
+func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID guid.ID, permission string, subject guid.ID, includeDataScope bool, trusted policyx.TrustedContext) (authorizationSnapshot, error) {
 	requested, _ := requestedPermissions(permission)
 	for range policySnapshotAttempts {
 		before, err := policyx.Current(ctx, a.db, tenantID)
@@ -321,7 +330,7 @@ func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, perm
 			return authorizationSnapshot{}, err
 		}
 		entities := a.db.NewSelect().Table("iam_entities").Column("id").Where("tenant_id = ? AND status = ?", tenantID, iamdomain.EntityActive)
-		if focusEntityID != "" {
+		if !focusEntityID.Zero() {
 			entities = entities.Where("id = ?", focusEntityID)
 		}
 		if err := entities.Order("id ASC").Scan(ctx, &snapshot.entityIDs); err != nil {
@@ -333,7 +342,7 @@ func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, perm
 				return authorizationSnapshot{}, err
 			}
 			if includeDataScope {
-				snapshot.ownerIDs, snapshot.departmentIDs, err = a.loadDataScopeFacts(ctx, tenantID, permission, subject, snapshot.tenantGrants)
+				snapshot.ownerIDs, snapshot.departmentIDs, err = a.loadDataScopeFacts(ctx, tenantID, subject, permission, snapshot.tenantGrants)
 				if err != nil {
 					return authorizationSnapshot{}, err
 				}
@@ -342,7 +351,7 @@ func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, perm
 			if err != nil {
 				return authorizationSnapshot{}, err
 			}
-			if action, ok := authz.DefaultRegistry().Find(permission); ok && len(action.AllowedRelations) > 0 {
+			if action, ok := a.registry.Find(permission); ok && len(action.AllowedRelations) > 0 {
 				snapshot.relationshipGrants, err = a.loadRelationshipGrants(ctx, tenantID, subject, trusted)
 				if err != nil {
 					return authorizationSnapshot{}, err
@@ -361,8 +370,8 @@ func (a *Authorizer) snapshot(ctx context.Context, tenantID, focusEntityID, perm
 	return authorizationSnapshot{}, iamdomain.ErrAuthorizationChanged
 }
 
-func (a *Authorizer) loadTenantGrants(ctx context.Context, tenantID, subject string, requested []string, trusted policyx.TrustedContext) ([]tenantGrant, error) {
-	if tenantID == "" || subject == "" {
+func (a *Authorizer) loadTenantGrants(ctx context.Context, tenantID, subject guid.ID, requested []string, trusted policyx.TrustedContext) ([]tenantGrant, error) {
+	if tenantID.Zero() || subject.Zero() {
 		return nil, fmt.Errorf("tenant and subject are required")
 	}
 	if len(requested) == 0 {
@@ -372,16 +381,16 @@ func (a *Authorizer) loadTenantGrants(ctx context.Context, tenantID, subject str
 	grants := []tenantGrant{}
 	err := a.db.NewRaw(`
 WITH effective_roles(role_id, source_type, source_id) AS (
-    SELECT m.role_id, 'role_member', m.user_subject
+    SELECT m.role_id, 'role_member', m.principal_id
     FROM iam_role_members m
     JOIN iam_tenant_members tm
-      ON tm.tenant_id = m.tenant_id AND tm.user_subject = m.user_subject AND tm.status = ?
-    WHERE m.tenant_id = ? AND m.user_subject = ?
+      ON tm.tenant_id = m.tenant_id AND tm.principal_id = m.principal_id AND tm.status = ?
+    WHERE m.tenant_id = ? AND m.principal_id = ?
     UNION
 	SELECT grants.role_id, 'temporary_role', grants.id
 	FROM iam_temporary_role_grants grants
 	JOIN iam_tenant_members tm
-	  ON tm.tenant_id = grants.tenant_id AND tm.user_subject = grants.principal_id AND tm.status = ?
+	  ON tm.tenant_id = grants.tenant_id AND tm.principal_id = grants.principal_id AND tm.status = ?
 	WHERE grants.tenant_id = ? AND grants.principal_id = ?
 	  AND grants.starts_at <= ? AND grants.ends_at > ?
 	UNION
@@ -392,7 +401,7 @@ WITH effective_roles(role_id, source_type, source_id) AS (
     JOIN iam_group_members gm
       ON gm.tenant_id = b.tenant_id AND gm.group_id = b.group_id
     JOIN iam_tenant_members tm
-      ON tm.tenant_id = gm.tenant_id AND tm.user_subject = gm.principal_id AND tm.status = ?
+      ON tm.tenant_id = gm.tenant_id AND tm.principal_id = gm.principal_id AND tm.status = ?
     WHERE b.tenant_id = ? AND gm.principal_id = ?
       AND (gm.starts_at = 0 OR gm.starts_at <= ?)
       AND (gm.ends_at = 0 OR gm.ends_at > ?)
@@ -404,7 +413,7 @@ WITH effective_roles(role_id, source_type, source_id) AS (
     JOIN iam_position_members pm
       ON pm.tenant_id = b.tenant_id AND pm.position_id = b.position_id
     JOIN iam_tenant_members tm
-      ON tm.tenant_id = pm.tenant_id AND tm.user_subject = pm.principal_id AND tm.status = ?
+      ON tm.tenant_id = pm.tenant_id AND tm.principal_id = pm.principal_id AND tm.status = ?
     WHERE b.tenant_id = ? AND pm.principal_id = ?
       AND (pm.starts_at = 0 OR pm.starts_at <= ?)
       AND (pm.ends_at = 0 OR pm.ends_at > ?)
@@ -441,9 +450,9 @@ WHERE rp.tenant_id = ? AND rp.permission_code IN (?)`,
 	return matchingTenantGrants(grants, trusted)
 }
 
-func (a *Authorizer) loadDataScopeFacts(ctx context.Context, tenantID, permission, subject string, grants []tenantGrant) ([]string, []string, error) {
-	ownerSet := map[string]struct{}{}
-	selectedRoles := map[string]struct{}{}
+func (a *Authorizer) loadDataScopeFacts(ctx context.Context, tenantID, subject guid.ID, permission string, grants []tenantGrant) ([]guid.ID, []guid.ID, error) {
+	ownerSet := map[guid.ID]struct{}{}
+	selectedRoles := map[guid.ID]struct{}{}
 	needDepartment, needDescendants := false, false
 	for _, grant := range grants {
 		if grant.PermissionCode != permission {
@@ -460,21 +469,21 @@ func (a *Authorizer) loadDataScopeFacts(ctx context.Context, tenantID, permissio
 			selectedRoles[grant.RoleID] = struct{}{}
 		}
 	}
-	departmentSet := map[string]struct{}{}
+	departmentSet := map[guid.ID]struct{}{}
 	if needDepartment || needDescendants {
-		var departmentID string
+		var departmentID guid.ID
 		err := a.db.NewSelect().TableExpr("iam_member_departments AS md").ColumnExpr("md.department_id").
 			Join("JOIN iam_departments AS d ON d.tenant_id = md.tenant_id AND d.id = md.department_id AND d.status = 'active'").
 			Where("md.tenant_id = ? AND md.principal_id = ?", tenantID, subject).Scan(ctx, &departmentID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, fmt.Errorf("get authorization member department: %w", err)
 		}
-		if departmentID != "" {
+		if !departmentID.Zero() {
 			if needDepartment {
 				departmentSet[departmentID] = struct{}{}
 			}
 			if needDescendants {
-				ids := make([]string, 0)
+				ids := make([]guid.ID, 0)
 				if err := a.db.NewSelect().TableExpr("iam_department_closure AS c").ColumnExpr("c.descendant_id").
 					Join("JOIN iam_departments AS d ON d.tenant_id = c.tenant_id AND d.id = c.descendant_id AND d.status = 'active'").
 					Where("c.tenant_id = ? AND c.ancestor_id = ?", tenantID, departmentID).Scan(ctx, &ids); err != nil {
@@ -487,11 +496,11 @@ func (a *Authorizer) loadDataScopeFacts(ctx context.Context, tenantID, permissio
 		}
 	}
 	if len(selectedRoles) > 0 {
-		roleIDs := make([]string, 0, len(selectedRoles))
+		roleIDs := make([]guid.ID, 0, len(selectedRoles))
 		for roleID := range selectedRoles {
 			roleIDs = append(roleIDs, roleID)
 		}
-		ids := make([]string, 0)
+		ids := make([]guid.ID, 0)
 		if err := a.db.NewSelect().TableExpr("iam_role_scope_departments AS rsd").ColumnExpr("rsd.department_id").Distinct().
 			Join("JOIN iam_departments AS d ON d.tenant_id = rsd.tenant_id AND d.id = rsd.department_id AND d.status = 'active'").
 			Where("rsd.tenant_id = ? AND rsd.role_id IN (?)", tenantID, bun.List(roleIDs)).Scan(ctx, &ids); err != nil {
@@ -506,23 +515,31 @@ func (a *Authorizer) loadDataScopeFacts(ctx context.Context, tenantID, permissio
 	return owners, departments, nil
 }
 
-func mapKeys(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
+func mapKeys(values map[guid.ID]struct{}) []guid.ID {
+	result := make([]guid.ID, 0, len(values))
 	for value := range values {
 		result = append(result, value)
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
 }
 
-func (a *Authorizer) loadScopedGrants(ctx context.Context, tenantID, subject string, requested []string, trusted policyx.TrustedContext) ([]scopedGrant, error) {
+func guidStrings(values []guid.ID) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, value.String())
+	}
+	return result
+}
+
+func (a *Authorizer) loadScopedGrants(ctx context.Context, tenantID, subject guid.ID, requested []string, trusted policyx.TrustedContext) ([]scopedGrant, error) {
 	grants := []scopedGrant{}
 	err := a.db.NewRaw(`
 WITH RECURSIVE expanded(permission_code, role_id, effect, scope_id, condition_json, entity_id, depth) AS (
     SELECT p.permission_code, b.role_id, b.effect, b.scope_id, p.condition_json, e.id, 0
     FROM iam_role_bindings b
     JOIN iam_tenant_members tm
-      ON tm.tenant_id = b.tenant_id AND tm.user_subject = b.principal_id AND tm.status = ?
+      ON tm.tenant_id = b.tenant_id AND tm.principal_id = b.principal_id AND tm.status = ?
     JOIN iam_role_permissions p
       ON p.tenant_id = b.tenant_id AND p.role_id = b.role_id
     JOIN iam_entities e
@@ -587,12 +604,9 @@ func requestedPermissions(permissions ...string) ([]string, error) {
 	return requested, nil
 }
 
-func validateAuthorizationRequest(tenantID, entityID, permission, subject string) error {
-	if tenantID == "" || permission == "" || subject == "" || len(tenantID) > 128 || len(permission) > 128 || len(subject) > 255 {
+func validateAuthorizationRequest(tenantID, entityID guid.ID, permission string, subject guid.ID) error {
+	if tenantID.Zero() || permission == "" || subject.Zero() || len(permission) > 128 {
 		return fmt.Errorf("%w: tenant, permission, and subject are required", iamdomain.ErrInvalidArgument)
-	}
-	if entityID != "" && len(entityID) > 64 {
-		return fmt.Errorf("%w: invalid entity id", iamdomain.ErrInvalidArgument)
 	}
 	return nil
 }
@@ -605,8 +619,8 @@ func tenantCapabilities(grants []tenantGrant, permission string) (requested, adm
 	return requested, administrator
 }
 
-func scopedByEntity(grants []scopedGrant) map[string][]scopedGrant {
-	result := make(map[string][]scopedGrant)
+func scopedByEntity(grants []scopedGrant) map[guid.ID][]scopedGrant {
+	result := make(map[guid.ID][]scopedGrant)
 	for _, grant := range grants {
 		result[grant.EntityID] = append(result[grant.EntityID], grant)
 	}
@@ -645,8 +659,8 @@ func decideEntity(permission string, tenantRequested, tenantAdmin bool, grants [
 	return false, false, "no_matching_grant"
 }
 
-func allowedRelationshipsByEntity(action authz.Action, grants []relationshipGrant) map[string]bool {
-	result := make(map[string]bool)
+func allowedRelationshipsByEntity(action authz.Action, grants []relationshipGrant) map[guid.ID]bool {
+	result := make(map[guid.ID]bool)
 	for _, grant := range grants {
 		if relationshipAllowed(action, grant) {
 			result[grant.ResourceID] = true
@@ -659,7 +673,7 @@ func isAdministratorPermission(permission string) bool {
 	return permission == "tenant_administer"
 }
 
-func contains(values []string, expected string) bool {
-	index := sort.SearchStrings(values, expected)
+func contains(values []guid.ID, expected guid.ID) bool {
+	index := sort.Search(len(values), func(i int) bool { return values[i] >= expected })
 	return index < len(values) && values[index] == expected
 }

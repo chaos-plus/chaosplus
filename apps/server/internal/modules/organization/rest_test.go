@@ -17,7 +17,7 @@ func TestDepartmentHTTPWorkflow(t *testing.T) {
 	_, service := newOrganizationService(t)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant-a"
+	tenant := authz.TenantHeader + ": " + wireID("tenant-a")
 
 	created := api.Post("/iam/departments", tenant, map[string]any{"name": "Engineering", "sort_order": 10})
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
@@ -34,23 +34,23 @@ func TestDepartmentHTTPWorkflow(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(listed.Body.Bytes(), &listEnvelope))
 	assert.Len(t, listEnvelope.Data, 2)
-	assert.Equal(t, http.StatusOK, api.Get("/iam/departments/"+child.ID, tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/departments/"+child.ID.String(), tenant).Code)
 
-	updated := api.Patch("/iam/departments/"+child.ID, tenant, map[string]any{
+	updated := api.Patch("/iam/departments/"+child.ID.String(), tenant, map[string]any{
 		"name": "Platform Engineering", "status": "disabled", "version": child.Version,
 	})
 	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
 	child = decodeDepartment(t, updated.Body.Bytes())
 	assert.Equal(t, StatusDisabled, child.Status)
-	assert.Equal(t, http.StatusConflict, api.Patch("/iam/departments/"+child.ID, tenant, map[string]any{"name": "Stale", "version": 1}).Code)
-	assert.Equal(t, http.StatusConflict, api.Delete("/iam/departments/"+root.ID+"?version=1", tenant).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/departments/"+child.ID+"?version=2", tenant).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/departments/"+root.ID+"?version=1", tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+root.ID, tenant).Code)
+	assert.Equal(t, http.StatusConflict, api.Patch("/iam/departments/"+child.ID.String(), tenant, map[string]any{"name": "Stale", "version": 1}).Code)
+	assert.Equal(t, http.StatusConflict, api.Delete("/iam/departments/"+root.ID.String()+"?version=1", tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/departments/"+child.ID.String()+"?version=2", tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/departments/"+root.ID.String()+"?version=1", tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+root.ID.String(), tenant).Code)
 
-	assert.Equal(t, http.StatusNotFound, api.Post("/iam/departments", tenant, map[string]any{"parent_id": "missing", "name": "Unknown"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Post("/iam/departments", tenant, map[string]any{"parent_id": wireID("missing"), "name": "Unknown"}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/departments", tenant, map[string]any{"name": ""}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+child.ID, authz.TenantHeader+": tenant-b").Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+child.ID.String(), authz.TenantHeader + ": " + wireID("tenant-b")).Code)
 }
 
 func TestOrganizationErrorMapping(t *testing.T) {
@@ -78,7 +78,7 @@ func TestDepartmentHTTPEmptyCollectionIsArrayAndErrorsAreStable(t *testing.T) {
 	db, service := newOrganizationService(t)
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant-a"
+	tenant := authz.TenantHeader + ": " + wireID("tenant-a")
 
 	response := api.Get("/iam/departments", tenant)
 	require.Equal(t, http.StatusOK, response.Code)

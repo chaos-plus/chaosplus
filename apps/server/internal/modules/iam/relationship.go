@@ -12,6 +12,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/uptrace/bun"
 )
@@ -24,13 +25,13 @@ const (
 
 type relationshipRow struct {
 	bun.BaseModel   `bun:"table:iam_relationships"`
-	TenantID        string `bun:"tenant_id,pk"`
-	SubjectType     string `bun:"subject_type,pk"`
-	SubjectID       string `bun:"subject_id,pk"`
-	SubjectRelation string `bun:"subject_relation,pk"`
-	Relation        string `bun:"relation,pk"`
-	ResourceType    string `bun:"resource_type,pk"`
-	ResourceID      string `bun:"resource_id,pk"`
+	TenantID        guid.ID `bun:"tenant_id,pk"`
+	SubjectType     string  `bun:"subject_type,pk"`
+	SubjectID       guid.ID `bun:"subject_id,pk"`
+	SubjectRelation string  `bun:"subject_relation,pk"`
+	Relation        string  `bun:"relation,pk"`
+	ResourceType    string  `bun:"resource_type,pk"`
+	ResourceID      guid.ID `bun:"resource_id,pk"`
 	StartsAt        int64
 	EndsAt          int64
 	ConditionJSON   string
@@ -39,14 +40,14 @@ type relationshipRow struct {
 
 type resourceRelationshipRow struct {
 	bun.BaseModel   `bun:"table:iam_resource_relationships"`
-	TenantID        string `bun:"tenant_id,pk"`
-	EntityID        string `bun:"entity_id,pk"`
-	SubjectType     string `bun:"subject_type,pk"`
-	SubjectID       string `bun:"subject_id,pk"`
-	SubjectRelation string `bun:"subject_relation,pk"`
-	Relation        string `bun:"relation,pk"`
-	ResourceType    string `bun:"resource_type,pk"`
-	ResourceID      string `bun:"resource_id,pk"`
+	TenantID        guid.ID `bun:"tenant_id,pk"`
+	EntityID        guid.ID `bun:"entity_id,pk"`
+	SubjectType     string  `bun:"subject_type,pk"`
+	SubjectID       guid.ID `bun:"subject_id,pk"`
+	SubjectRelation string  `bun:"subject_relation,pk"`
+	Relation        string  `bun:"relation,pk"`
+	ResourceType    string  `bun:"resource_type,pk"`
+	ResourceID      guid.ID `bun:"resource_id,pk"`
 	StartsAt        int64
 	EndsAt          int64
 	ConditionJSON   string
@@ -55,26 +56,26 @@ type resourceRelationshipRow struct {
 
 type relationshipNode struct {
 	Type     string
-	ID       string
+	ID       guid.ID
 	Relation string
 }
 
 type relationshipGrant struct {
-	EntityID     string
+	EntityID     guid.ID
 	ResourceType string
-	ResourceID   string
+	ResourceID   guid.ID
 	Relation     string
 	Path         []authz.RelationshipStep
 }
 
-func (r *Repository) ListRelationships(ctx context.Context, tenantID string, filter iamdomain.RelationshipFilter) ([]iamdomain.Relationship, error) {
-	if filter.EntityID != "" {
+func (r *Repository) ListRelationships(ctx context.Context, tenantID guid.ID, filter iamdomain.RelationshipFilter) ([]iamdomain.Relationship, error) {
+	if !filter.EntityID.Zero() {
 		rows := make([]resourceRelationshipRow, 0)
 		query := r.executor.NewSelect().Model(&rows).Where("tenant_id = ? AND entity_id = ?", tenantID, filter.EntityID)
 		if filter.ResourceType != "" {
 			query = query.Where("resource_type = ?", filter.ResourceType)
 		}
-		if filter.ResourceID != "" {
+		if !filter.ResourceID.Zero() {
 			query = query.Where("resource_id = ?", filter.ResourceID)
 		}
 		if err := query.Order("resource_type ASC", "resource_id ASC", "relation ASC", "subject_type ASC", "subject_id ASC", "subject_relation ASC").Scan(ctx); err != nil {
@@ -91,7 +92,7 @@ func (r *Repository) ListRelationships(ctx context.Context, tenantID string, fil
 	if filter.ResourceType != "" {
 		query = query.Where("resource_type = ?", filter.ResourceType)
 	}
-	if filter.ResourceID != "" {
+	if !filter.ResourceID.Zero() {
 		query = query.Where("resource_id = ?", filter.ResourceID)
 	}
 	if err := query.Order("resource_type ASC", "resource_id ASC", "relation ASC", "subject_type ASC", "subject_id ASC", "subject_relation ASC").Scan(ctx); err != nil {
@@ -105,7 +106,7 @@ func (r *Repository) ListRelationships(ctx context.Context, tenantID string, fil
 }
 
 func (r *Repository) PutRelationship(ctx context.Context, relationship iamdomain.Relationship) (iamdomain.Relationship, bool, error) {
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		row := resourceRelationshipToRow(relationship)
 		var current resourceRelationshipRow
 		err := r.executor.NewSelect().Model(&current).
@@ -162,7 +163,7 @@ func (r *Repository) PutRelationship(ctx context.Context, relationship iamdomain
 }
 
 func (r *Repository) DeleteRelationship(ctx context.Context, relationship iamdomain.Relationship) (bool, error) {
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		result, err := r.executor.NewDelete().Model((*resourceRelationshipRow)(nil)).
 			Where("tenant_id = ? AND entity_id = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ? AND relation = ? AND resource_type = ? AND resource_id = ?",
 				relationship.TenantID, relationship.EntityID, relationship.SubjectType, relationship.SubjectID, relationship.SubjectRelation,
@@ -184,7 +185,7 @@ func (r *Repository) DeleteRelationship(ctx context.Context, relationship iamdom
 	return affected > 0, nil
 }
 
-func (r *Repository) entityRelationshipCount(ctx context.Context, tenantID, entityID string) (int, error) {
+func (r *Repository) entityRelationshipCount(ctx context.Context, tenantID, entityID guid.ID) (int, error) {
 	count, err := r.executor.NewSelect().Model((*relationshipRow)(nil)).
 		Where("tenant_id = ? AND (resource_id = ? OR (subject_type = 'entity' AND subject_id = ?))", tenantID, entityID, entityID).Count(ctx)
 	if err != nil {
@@ -198,9 +199,9 @@ func (r *Repository) entityRelationshipCount(ctx context.Context, tenantID, enti
 	return count + resourceCount, nil
 }
 
-func (s *Service) ListRelationships(ctx context.Context, tenantID string, filter iamdomain.RelationshipFilter) ([]iamdomain.Relationship, error) {
-	filter.EntityID, filter.ResourceType, filter.ResourceID = strings.TrimSpace(filter.EntityID), strings.TrimSpace(filter.ResourceType), strings.TrimSpace(filter.ResourceID)
-	if err := validateTenant(tenantID); err != nil || len(filter.EntityID) > 64 || (filter.ResourceType != "" && !validEntityType(filter.ResourceType)) || len(filter.ResourceID) > 255 || (filter.EntityID == "" && len(filter.ResourceID) > 64) {
+func (s *Service) ListRelationships(ctx context.Context, tenantID guid.ID, filter iamdomain.RelationshipFilter) ([]iamdomain.Relationship, error) {
+	filter.ResourceType = strings.TrimSpace(filter.ResourceType)
+	if err := validateTenant(tenantID); err != nil || (filter.ResourceType != "" && !validEntityType(filter.ResourceType)) {
 		return nil, fmt.Errorf("%w: invalid relationship filter", iamdomain.ErrInvalidArgument)
 	}
 	return s.repo.ListRelationships(ctx, tenantID, filter)
@@ -219,18 +220,18 @@ func (s *Service) PutRelationship(ctx context.Context, relationship iamdomain.Re
 	if err := validateRelationshipWindow(relationship, s.repo.now().UTC()); err != nil {
 		return iamdomain.Relationship{}, false, err
 	}
-	if relationship.EntityID != "" && !s.resourceRelationDeclared(relationship.ResourceType, relationship.Relation) {
+	if !relationship.EntityID.Zero() && !s.resourceRelationDeclared(relationship.ResourceType, relationship.Relation) {
 		return iamdomain.Relationship{}, false, fmt.Errorf("%w: resource type does not declare this relation", iamdomain.ErrInvalidRelationship)
 	}
 	targetType := "entity"
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		targetType = relationship.ResourceType
 	}
 	record := newAuditRecord(ctx, relationship.TenantID, "relationship_put", targetType, relationship.ResourceID)
 	record.Detail["subject_type"], record.Detail["subject_id"] = relationship.SubjectType, relationship.SubjectID
 	record.Detail["subject_relation"], record.Detail["relation"] = relationship.SubjectRelation, relationship.Relation
 	record.Detail["resource_type"] = relationship.ResourceType
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		record.Detail["entity_id"] = relationship.EntityID
 	}
 	if relationship.StartsAt != nil {
@@ -257,7 +258,7 @@ func (s *Service) PutRelationship(ctx context.Context, relationship iamdomain.Re
 			record.SkipAudit = !changed
 			return err
 		}
-		if relationship.EntityID == "" {
+		if relationship.EntityID.Zero() {
 			rows, err := repo.ListRelationships(ctx, relationship.TenantID, iamdomain.RelationshipFilter{})
 			if err != nil {
 				return err
@@ -278,14 +279,14 @@ func (s *Service) DeleteRelationship(ctx context.Context, relationship iamdomain
 		return false, err
 	}
 	targetType := "entity"
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		targetType = relationship.ResourceType
 	}
 	record := newAuditRecord(ctx, relationship.TenantID, "relationship_deleted", targetType, relationship.ResourceID)
 	record.Detail["subject_type"], record.Detail["subject_id"] = relationship.SubjectType, relationship.SubjectID
 	record.Detail["subject_relation"], record.Detail["relation"] = relationship.SubjectRelation, relationship.Relation
 	record.Detail["resource_type"] = relationship.ResourceType
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		record.Detail["entity_id"] = relationship.EntityID
 	}
 	var changed bool
@@ -302,14 +303,10 @@ func normalizeRelationship(relationship *iamdomain.Relationship) {
 	if relationship == nil {
 		return
 	}
-	relationship.TenantID = strings.TrimSpace(relationship.TenantID)
-	relationship.EntityID = strings.TrimSpace(relationship.EntityID)
 	relationship.SubjectType = strings.TrimSpace(relationship.SubjectType)
-	relationship.SubjectID = strings.TrimSpace(relationship.SubjectID)
 	relationship.SubjectRelation = strings.TrimSpace(relationship.SubjectRelation)
 	relationship.Relation = strings.TrimSpace(relationship.Relation)
 	relationship.ResourceType = strings.TrimSpace(relationship.ResourceType)
-	relationship.ResourceID = strings.TrimSpace(relationship.ResourceID)
 	relationship.StartsAt = normalizeRelationshipTime(relationship.StartsAt)
 	relationship.EndsAt = normalizeRelationshipTime(relationship.EndsAt)
 }
@@ -333,12 +330,8 @@ func validateRelationshipWindow(relationship iamdomain.Relationship, now time.Ti
 }
 
 func validateRelationshipShape(relationship iamdomain.Relationship) error {
-	maxResourceID := 64
-	if relationship.EntityID != "" {
-		maxResourceID = 255
-	}
-	if validateTenant(relationship.TenantID) != nil || relationship.SubjectID == "" || len(relationship.SubjectID) > 255 ||
-		len(relationship.EntityID) > 64 || !validEntityType(relationship.ResourceType) || relationship.ResourceID == "" || len(relationship.ResourceID) > maxResourceID || !validRelation(relationship.Relation) {
+	if validateTenant(relationship.TenantID) != nil || relationship.SubjectID.Zero() ||
+		!validEntityType(relationship.ResourceType) || relationship.ResourceID.Zero() || !validRelation(relationship.Relation) {
 		return fmt.Errorf("%w: invalid subject, relation, or resource", iamdomain.ErrInvalidRelationship)
 	}
 	switch relationship.SubjectType {
@@ -362,14 +355,14 @@ func validateRelationshipShape(relationship iamdomain.Relationship) error {
 
 func validateRelationshipFacts(ctx context.Context, repo *Repository, relationship iamdomain.Relationship) error {
 	resourceID := relationship.ResourceID
-	if relationship.EntityID != "" {
+	if !relationship.EntityID.Zero() {
 		resourceID = relationship.EntityID
 	}
 	resource, err := repo.GetEntity(ctx, relationship.TenantID, resourceID)
 	if err != nil {
 		return err
 	}
-	if relationship.EntityID == "" && resource.Type != relationship.ResourceType {
+	if relationship.EntityID.Zero() && resource.Type != relationship.ResourceType {
 		return fmt.Errorf("%w: resource type does not match the entity", iamdomain.ErrInvalidRelationship)
 	}
 	if resource.Status != iamdomain.EntityActive {
@@ -466,7 +459,7 @@ func validRelationshipGraph(relationships []iamdomain.Relationship, maxDepth int
 	return true
 }
 
-func (a *Authorizer) loadRelationshipGrants(ctx context.Context, tenantID, subject string, trusted policyx.TrustedContext) ([]relationshipGrant, error) {
+func (a *Authorizer) loadRelationshipGrants(ctx context.Context, tenantID, subject guid.ID, trusted policyx.TrustedContext) ([]relationshipGrant, error) {
 	now := trusted.Time.UTC().UnixMilli()
 	frontier, err := a.relationshipRoots(ctx, tenantID, subject, now)
 	if err != nil {
@@ -490,8 +483,8 @@ func (a *Authorizer) loadRelationshipGrants(ctx context.Context, tenantID, subje
 			source := relationshipNode{Type: row.SubjectType, ID: row.SubjectID, Relation: row.SubjectRelation}
 			path := append([]authz.RelationshipStep(nil), paths[source]...)
 			path = append(path, authz.RelationshipStep{
-				EntityID: row.EntityID, SubjectType: row.SubjectType, SubjectID: row.SubjectID, SubjectRelation: row.SubjectRelation,
-				Relation: row.Relation, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Condition: relationshipCondition(row.ConditionJSON),
+				EntityID: row.EntityID.String(), SubjectType: row.SubjectType, SubjectID: row.SubjectID.String(), SubjectRelation: row.SubjectRelation,
+				Relation: row.Relation, ResourceType: row.ResourceType, ResourceID: row.ResourceID.String(), Condition: relationshipCondition(row.ConditionJSON),
 			})
 			grants = append(grants, relationshipGrant{
 				EntityID: row.EntityID, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, Path: path,
@@ -513,8 +506,8 @@ func (a *Authorizer) loadRelationshipGrants(ctx context.Context, tenantID, subje
 			}
 			path := append([]authz.RelationshipStep(nil), paths[source]...)
 			path = append(path, authz.RelationshipStep{
-				SubjectType: row.SubjectType, SubjectID: row.SubjectID, SubjectRelation: row.SubjectRelation,
-				Relation: row.Relation, ResourceType: row.ResourceType, ResourceID: row.ResourceID, Condition: relationshipCondition(row.ConditionJSON),
+				SubjectType: row.SubjectType, SubjectID: row.SubjectID.String(), SubjectRelation: row.SubjectRelation,
+				Relation: row.Relation, ResourceType: row.ResourceType, ResourceID: row.ResourceID.String(), Condition: relationshipCondition(row.ConditionJSON),
 			})
 			visited[target], paths[target] = true, path
 			grants = append(grants, relationshipGrant{ResourceType: row.ResourceType, ResourceID: row.ResourceID, Relation: row.Relation, Path: path})
@@ -525,9 +518,9 @@ func (a *Authorizer) loadRelationshipGrants(ctx context.Context, tenantID, subje
 	return grants, nil
 }
 
-func (a *Authorizer) relationshipRoots(ctx context.Context, tenantID, subject string, now int64) ([]relationshipNode, error) {
+func (a *Authorizer) relationshipRoots(ctx context.Context, tenantID, subject guid.ID, now int64) ([]relationshipNode, error) {
 	roots := []relationshipNode{{Type: "principal", ID: subject}}
-	var groups []string
+	var groups []guid.ID
 	if err := a.db.NewSelect().TableExpr("iam_group_members AS gm").ColumnExpr("gm.group_id").
 		Join("JOIN iam_groups AS g ON g.tenant_id = gm.tenant_id AND g.id = gm.group_id AND g.status = 'active' AND g.group_type = 'static'").
 		Where("gm.tenant_id = ? AND gm.principal_id = ? AND (gm.starts_at = 0 OR gm.starts_at <= ?) AND (gm.ends_at = 0 OR gm.ends_at > ?)", tenantID, subject, now, now).
@@ -544,7 +537,7 @@ func (a *Authorizer) relationshipRoots(ctx context.Context, tenantID, subject st
 	for _, id := range dynamicGroups {
 		roots = append(roots, relationshipNode{Type: "group", ID: id, Relation: "member"})
 	}
-	var positions []string
+	var positions []guid.ID
 	if err := a.db.NewSelect().TableExpr("iam_position_members AS pm").ColumnExpr("pm.position_id").
 		Join("JOIN iam_positions AS p ON p.tenant_id = pm.tenant_id AND p.id = pm.position_id AND p.status = 'active'").
 		Where("pm.tenant_id = ? AND pm.principal_id = ? AND (pm.starts_at = 0 OR pm.starts_at <= ?) AND (pm.ends_at = 0 OR pm.ends_at > ?)", tenantID, subject, now, now).
@@ -557,7 +550,7 @@ func (a *Authorizer) relationshipRoots(ctx context.Context, tenantID, subject st
 	return roots, nil
 }
 
-func listActiveRelationshipsBySubjects(ctx context.Context, db *bun.DB, tenantID string, subjects []relationshipNode, now int64) ([]relationshipRow, error) {
+func listActiveRelationshipsBySubjects(ctx context.Context, db *bun.DB, tenantID guid.ID, subjects []relationshipNode, now int64) ([]relationshipRow, error) {
 	rows := make([]relationshipRow, 0)
 	for start := 0; start < len(subjects); start += relationshipQueryBatch {
 		end := min(start+relationshipQueryBatch, len(subjects))
@@ -579,7 +572,7 @@ func listActiveRelationshipsBySubjects(ctx context.Context, db *bun.DB, tenantID
 	return rows, nil
 }
 
-func listActiveResourceRelationshipsBySubjects(ctx context.Context, db *bun.DB, tenantID string, subjects []relationshipNode, now int64) ([]resourceRelationshipRow, error) {
+func listActiveResourceRelationshipsBySubjects(ctx context.Context, db *bun.DB, tenantID guid.ID, subjects []relationshipNode, now int64) ([]resourceRelationshipRow, error) {
 	rows := make([]resourceRelationshipRow, 0)
 	for start := 0; start < len(subjects); start += relationshipQueryBatch {
 		end := min(start+relationshipQueryBatch, len(subjects))

@@ -1,18 +1,18 @@
 -- +goose Up
 CREATE TABLE iam_member_departments (
-    tenant_id VARCHAR(128) NOT NULL,
-    principal_id VARCHAR(255) NOT NULL,
-    department_id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
+    department_id BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, principal_id),
     KEY idx_iam_member_departments_department (tenant_id, department_id, principal_id),
-    CONSTRAINT fk_iam_member_departments_member FOREIGN KEY (tenant_id, principal_id) REFERENCES iam_tenant_members (tenant_id, user_subject) ON DELETE CASCADE,
+    CONSTRAINT fk_iam_member_departments_member FOREIGN KEY (tenant_id, principal_id) REFERENCES iam_tenant_members (tenant_id, principal_id) ON DELETE CASCADE,
     CONSTRAINT fk_iam_member_departments_department FOREIGN KEY (tenant_id, department_id) REFERENCES iam_departments (tenant_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_role_data_scopes (
-    tenant_id VARCHAR(128) NOT NULL,
-    role_id VARCHAR(32) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
     scope_type VARCHAR(32) NOT NULL,
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, role_id),
@@ -21,9 +21,9 @@ CREATE TABLE iam_role_data_scopes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_role_scope_departments (
-    tenant_id VARCHAR(128) NOT NULL,
-    role_id VARCHAR(32) NOT NULL,
-    department_id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    department_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, role_id, department_id),
     KEY idx_iam_role_scope_departments_department (tenant_id, department_id, role_id),

@@ -2,14 +2,14 @@
 ALTER TABLE iam_credentials ADD COLUMN totp_last_used_step BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE iam_mfa_enrollments (
-    principal_id VARCHAR(64) PRIMARY KEY REFERENCES iam_principals(id) ON DELETE CASCADE,
+    principal_id BIGINT PRIMARY KEY REFERENCES iam_principals(id) ON DELETE CASCADE,
     secret_ciphertext TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL
 );
 
 CREATE TABLE iam_recovery_codes (
-    principal_id VARCHAR(64) NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
     code_hash CHAR(64) NOT NULL,
     created_at BIGINT NOT NULL,
     used_at BIGINT NOT NULL DEFAULT 0,
@@ -19,7 +19,7 @@ CREATE INDEX idx_iam_recovery_codes_available ON iam_recovery_codes (principal_i
 
 CREATE TABLE iam_mfa_challenges (
     id_hash CHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals(id) ON DELETE CASCADE,
     return_url TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

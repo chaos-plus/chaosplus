@@ -4,12 +4,22 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseIdentityID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
 
 type listInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
@@ -47,42 +57,82 @@ type updateInput struct {
 func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	RegisterServiceAccountREST(api, service, registrar)
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-list-principals", Method: http.MethodGet, Path: "/iam/principals", Summary: "List local principals in the tenant", Tags: []string{"identity"}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *listInput) (*respx.Body[listData], error) {
-		items, total, err := service.List(ctx, in.TenantID, in.Search, in.Limit, in.Offset)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, total, err := service.List(ctx, tenantID, in.Search, in.Limit, in.Offset)
 		if err != nil {
 			return nil, identityError(err)
 		}
 		return respx.OK(ctx, listData{Items: items, Total: total}), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-create-principal", Method: http.MethodPost, Path: "/iam/principals", Summary: "Create a local principal and tenant membership", Tags: []string{"identity"}}, authz.Guard{Resource: "user", Verb: "create"}, func(ctx context.Context, in *createInput) (*respx.Body[Principal], error) {
-		principal, err := service.Create(ctx, in.TenantID, in.Body.LoginName, in.Body.Password, in.Body.DisplayName, in.Body.Email)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		principal, err := service.Create(ctx, tenantID, in.Body.LoginName, in.Body.Password, in.Body.DisplayName, in.Body.Email)
 		if err != nil {
 			return nil, identityError(err)
 		}
 		return respx.OK(ctx, principal), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-get-principal", Method: http.MethodGet, Path: "/iam/principals/{id}", Summary: "Get a local principal in the tenant", Tags: []string{"identity"}}, authz.Guard{Resource: "user", Verb: "view"}, func(ctx context.Context, in *idInput) (*respx.Body[Principal], error) {
-		principal, err := service.Get(ctx, in.TenantID, in.ID)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principal, err := service.Get(ctx, tenantID, id)
 		if err != nil {
 			return nil, identityError(err)
 		}
 		return respx.OK(ctx, principal), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-update-principal", Method: http.MethodPatch, Path: "/iam/principals/{id}", Summary: "Update a local principal", Tags: []string{"identity"}}, authz.Guard{Resource: "platform", Verb: "administer"}, func(ctx context.Context, in *updateInput) (*respx.Body[Principal], error) {
-		principal, err := service.Update(ctx, in.TenantID, in.ID, in.Body.DisplayName, in.Body.Email)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principal, err := service.Update(ctx, tenantID, id, in.Body.DisplayName, in.Body.Email)
 		if err != nil {
 			return nil, identityError(err)
 		}
 		return respx.OK(ctx, principal), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-disable-principal", Method: http.MethodPost, Path: "/iam/principals/{id}/disable", Summary: "Disable a principal and revoke its tokens", Tags: []string{"identity"}, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "platform", Verb: "administer"}, func(ctx context.Context, in *idInput) (*respx.Body[Principal], error) {
-		principal, err := service.SetStatus(ctx, in.TenantID, in.ID, "disabled")
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principal, err := service.SetStatus(ctx, tenantID, id, "disabled")
 		if err != nil {
 			return nil, identityError(err)
 		}
 		return respx.OK(ctx, principal), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-restore-principal", Method: http.MethodPost, Path: "/iam/principals/{id}/restore", Summary: "Restore a disabled principal", Tags: []string{"identity"}}, authz.Guard{Resource: "platform", Verb: "administer"}, func(ctx context.Context, in *idInput) (*respx.Body[Principal], error) {
-		principal, err := service.SetStatus(ctx, in.TenantID, in.ID, "active")
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principal, err := service.SetStatus(ctx, tenantID, id, "active")
 		if err != nil {
 			return nil, identityError(err)
 		}

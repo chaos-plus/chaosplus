@@ -17,6 +17,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
@@ -33,7 +34,7 @@ var (
 )
 
 type ServiceAccount struct {
-	ID          string     `json:"id"`
+	ID          guid.ID    `json:"id"`
 	LoginName   string     `json:"login_name"`
 	DisplayName string     `json:"display_name"`
 	Description string     `json:"description,omitempty"`
@@ -45,8 +46,8 @@ type ServiceAccount struct {
 }
 
 type ServiceAccountCredential struct {
-	ID               string     `json:"id"`
-	ServiceAccountID string     `json:"service_account_id"`
+	ID               guid.ID    `json:"id"`
+	ServiceAccountID guid.ID    `json:"service_account_id"`
 	Name             string     `json:"name"`
 	Scopes           []string   `json:"scopes"`
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
@@ -62,8 +63,8 @@ type ServiceAccountCredentialSecret struct {
 
 type serviceAccountRow struct {
 	bun.BaseModel `bun:"table:iam_service_accounts,alias:service_account"`
-	PrincipalID   string `bun:"principal_id,pk"`
-	OwnerTenantID string
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
+	OwnerTenantID guid.ID
 	Description   string
 	Status        string
 	ExpiresAt     int64
@@ -82,8 +83,8 @@ type serviceAccountViewRow struct {
 
 type serviceAccountCredentialRow struct {
 	bun.BaseModel `bun:"table:iam_service_account_credentials,alias:credential"`
-	ID            string `bun:"id,pk"`
-	PrincipalID   string
+	ID            guid.ID `bun:"id,pk"`
+	PrincipalID   guid.ID
 	Name          string
 	SecretHash    string
 	Scopes        string
@@ -93,8 +94,8 @@ type serviceAccountCredentialRow struct {
 	CreatedAt     int64
 }
 
-func (s *Service) CreateServiceAccount(ctx context.Context, tenantID, loginName, displayName, description string, expiresAt *time.Time) (ServiceAccount, error) {
-	tenantID, loginName = strings.TrimSpace(tenantID), normalizeLogin(loginName)
+func (s *Service) CreateServiceAccount(ctx context.Context, tenantID guid.ID, loginName, displayName, description string, expiresAt *time.Time) (ServiceAccount, error) {
+	loginName = normalizeLogin(loginName)
 	displayName, description = strings.TrimSpace(displayName), strings.TrimSpace(description)
 	if displayName == "" {
 		displayName = loginName
@@ -102,7 +103,7 @@ func (s *Service) CreateServiceAccount(ctx context.Context, tenantID, loginName,
 	if !validServiceAccount(tenantID, loginName, displayName, description, "active", expiresAt, s.now().UTC()) {
 		return ServiceAccount{}, ErrServiceAccountInvalid
 	}
-	id, err := randomID()
+	id, err := s.nextID()
 	if err != nil {
 		return ServiceAccount{}, err
 	}
@@ -129,7 +130,7 @@ func (s *Service) CreateServiceAccount(ctx context.Context, tenantID, loginName,
 		if _, err := tx.NewInsert().Model(&account).Exec(ctx); err != nil {
 			return err
 		}
-		member := tenantMemberRow{TenantID: tenantID, UserSubject: id, DisplayName: displayName, Status: "active", CreatedAt: now, UpdatedAt: now}
+		member := tenantMemberRow{TenantID: tenantID, PrincipalID: id, DisplayName: displayName, Status: "active", CreatedAt: now, UpdatedAt: now}
 		if _, err := tx.NewInsert().Model(&member).Exec(ctx); err != nil {
 			return err
 		}
@@ -144,9 +145,8 @@ func (s *Service) CreateServiceAccount(ctx context.Context, tenantID, loginName,
 	return serviceAccountFromRows(account, principal.LoginName, principal.DisplayName), nil
 }
 
-func (s *Service) ListServiceAccounts(ctx context.Context, tenantID, search string, limit, offset int) ([]ServiceAccount, int64, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || len(tenantID) > 128 || limit < 1 || limit > 200 || offset < 0 {
+func (s *Service) ListServiceAccounts(ctx context.Context, tenantID guid.ID, search string, limit, offset int) ([]ServiceAccount, int64, error) {
+	if tenantID.Zero() || limit < 1 || limit > 200 || offset < 0 {
 		return nil, 0, ErrServiceAccountInvalid
 	}
 	query := serviceAccountQuery(s.db).Where("service_account.owner_tenant_id = ? AND service_account.status <> 'deleted'", tenantID)
@@ -168,7 +168,7 @@ func (s *Service) ListServiceAccounts(ctx context.Context, tenantID, search stri
 	return items, int64(count), nil
 }
 
-func (s *Service) GetServiceAccount(ctx context.Context, tenantID, id string) (ServiceAccount, error) {
+func (s *Service) GetServiceAccount(ctx context.Context, tenantID, id guid.ID) (ServiceAccount, error) {
 	row, err := getServiceAccountRow(ctx, s.db, tenantID, id)
 	if err != nil {
 		return ServiceAccount{}, err
@@ -176,8 +176,7 @@ func (s *Service) GetServiceAccount(ctx context.Context, tenantID, id string) (S
 	return serviceAccountFromRows(row.serviceAccountRow, row.LoginName, row.DisplayName), nil
 }
 
-func (s *Service) ReplaceServiceAccount(ctx context.Context, tenantID, id, displayName, description, status string, expiresAt *time.Time, version int64) (ServiceAccount, error) {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
+func (s *Service) ReplaceServiceAccount(ctx context.Context, tenantID, id guid.ID, displayName, description, status string, expiresAt *time.Time, version int64) (ServiceAccount, error) {
 	displayName, description, status = strings.TrimSpace(displayName), strings.TrimSpace(description), strings.TrimSpace(status)
 	if version < 1 || !validServiceAccount(tenantID, "placeholder", displayName, description, status, expiresAt, s.now().UTC()) {
 		return ServiceAccount{}, ErrServiceAccountInvalid
@@ -223,7 +222,7 @@ func (s *Service) ReplaceServiceAccount(ctx context.Context, tenantID, id, displ
 		if _, err := tx.NewUpdate().Model((*principalRow)(nil)).Set("display_name = ?", displayName).Set("status = ?", principalStatus).Set("disabled_at = ?", disabledAt).Set("updated_at = ?", now).Where("id = ?", id).Exec(ctx); err != nil {
 			return err
 		}
-		if _, err := tx.NewUpdate().Model((*tenantMemberRow)(nil)).Set("display_name = ?", displayName).Set("updated_at = ?", now).Where("tenant_id = ? AND user_subject = ?", tenantID, id).Exec(ctx); err != nil {
+		if _, err := tx.NewUpdate().Model((*tenantMemberRow)(nil)).Set("display_name = ?", displayName).Set("updated_at = ?", now).Where("tenant_id = ? AND principal_id = ?", tenantID, id).Exec(ctx); err != nil {
 			return err
 		}
 		if verify != nil {
@@ -253,9 +252,8 @@ func (s *Service) ReplaceServiceAccount(ctx context.Context, tenantID, id, displ
 	return updated, nil
 }
 
-func (s *Service) DeleteServiceAccount(ctx context.Context, tenantID, id string, version int64) error {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || id == "" || version < 1 {
+func (s *Service) DeleteServiceAccount(ctx context.Context, tenantID, id guid.ID, version int64) error {
+	if tenantID.Zero() || id.Zero() || version < 1 {
 		return ErrServiceAccountInvalid
 	}
 	now := s.now().UTC().UnixMilli()
@@ -283,7 +281,7 @@ func (s *Service) DeleteServiceAccount(ctx context.Context, tenantID, id string,
 		if _, err := tx.NewUpdate().Model((*principalRow)(nil)).Set("status = 'disabled'").Set("disabled_at = ?", now).Set("updated_at = ?", now).Where("id = ?", id).Exec(ctx); err != nil {
 			return err
 		}
-		if _, err := tx.NewUpdate().Model((*tenantMemberRow)(nil)).Set("status = 'disabled'").Set("disabled_at = ?", now).Set("updated_at = ?", now).Where("tenant_id = ? AND user_subject = ?", tenantID, id).Exec(ctx); err != nil {
+		if _, err := tx.NewUpdate().Model((*tenantMemberRow)(nil)).Set("status = 'disabled'").Set("disabled_at = ?", now).Set("updated_at = ?", now).Where("tenant_id = ? AND principal_id = ?", tenantID, id).Exec(ctx); err != nil {
 			return err
 		}
 		if _, err := tx.NewUpdate().Model((*serviceAccountCredentialRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", id).Exec(ctx); err != nil {
@@ -303,21 +301,20 @@ func (s *Service) DeleteServiceAccount(ctx context.Context, tenantID, id string,
 	return nil
 }
 
-func (s *Service) CreateServiceAccountCredential(ctx context.Context, tenantID, id, name string, scopes []string, expiresAt *time.Time) (ServiceAccountCredentialSecret, error) {
-	tenantID, id, name = strings.TrimSpace(tenantID), strings.TrimSpace(id), strings.TrimSpace(name)
+func (s *Service) CreateServiceAccountCredential(ctx context.Context, tenantID, id guid.ID, name string, scopes []string, expiresAt *time.Time) (ServiceAccountCredentialSecret, error) {
+	name = strings.TrimSpace(name)
 	normalizedScopes, ok := normalizeServiceAccountScopes(scopes)
-	if tenantID == "" || id == "" || name == "" || len(name) > 128 || !ok {
+	if tenantID.Zero() || id.Zero() || name == "" || len(name) > 128 || !ok {
 		return ServiceAccountCredentialSecret{}, ErrServiceAccountInvalid
 	}
 	nowTime := s.now().UTC()
 	if expiresAt != nil && !expiresAt.UTC().After(nowTime) {
 		return ServiceAccountCredentialSecret{}, ErrServiceAccountInvalid
 	}
-	credentialID, err := randomID()
+	credentialID, err := s.nextID()
 	if err != nil {
 		return ServiceAccountCredentialSecret{}, err
 	}
-	credentialID = "sac_" + credentialID
 	secret, err := randomServiceAccountSecret()
 	if err != nil {
 		return ServiceAccountCredentialSecret{}, err
@@ -357,12 +354,12 @@ func (s *Service) CreateServiceAccountCredential(ctx context.Context, tenantID, 
 	return ServiceAccountCredentialSecret{Credential: serviceAccountCredentialFromRow(row), Secret: secret}, nil
 }
 
-func (s *Service) ListServiceAccountCredentials(ctx context.Context, tenantID, id string) ([]ServiceAccountCredential, error) {
+func (s *Service) ListServiceAccountCredentials(ctx context.Context, tenantID, id guid.ID) ([]ServiceAccountCredential, error) {
 	if _, err := getServiceAccountRow(ctx, s.db, tenantID, id); err != nil {
 		return nil, err
 	}
 	rows := make([]serviceAccountCredentialRow, 0)
-	if err := s.db.NewSelect().Model(&rows).Where("principal_id = ?", strings.TrimSpace(id)).Order("created_at DESC", "id ASC").Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&rows).Where("principal_id = ?", id).Order("created_at DESC", "id ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
 	result := make([]ServiceAccountCredential, 0, len(rows))
@@ -372,9 +369,8 @@ func (s *Service) ListServiceAccountCredentials(ctx context.Context, tenantID, i
 	return result, nil
 }
 
-func (s *Service) RevokeServiceAccountCredential(ctx context.Context, tenantID, id, credentialID string) error {
-	tenantID, id, credentialID = strings.TrimSpace(tenantID), strings.TrimSpace(id), strings.TrimSpace(credentialID)
-	if tenantID == "" || id == "" || credentialID == "" {
+func (s *Service) RevokeServiceAccountCredential(ctx context.Context, tenantID, id, credentialID guid.ID) error {
+	if tenantID.Zero() || id.Zero() || credentialID.Zero() {
 		return ErrServiceAccountInvalid
 	}
 	now := s.now().UTC().UnixMilli()
@@ -415,10 +411,9 @@ func serviceAccountQuery(db bun.IDB) *bun.SelectQuery {
 		Join("JOIN iam_principals AS principal ON principal.id = service_account.principal_id")
 }
 
-func getServiceAccountRow(ctx context.Context, db bun.IDB, tenantID, id string) (serviceAccountViewRow, error) {
+func getServiceAccountRow(ctx context.Context, db bun.IDB, tenantID, id guid.ID) (serviceAccountViewRow, error) {
 	var row serviceAccountViewRow
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || len(tenantID) > 128 || id == "" {
+	if tenantID.Zero() || id.Zero() {
 		return row, ErrServiceAccountInvalid
 	}
 	if err := serviceAccountQuery(db).Where("service_account.owner_tenant_id = ? AND service_account.principal_id = ? AND service_account.status <> 'deleted'", tenantID, id).Scan(ctx, &row); err != nil {
@@ -430,8 +425,8 @@ func getServiceAccountRow(ctx context.Context, db bun.IDB, tenantID, id string) 
 	return row, nil
 }
 
-func validServiceAccount(tenantID, loginName, displayName, description, status string, expiresAt *time.Time, now time.Time) bool {
-	return tenantID != "" && len(tenantID) <= 128 && loginName != "" && len(loginName) <= 200 &&
+func validServiceAccount(tenantID guid.ID, loginName, displayName, description, status string, expiresAt *time.Time, now time.Time) bool {
+	return !tenantID.Zero() && loginName != "" && len(loginName) <= 200 &&
 		displayName != "" && len(displayName) <= 128 && len(description) <= 1000 &&
 		(status == "active" || status == "disabled") && (expiresAt == nil || expiresAt.UTC().After(now))
 }
@@ -552,55 +547,115 @@ type serviceAccountCredentialIDInput struct {
 
 func RegisterServiceAccountREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-list-service-accounts", Method: http.MethodGet, Path: "/iam/service-accounts", Summary: "List tenant service accounts", Tags: []string{"identity"}}, authz.Guard{Resource: "service_account", Verb: "view"}, func(ctx context.Context, in *serviceAccountListInput) (*respx.Body[serviceAccountListData], error) {
-		items, total, err := service.ListServiceAccounts(ctx, in.TenantID, in.Search, in.Limit, in.Offset)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, total, err := service.ListServiceAccounts(ctx, tenantID, in.Search, in.Limit, in.Offset)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, serviceAccountListData{Items: items, Total: total}), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-create-service-account", Method: http.MethodPost, Path: "/iam/service-accounts", Summary: "Create a non-interactive tenant service account", Tags: []string{"identity"}, Errors: []int{http.StatusConflict}}, authz.Guard{Resource: "service_account", Verb: "create"}, func(ctx context.Context, in *serviceAccountCreateInput) (*respx.Body[ServiceAccount], error) {
-		account, err := service.CreateServiceAccount(ctx, in.TenantID, in.Body.LoginName, in.Body.DisplayName, in.Body.Description, in.Body.ExpiresAt)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		account, err := service.CreateServiceAccount(ctx, tenantID, in.Body.LoginName, in.Body.DisplayName, in.Body.Description, in.Body.ExpiresAt)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, account), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-get-service-account", Method: http.MethodGet, Path: "/iam/service-accounts/{id}", Summary: "Get a tenant service account", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "service_account", Verb: "view"}, func(ctx context.Context, in *serviceAccountIDInput) (*respx.Body[ServiceAccount], error) {
-		account, err := service.GetServiceAccount(ctx, in.TenantID, in.ID)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		account, err := service.GetServiceAccount(ctx, tenantID, id)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, account), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-replace-service-account", Method: http.MethodPut, Path: "/iam/service-accounts/{id}", Summary: "Replace service account profile and status", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound, http.StatusConflict}}, authz.Guard{Resource: "service_account", Verb: "update"}, func(ctx context.Context, in *serviceAccountReplaceInput) (*respx.Body[ServiceAccount], error) {
-		account, err := service.ReplaceServiceAccount(ctx, in.TenantID, in.ID, in.Body.DisplayName, in.Body.Description, in.Body.Status, in.Body.ExpiresAt, in.Body.Version)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		account, err := service.ReplaceServiceAccount(ctx, tenantID, id, in.Body.DisplayName, in.Body.Description, in.Body.Status, in.Body.ExpiresAt, in.Body.Version)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, account), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-delete-service-account", Method: http.MethodDelete, Path: "/iam/service-accounts/{id}", Summary: "Delete a service account and revoke its credentials", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound, http.StatusConflict}}, authz.Guard{Resource: "service_account", Verb: "delete"}, func(ctx context.Context, in *serviceAccountDeleteInput) (*respx.Body[map[string]bool], error) {
-		if err := service.DeleteServiceAccount(ctx, in.TenantID, in.ID, in.Version); err != nil {
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.DeleteServiceAccount(ctx, tenantID, id, in.Version); err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, map[string]bool{"deleted": true}), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-list-service-account-credentials", Method: http.MethodGet, Path: "/iam/service-accounts/{id}/credentials", Summary: "List service account credentials without secrets", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "service_account", Verb: "manage_credential"}, func(ctx context.Context, in *serviceAccountIDInput) (*respx.Body[[]ServiceAccountCredential], error) {
-		credentials, err := service.ListServiceAccountCredentials(ctx, in.TenantID, in.ID)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		credentials, err := service.ListServiceAccountCredentials(ctx, tenantID, id)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, credentials), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-create-service-account-credential", Method: http.MethodPost, Path: "/iam/service-accounts/{id}/credentials", Summary: "Create a service account client credential", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound, http.StatusConflict}}, authz.Guard{Resource: "service_account", Verb: "manage_credential"}, func(ctx context.Context, in *serviceAccountCredentialCreateInput) (*respx.Body[ServiceAccountCredentialSecret], error) {
-		credential, err := service.CreateServiceAccountCredential(ctx, in.TenantID, in.ID, in.Body.Name, in.Body.Scopes, in.Body.ExpiresAt)
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		credential, err := service.CreateServiceAccountCredential(ctx, tenantID, id, in.Body.Name, in.Body.Scopes, in.Body.ExpiresAt)
 		if err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, credential), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "identity-revoke-service-account-credential", Method: http.MethodDelete, Path: "/iam/service-accounts/{id}/credentials/{credential_id}", Summary: "Revoke a service account credential and its active tokens", Tags: []string{"identity"}, Errors: []int{http.StatusNotFound}}, authz.Guard{Resource: "service_account", Verb: "manage_credential"}, func(ctx context.Context, in *serviceAccountCredentialIDInput) (*respx.Body[map[string]bool], error) {
-		if err := service.RevokeServiceAccountCredential(ctx, in.TenantID, in.ID, in.CredentialID); err != nil {
+		tenantID, err := parseIdentityID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseIdentityID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		credentialID, err := parseIdentityID(in.CredentialID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.RevokeServiceAccountCredential(ctx, tenantID, id, credentialID); err != nil {
 			return nil, serviceAccountError(err)
 		}
 		return respx.OK(ctx, map[string]bool{"revoked": true}), nil

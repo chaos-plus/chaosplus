@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -25,12 +26,12 @@ type ProvisionedPrincipalInput struct {
 
 // CreateProvisionedTo writes identity state through a caller-owned transaction.
 // The caller owns the corresponding provisioning mapping and audit event.
-func (s *Service) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID string, input ProvisionedPrincipalInput) (Principal, error) {
+func (s *Service) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID guid.ID, input ProvisionedPrincipalInput) (Principal, error) {
 	tenantID, input, err := normalizeProvisionedInput(tenantID, input, true)
 	if err != nil || db == nil {
 		return Principal{}, ErrInvalid
 	}
-	id, err := randomID()
+	id, err := s.nextID()
 	if err != nil {
 		return Principal{}, err
 	}
@@ -50,7 +51,7 @@ func (s *Service) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID 
 	if !input.Active {
 		status, disabledAt = "disabled", now
 	}
-	member := tenantMemberRow{TenantID: tenantID, UserSubject: id, DisplayName: input.DisplayName, Email: input.Email, Status: status, CreatedAt: now, UpdatedAt: now, DisabledAt: disabledAt}
+	member := tenantMemberRow{TenantID: tenantID, PrincipalID: id, DisplayName: input.DisplayName, Email: input.Email, Status: status, CreatedAt: now, UpdatedAt: now, DisabledAt: disabledAt}
 	if _, err := db.NewInsert().Model(&member).Exec(ctx); err != nil {
 		return Principal{}, fmt.Errorf("insert provisioned membership: %w", err)
 	}
@@ -62,10 +63,9 @@ func (s *Service) CreateProvisionedTo(ctx context.Context, db bun.IDB, tenantID 
 
 // ReplaceProvisionedTo replaces directory-owned profile and tenant admission
 // state without overriding a global security disable.
-func (s *Service) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id string, input ProvisionedPrincipalInput) (Principal, error) {
+func (s *Service) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID, id guid.ID, input ProvisionedPrincipalInput) (Principal, error) {
 	tenantID, input, err := normalizeProvisionedInput(tenantID, input, false)
-	id = strings.TrimSpace(id)
-	if err != nil || db == nil || id == "" {
+	if err != nil || db == nil || id.Zero() {
 		return Principal{}, ErrInvalid
 	}
 	current, err := getPrincipal(ctx, db, tenantID, id)
@@ -73,7 +73,7 @@ func (s *Service) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID
 		return Principal{}, err
 	}
 	var member tenantMemberRow
-	if err := db.NewSelect().Model(&member).Where("tenant_id = ? AND user_subject = ?", tenantID, id).Scan(ctx); err != nil {
+	if err := db.NewSelect().Model(&member).Where("tenant_id = ? AND principal_id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Principal{}, ErrNotFound
 		}
@@ -112,7 +112,7 @@ func (s *Service) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID
 	}
 	if _, err := db.NewUpdate().Model((*tenantMemberRow)(nil)).Set("display_name = ?", input.DisplayName).Set("email = ?", input.Email).
 		Set("status = ?", wantedMemberStatus).Set("disabled_at = ?", disabledAt).Set("updated_at = ?", now).
-		Where("tenant_id = ? AND user_subject = ?", tenantID, id).Exec(ctx); err != nil {
+		Where("tenant_id = ? AND principal_id = ?", tenantID, id).Exec(ctx); err != nil {
 		return Principal{}, err
 	}
 	if loginChanged || emailChanged {
@@ -145,7 +145,7 @@ func (s *Service) ReplaceProvisionedTo(ctx context.Context, db bun.IDB, tenantID
 	return current, nil
 }
 
-func revokeProvisionedSecurityState(ctx context.Context, db bun.IDB, principalID string, now int64) error {
+func revokeProvisionedSecurityState(ctx context.Context, db bun.IDB, principalID guid.ID, now int64) error {
 	for _, table := range []string{"iam_sessions", "iam_refresh_tokens"} {
 		if _, err := db.NewUpdate().Table(table).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", principalID).Exec(ctx); err != nil {
 			return fmt.Errorf("revoke provisioned principal state in %s: %w", table, err)
@@ -159,8 +159,7 @@ func revokeProvisionedSecurityState(ctx context.Context, db bun.IDB, principalID
 	return nil
 }
 
-func normalizeProvisionedInput(tenantID string, input ProvisionedPrincipalInput, creating bool) (string, ProvisionedPrincipalInput, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func normalizeProvisionedInput(tenantID guid.ID, input ProvisionedPrincipalInput, creating bool) (guid.ID, ProvisionedPrincipalInput, error) {
 	input.LoginName = normalizeLogin(input.LoginName)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
@@ -172,9 +171,9 @@ func normalizeProvisionedInput(tenantID string, input ProvisionedPrincipalInput,
 		parsed, err := mail.ParseAddress(input.Email)
 		validEmail = err == nil && strings.EqualFold(parsed.Address, input.Email)
 	}
-	if tenantID == "" || len(tenantID) > 128 || input.LoginName == "" || len(input.LoginName) > 200 ||
+	if tenantID.Zero() || input.LoginName == "" || len(input.LoginName) > 200 ||
 		input.DisplayName == "" || len(input.DisplayName) > 128 || len(input.Email) > 320 || !validEmail || creating && input.PasswordHash == "" {
-		return "", ProvisionedPrincipalInput{}, ErrInvalid
+		return 0, ProvisionedPrincipalInput{}, ErrInvalid
 	}
 	return tenantID, input, nil
 }

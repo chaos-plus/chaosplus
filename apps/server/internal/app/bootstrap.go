@@ -12,10 +12,12 @@ import (
 
 	"github.com/uptrace/bun"
 
+	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
@@ -35,73 +37,15 @@ import (
 // services (timezone, logging, database), then the application modules through
 // their migrate and start phases. It returns an error so a failed migration or
 // module start aborts startup instead of leaving the app half-initialised.
-// ensureAllTenantOwners 幂等地给所有租户成员补 owner 角色 + tenant_administer,
-// 修复注册于 owner 角色逻辑之前的存量用户(否则管理自己租户会 403)。
-func ensureAllTenantOwners(ctx context.Context, db *bun.DB) error {
-	if db == nil {
-		return nil
-	}
-	var members []struct {
-		TenantID    string
-		UserSubject string
-	}
-	if err := db.NewRaw(`SELECT tenant_id, user_subject FROM iam_tenant_members WHERE status = 'active'`).Scan(ctx, &members); err != nil {
-		return fmt.Errorf("scan tenant members: %w", err)
-	}
-	now := time.Now().UTC().UnixMilli()
-	for _, m := range members {
-		err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-			role := struct {
-				bun.BaseModel `bun:"table:iam_roles"`
-				TenantID      string
-				ID            string
-				Name          string
-				Description   string
-				CreatedAt     int64
-				UpdatedAt     int64
-			}{TenantID: m.TenantID, ID: "owner", Name: "Owner", Description: "自动创建的租户所有者", CreatedAt: now, UpdatedAt: now}
-			if _, err := tx.NewInsert().Model(&role).Ignore().Exec(ctx); err != nil {
-				return err
-			}
-			perm := struct {
-				bun.BaseModel  `bun:"table:iam_role_permissions"`
-				TenantID       string
-				RoleID         string
-				PermissionCode string
-				ConditionJSON  string
-				CreatedAt      int64
-			}{TenantID: m.TenantID, RoleID: "owner", PermissionCode: "tenant_administer", ConditionJSON: "", CreatedAt: now}
-			if _, err := tx.NewInsert().Model(&perm).Ignore().Exec(ctx); err != nil {
-				return err
-			}
-			rm := struct {
-				bun.BaseModel `bun:"table:iam_role_members"`
-				TenantID      string
-				RoleID        string
-				UserSubject   string
-				CreatedAt     int64
-			}{TenantID: m.TenantID, RoleID: "owner", UserSubject: m.UserSubject, CreatedAt: now}
-			if _, err := tx.NewInsert().Model(&rm).Ignore().Exec(ctx); err != nil {
-				return err
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("ensure owner %s/%s: %w", m.TenantID, m.UserSubject, err)
-		}
-	}
-	return nil
-}
-
 // bootstrapTenantForVerifiedUser 给注册激活的用户自动创建一个租户,并把该用户
-// 挂为成员(PRD:每个注册用户是一个租户)。幂等:slug 冲突或成员已存在即跳过。
-func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID, email string) error {
+// 挂为成员并授予租户管理员角色(PRD:每个注册用户是一个租户)。幂等:slug 冲突或
+// 成员已存在即跳过。所有 ID 均由共享雪花生成器产生。
+func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID guid.ID, email string) error {
 	if db == nil {
 		return errors.New("bootstrap tenant: database is required")
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	now := time.Now().UTC().UnixMilli()
-	// slug = 邮箱本地部分 + 短随机,保证唯一且可读。
 	base := email
 	if i := strings.IndexByte(email, '@'); i > 0 {
 		base = email[:i]
@@ -111,15 +55,20 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		return fmt.Errorf("bootstrap tenant: rand: %w", err)
 	}
 	slug := fmt.Sprintf("%s-%x", base, randBytes)
-	tenantID := "t_" + fmt.Sprintf("%x", randBytes) + fmt.Sprintf("%x", randBytes)
-	if len(tenantID) > 40 {
-		tenantID = tenantID[:40]
+	id, err := guid.Next()
+	if err != nil {
+		return fmt.Errorf("bootstrap tenant: id: %w", err)
 	}
-
+	tenantID := guid.ID(id)
+	roleRaw, err := guid.Next()
+	if err != nil {
+		return fmt.Errorf("bootstrap tenant: role id: %w", err)
+	}
+	roleID := guid.ID(roleRaw)
 	return db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		tenant := struct {
 			bun.BaseModel `bun:"table:iam_tenants"`
-			ID            string
+			ID            guid.ID
 			Slug          string
 			Name          string
 			Status        string
@@ -132,24 +81,21 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		}
 		member := struct {
 			bun.BaseModel `bun:"table:iam_tenant_members"`
-			TenantID      string
-			UserSubject   string
+			TenantID      guid.ID
+			PrincipalID   guid.ID
 			DisplayName   string
 			Email         string
 			Status        string
 			CreatedAt     int64
 			UpdatedAt     int64
-		}{TenantID: tenantID, UserSubject: principalID, DisplayName: email, Email: email, Status: "active", CreatedAt: now, UpdatedAt: now}
+		}{TenantID: tenantID, PrincipalID: principalID, DisplayName: email, Email: email, Status: "active", CreatedAt: now, UpdatedAt: now}
 		if _, err := tx.NewInsert().Model(&member).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: member: %w", err)
 		}
-		// 注册用户是该租户的 owner:建角色 + 授予 tenant_administer + 挂角色成员,
-		// 否则 authz 只把他当普通成员,无权管理租户(/iam/tenants 403)。
-		roleID := "owner"
 		role := struct {
 			bun.BaseModel `bun:"table:iam_roles"`
-			TenantID      string
-			ID            string
+			TenantID      guid.ID
+			ID            guid.ID
 			Name          string
 			Description   string
 			CreatedAt     int64
@@ -160,8 +106,8 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		}
 		perm := struct {
 			bun.BaseModel  `bun:"table:iam_role_permissions"`
-			TenantID       string
-			RoleID         string
+			TenantID       guid.ID
+			RoleID         guid.ID
 			PermissionCode string
 			ConditionJSON  string
 			CreatedAt      int64
@@ -171,11 +117,11 @@ func bootstrapTenantForVerifiedUser(ctx context.Context, db *bun.DB, principalID
 		}
 		roleMember := struct {
 			bun.BaseModel `bun:"table:iam_role_members"`
-			TenantID      string
-			RoleID        string
-			UserSubject   string
+			TenantID      guid.ID
+			RoleID        guid.ID
+			PrincipalID   guid.ID
 			CreatedAt     int64
-		}{TenantID: tenantID, RoleID: roleID, UserSubject: principalID, CreatedAt: now}
+		}{TenantID: tenantID, RoleID: roleID, PrincipalID: principalID, CreatedAt: now}
 		if _, err := tx.NewInsert().Model(&roleMember).Ignore().Exec(ctx); err != nil {
 			return fmt.Errorf("bootstrap tenant: role member: %w", err)
 		}
@@ -225,8 +171,32 @@ func (app *App) Bootstrap() error {
 		})
 	}
 
-	registry := authz.DefaultRegistry()
-	if app.cfg.Authn.Enabled {
+	registry, err := app.buildAuthorizationRegistry()
+	if err != nil {
+		return err
+	}
+	app.authzRegistry = registry
+	for _, extension := range app.extensions {
+		if extension.RegisterI18n != nil {
+			if err := extension.RegisterI18n(); err != nil {
+				return fmt.Errorf("register %s locales: %w", extension.Name, err)
+			}
+		}
+	}
+	if app.resourceProfile {
+		if !app.cfg.Authn.Enabled || !app.cfg.Authz.Enabled {
+			return fmt.Errorf("resource application requires authentication and authorization")
+		}
+		if len(app.dbr.Writer) == 0 {
+			return fmt.Errorf("resource application requires a writable business database with IAM projections")
+		}
+		verifier, err := authnext.NewVerifier(app.cfg.Authn)
+		if err != nil {
+			return fmt.Errorf("init resource authentication: %w", err)
+		}
+		app.authnRequest = verifier
+		app.authzRegistrar = authz.NewRegistrar(registry, verifier, iam.NewAuthorizerWithRegistry(app.dbr.Write(), registry), iam.NewMembershipChecker(app.dbr.Write()))
+	} else if app.cfg.Authn.Enabled {
 		if len(app.dbr.Writer) == 0 {
 			return fmt.Errorf("local authentication requires a writable database")
 		}
@@ -235,9 +205,12 @@ func (app *App) Bootstrap() error {
 			return fmt.Errorf("load claim plugins: %w", err)
 		}
 		app.claimPlugins = claimPlugins
-		options := []authnmod.WebOption{authnmod.WithRegistrationPrincipalCreator(registrationPrincipalCreator)}
+		options := []authnmod.WebOption{
+			authnmod.WithRegistrationPrincipalCreator(registrationPrincipalCreator),
+			authnmod.WithIDGenerator(nextGUID),
+		}
 		// 每个注册用户激活后自动拥有一个租户(PRD:注册用户=租户,租户下多 instance)。
-		options = append(options, authnmod.WithVerifiedHook(func(ctx context.Context, principalID, email string) error {
+		options = append(options, authnmod.WithVerifiedHook(func(ctx context.Context, principalID guid.ID, email string) error {
 			return bootstrapTenantForVerifiedUser(ctx, app.dbr.Write(), principalID, email)
 		}))
 		if claimPlugins != nil {
@@ -258,24 +231,19 @@ func (app *App) Bootstrap() error {
 		app.authnWeb = web
 		app.authnRequest = web
 
-		// 存量用户补 owner:注册于 owner 角色逻辑之前的用户缺 tenant_administer,
-		// 无法管理自己租户(列表/建实体 403)。幂等补上。
-		if err := ensureAllTenantOwners(app.ctx, app.dbr.Write()); err != nil {
-			slog.Warn("ensure existing tenant owners", "err", err)
-		}
 	}
 
-	if app.cfg.Authz.Enabled {
+	if !app.resourceProfile && app.cfg.Authz.Enabled {
 		if !app.cfg.Authn.Enabled {
 			return fmt.Errorf("authorization requires authentication to be enabled")
 		}
 		if len(app.dbr.Writer) == 0 {
 			return fmt.Errorf("authorization requires a writable database")
 		}
-		app.authzRegistrar = authz.NewRegistrar(registry, app.authnRequest, iam.NewAuthorizer(app.dbr.Write()), iam.NewMembershipChecker(app.dbr.Write()))
+		app.authzRegistrar = authz.NewRegistrar(registry, app.authnRequest, iam.NewAuthorizerWithRegistry(app.dbr.Write(), registry), iam.NewMembershipChecker(app.dbr.Write()))
 	}
 
-	if app.cfg.Federation.Enabled {
+	if !app.resourceProfile && app.cfg.Federation.Enabled {
 		if !app.cfg.Authn.Enabled || app.authnWeb == nil {
 			return fmt.Errorf("federation requires authentication to be enabled")
 		}
@@ -285,19 +253,24 @@ func (app *App) Bootstrap() error {
 		}
 		app.federationKey = key
 	}
-	provisioningKey, err := provisioning.ResolveEncryptionKey(app.cfg.Provisioning)
-	if err != nil {
-		return fmt.Errorf("init provisioning: %w", err)
+	if !app.resourceProfile {
+		provisioningKey, err := provisioning.ResolveEncryptionKey(app.cfg.Provisioning)
+		if err != nil {
+			return fmt.Errorf("init provisioning: %w", err)
+		}
+		app.provisioningKey = provisioningKey
 	}
-	app.provisioningKey = provisioningKey
 
 	// build modules, then run the migrate and start phases in order.
 	app.mods = app.buildModules()
+	if err := app.buildExtensionModules(); err != nil {
+		return err
+	}
 	if app.cfg.Migrations.Auto {
 		if err := app.migrateModules(app.ctx); err != nil {
 			return err
 		}
-	} else if app.authzRegistrar != nil {
+	} else if app.authzRegistrar != nil && !app.resourceProfile {
 		if err := iam.AssertMigrated(app.ctx, app.dbr.Write()); err != nil {
 			return err
 		}
@@ -314,6 +287,11 @@ func (app *App) Bootstrap() error {
 			if err := federation.AssertMigrated(app.ctx, app.dbr.Write()); err != nil {
 				return err
 			}
+		}
+	}
+	if app.resourceProfile {
+		if err := iam.AssertMigrated(app.ctx, app.dbr.Write()); err != nil {
+			return fmt.Errorf("resource authorization dependency: %w", err)
 		}
 	}
 	if err := app.startModules(app.ctx); err != nil {

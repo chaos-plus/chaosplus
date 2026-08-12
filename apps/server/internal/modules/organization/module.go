@@ -5,6 +5,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/uptrace/bun"
 )
@@ -24,7 +25,7 @@ type Module struct {
 // iam.AdministratorGuard. Defined here rather than imported to keep the
 // dependency direction organization → iam unidirectional.
 type AdministratorGuard interface {
-	Protect(context.Context, bun.IDB, string, string) (func() error, error)
+	Protect(context.Context, bun.IDB, string, guid.ID) (func() error, error)
 }
 
 func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, members ActiveMemberChecker, administrators AdministratorGuard, nextID IDGenerator, credentials InvitationCredentials, createPrincipal InvitationPrincipalCreator) *Module {

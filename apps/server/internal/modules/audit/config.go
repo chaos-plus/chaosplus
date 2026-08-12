@@ -11,7 +11,7 @@ type Config struct {
 type AnchorConfig struct {
 	Enabled       bool   `mapstructure:"enabled" description:"anchor verified audit heads into an external S3-compatible object lock store" default:"false"`
 	Endpoint      string `mapstructure:"endpoint" description:"S3-compatible endpoint, e.g. http://127.0.0.1:9000" default:""`
-	Bucket        string `mapstructure:"bucket" description:"bucket holding audit anchors; created with object locking when it does not exist" default:"chaosplus-audit"`
+	Bucket        string `mapstructure:"bucket" description:"bucket holding audit anchors; created with object locking when it does not exist" default:"audit-anchors"`
 	Region        string `mapstructure:"region" description:"signing region; empty is fine for MinIO" default:""`
 	AccessKey     string `mapstructure:"access_key" description:"S3 access key" default:""`
 	SecretKey     string `mapstructure:"secret_key" description:"S3 secret key" default:""`

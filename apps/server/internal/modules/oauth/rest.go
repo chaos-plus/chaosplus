@@ -7,12 +7,22 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseOAuthID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
 
 type discoveryOutput struct{ Body map[string]any }
 type jwksOutput struct{ Body map[string]any }
@@ -190,35 +200,67 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		return
 	}
 	authz.Register(registrar, api, huma.Operation{OperationID: "oauth-list-clients", Method: http.MethodGet, Path: "/iam/oauth-clients", Summary: "List tenant OAuth clients", Tags: []string{"oauth"}}, authz.Guard{Resource: "oauth_client", Verb: "view"}, func(ctx context.Context, in *clientListInput) (*respx.Body[[]Client], error) {
-		clients, err := service.ListClients(ctx, in.TenantID)
+		tenantID, err := parseOAuthID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		clients, err := service.ListClients(ctx, tenantID)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid_client")
 		}
 		return respx.OK(ctx, clients), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "oauth-create-client", Method: http.MethodPost, Path: "/iam/oauth-clients", Summary: "Create a tenant OAuth client", Tags: []string{"oauth"}}, authz.Guard{Resource: "oauth_client", Verb: "create"}, func(ctx context.Context, in *clientCreateInput) (*respx.Body[clientCreateData], error) {
-		client, secret, err := service.CreateClient(ctx, in.TenantID, in.Body.Name, in.Body.RedirectURIs, in.Body.GrantTypes, in.Body.Scopes, in.Body.PublicClient)
+		tenantID, err := parseOAuthID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		client, secret, err := service.CreateClient(ctx, tenantID, in.Body.Name, in.Body.RedirectURIs, in.Body.GrantTypes, in.Body.Scopes, in.Body.PublicClient)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid_client")
 		}
 		return respx.OK(ctx, clientCreateData{Client: client, ClientSecret: secret}), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "oauth-update-client", Method: http.MethodPut, Path: "/iam/oauth-clients/{id}", Summary: "Replace a tenant OAuth client", Tags: []string{"oauth"}}, authz.Guard{Resource: "oauth_client", Verb: "update"}, func(ctx context.Context, in *clientUpdateInput) (*respx.Body[Client], error) {
-		client, err := service.UpdateClient(ctx, in.TenantID, in.ID, in.Body.Name, in.Body.RedirectURIs, in.Body.GrantTypes, in.Body.Scopes, in.Body.PublicClient, in.Body.Status)
+		tenantID, err := parseOAuthID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOAuthID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		client, err := service.UpdateClient(ctx, tenantID, id, in.Body.Name, in.Body.RedirectURIs, in.Body.GrantTypes, in.Body.Scopes, in.Body.PublicClient, in.Body.Status)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid_client")
 		}
 		return respx.OK(ctx, client), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "oauth-rotate-client-secret", Method: http.MethodPost, Path: "/iam/oauth-clients/{id}/rotate-secret", Summary: "Rotate a confidential OAuth client secret", Tags: []string{"oauth"}}, authz.Guard{Resource: "oauth_client", Verb: "update"}, func(ctx context.Context, in *clientIDInput) (*respx.Body[map[string]string], error) {
-		secret, err := service.RotateClientSecret(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOAuthID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOAuthID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		secret, err := service.RotateClientSecret(ctx, tenantID, id)
 		if err != nil {
 			return nil, huma.Error404NotFound("client_not_found")
 		}
 		return respx.OK(ctx, map[string]string{"client_secret": secret}), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "oauth-delete-client", Method: http.MethodDelete, Path: "/iam/oauth-clients/{id}", Summary: "Delete a tenant OAuth client", Tags: []string{"oauth"}}, authz.Guard{Resource: "oauth_client", Verb: "delete"}, func(ctx context.Context, in *clientIDInput) (*respx.Body[map[string]bool], error) {
-		if err := service.DeleteClient(ctx, in.TenantID, in.ID); err != nil {
+		tenantID, err := parseOAuthID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOAuthID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.DeleteClient(ctx, tenantID, id); err != nil {
 			return nil, huma.Error404NotFound("client_not_found")
 		}
 		return respx.OK(ctx, map[string]bool{"deleted": true}), nil

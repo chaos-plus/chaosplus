@@ -22,16 +22,16 @@ func openTestDB(t *testing.T) *bun.DB {
 	}
 	t.Cleanup(func() { _ = sqldb.Close() })
 	db := bun.NewDB(sqldb, sqlitedialect.New())
-	if _, err := db.Exec(`CREATE TABLE iam_tenants (id TEXT PRIMARY KEY, slug TEXT UNIQUE, name TEXT, status TEXT, version INTEGER, created_at INTEGER, updated_at INTEGER)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE iam_tenants (id BIGINT PRIMARY KEY, slug TEXT UNIQUE, name TEXT, status TEXT, version INTEGER, created_at INTEGER, updated_at INTEGER)`); err != nil {
 		t.Fatalf("create tenants: %v", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE iam_tenant_members (tenant_id TEXT, user_subject TEXT, display_name TEXT, email TEXT, status TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id, user_subject))`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE iam_tenant_members (tenant_id BIGINT, principal_id BIGINT, display_name TEXT, email TEXT, status TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id, principal_id))`); err != nil {
 		t.Fatalf("create members: %v", err)
 	}
 	for _, ddl := range []string{
-		`CREATE TABLE iam_roles (tenant_id TEXT, id TEXT, name TEXT, description TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id,id))`,
-		`CREATE TABLE iam_role_permissions (tenant_id TEXT, role_id TEXT, permission_code TEXT, condition_json TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,permission_code))`,
-		`CREATE TABLE iam_role_members (tenant_id TEXT, role_id TEXT, user_subject TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,user_subject))`,
+		`CREATE TABLE iam_roles (tenant_id BIGINT, id BIGINT, name TEXT, description TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (tenant_id,id))`,
+		`CREATE TABLE iam_role_permissions (tenant_id BIGINT, role_id BIGINT, permission_code TEXT, condition_json TEXT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,permission_code))`,
+		`CREATE TABLE iam_role_members (tenant_id BIGINT, role_id BIGINT, principal_id BIGINT, created_at INTEGER, PRIMARY KEY (tenant_id,role_id,principal_id))`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
 			t.Fatalf("create role table: %v", err)
@@ -44,7 +44,7 @@ func TestBootstrapTenantForVerifiedUser(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
-	if err := bootstrapTenantForVerifiedUser(ctx, db, "pr-1", "dev@chaos.plus"); err != nil {
+	if err := bootstrapTenantForVerifiedUser(ctx, db, testID("pr-1"), "dev@chaos.plus"); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
@@ -71,16 +71,16 @@ func TestBootstrapTenantForVerifiedUser(t *testing.T) {
 		t.Fatalf("expected 1 member, got %d", members)
 	}
 	var subject string
-	if err := db.NewSelect().Table("iam_tenant_members").Column("user_subject").Scan(ctx, &subject); err != nil {
+	if err := db.NewSelect().Table("iam_tenant_members").Column("principal_id").Scan(ctx, &subject); err != nil {
 		t.Fatalf("get subject: %v", err)
 	}
-	if subject != "pr-1" {
-		t.Fatalf("member subject = %q, want pr-1", subject)
+	if subject != testID("pr-1").String() {
+		t.Fatalf("member subject = %q, want %s", subject, testID("pr-1").String())
 	}
 }
 
 func TestBootstrapTenantRejectsNilDB(t *testing.T) {
-	if err := bootstrapTenantForVerifiedUser(context.Background(), nil, "pr-1", "a@b.c"); err == nil {
+	if err := bootstrapTenantForVerifiedUser(context.Background(), nil, testID("pr-1"), "a@b.c"); err == nil {
 		t.Fatal("nil DB must error")
 	}
 }
@@ -91,7 +91,7 @@ func TestBootstrapTenantGrantsOwnerRole(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
-	if err := bootstrapTenantForVerifiedUser(ctx, db, "pr-owner", "o@chaos.plus"); err != nil {
+	if err := bootstrapTenantForVerifiedUser(ctx, db, testID("pr-owner"), "o@chaos.plus"); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	var perms int
@@ -102,7 +102,7 @@ func TestBootstrapTenantGrantsOwnerRole(t *testing.T) {
 		t.Fatalf("expected tenant_administer permission, got %d", perms)
 	}
 	var roleMembers int
-	if err := db.NewSelect().Table("iam_role_members").Where("user_subject = ?", "pr-owner").ColumnExpr("COUNT(*)").Scan(ctx, &roleMembers); err != nil {
+	if err := db.NewSelect().Table("iam_role_members").Where("principal_id = ?", testID("pr-owner")).ColumnExpr("COUNT(*)").Scan(ctx, &roleMembers); err != nil {
 		t.Fatalf("count role members: %v", err)
 	}
 	if roleMembers != 1 {

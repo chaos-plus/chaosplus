@@ -4,12 +4,22 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseProvisioningID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
 
 type directoryListInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
@@ -55,42 +65,86 @@ type credentialIDInput struct {
 func RegisterAdminREST(api huma.API, service *Service, registrar *authz.Registrar) {
 	guard := authz.Guard{Resource: "tenant", Verb: "administer"}
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-list-scim-directories", Method: http.MethodGet, Path: "/iam/scim/directories", Summary: "List tenant SCIM directories", Tags: []string{"provisioning"}}, guard, func(ctx context.Context, in *directoryListInput) (*respx.Body[[]Directory], error) {
-		items, err := service.ListDirectories(ctx, in.TenantID)
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListDirectories(ctx, tenantID)
 		if err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, items), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-create-scim-directory", Method: http.MethodPost, Path: "/iam/scim/directories", Summary: "Create a tenant SCIM directory", Tags: []string{"provisioning"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}, guard, func(ctx context.Context, in *directoryCreateInput) (*respx.Body[Directory], error) {
-		item, err := service.CreateDirectory(ctx, in.TenantID, in.Body.Name)
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.CreateDirectory(ctx, tenantID, in.Body.Name)
 		if err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, item), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-replace-scim-directory", Method: http.MethodPut, Path: "/iam/scim/directories/{directory_id}", Summary: "Replace a tenant SCIM directory", Tags: []string{"provisioning"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, guard, func(ctx context.Context, in *directoryReplaceInput) (*respx.Body[Directory], error) {
-		item, err := service.ReplaceDirectory(ctx, in.TenantID, in.DirectoryID, in.Body.Name, in.Body.Status, in.Body.Version)
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		directoryID, err := parseProvisioningID(in.DirectoryID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.ReplaceDirectory(ctx, tenantID, directoryID, in.Body.Name, in.Body.Status, in.Body.Version)
 		if err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, item), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-list-scim-credentials", Method: http.MethodGet, Path: "/iam/scim/directories/{directory_id}/credentials", Summary: "List SCIM directory credentials", Tags: []string{"provisioning"}, Errors: []int{http.StatusNotFound}}, guard, func(ctx context.Context, in *directoryIDInput) (*respx.Body[[]Credential], error) {
-		items, err := service.ListCredentials(ctx, in.TenantID, in.DirectoryID)
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		directoryID, err := parseProvisioningID(in.DirectoryID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListCredentials(ctx, tenantID, directoryID)
 		if err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, items), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-create-scim-credential", Method: http.MethodPost, Path: "/iam/scim/directories/{directory_id}/credentials", Summary: "Create a one-display SCIM bearer credential", Tags: []string{"provisioning"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, guard, func(ctx context.Context, in *credentialCreateInput) (*respx.Body[CredentialSecret], error) {
-		item, err := service.CreateCredential(ctx, in.TenantID, in.DirectoryID, in.Body.Name, in.Body.ExpiresAt)
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		directoryID, err := parseProvisioningID(in.DirectoryID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.CreateCredential(ctx, tenantID, directoryID, in.Body.Name, in.Body.ExpiresAt)
 		if err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, item), nil
 	})
 	authz.Register(registrar, api, huma.Operation{OperationID: "provisioning-revoke-scim-credential", Method: http.MethodDelete, Path: "/iam/scim/directories/{directory_id}/credentials/{credential_id}", Summary: "Revoke a SCIM bearer credential", Tags: []string{"provisioning"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, guard, func(ctx context.Context, in *credentialIDInput) (*respx.Body[map[string]bool], error) {
-		if err := service.RevokeCredential(ctx, in.TenantID, in.DirectoryID, in.CredentialID); err != nil {
+		tenantID, err := parseProvisioningID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		directoryID, err := parseProvisioningID(in.DirectoryID)
+		if err != nil {
+			return nil, err
+		}
+		credentialID, err := parseProvisioningID(in.CredentialID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.RevokeCredential(ctx, tenantID, directoryID, credentialID); err != nil {
 			return nil, provisioningError(err)
 		}
 		return respx.OK(ctx, map[string]bool{"revoked": true}), nil

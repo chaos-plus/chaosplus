@@ -1,13 +1,13 @@
 -- +goose Up
 CREATE TABLE iam_resource_relationships (
-    tenant_id VARCHAR(128) NOT NULL,
-    entity_id VARCHAR(64) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    entity_id BIGINT NOT NULL,
     subject_type VARCHAR(16) NOT NULL,
-    subject_id VARCHAR(128) NOT NULL,
+    subject_id BIGINT NOT NULL,
     subject_relation VARCHAR(16) NOT NULL DEFAULT '',
     relation VARCHAR(16) NOT NULL,
     resource_type VARCHAR(64) NOT NULL,
-    resource_id VARCHAR(255) NOT NULL,
+    resource_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, entity_id, subject_type, subject_id, subject_relation, relation, resource_type, resource_id),
     CONSTRAINT chk_iam_resource_relationship_subject_type CHECK (subject_type IN ('principal', 'group', 'position', 'entity')),

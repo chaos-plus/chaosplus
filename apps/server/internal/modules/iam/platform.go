@@ -11,18 +11,19 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 )
 
 // platformAuditTenant scopes platform administration events into their own
 // audit chain. Platform operations sit above every tenant boundary, so they
 // cannot borrow a real tenant id without corrupting that tenant's chain.
-const platformAuditTenant = "_platform"
+const platformAuditTenant guid.ID = 0
 
 type platformGrantRow struct {
 	bun.BaseModel  `bun:"table:iam_platform_grants"`
-	PrincipalID    string `bun:"principal_id,pk"`
-	PermissionCode string `bun:"permission_code,pk"`
+	PrincipalID    guid.ID `bun:"principal_id,pk"`
+	PermissionCode string  `bun:"permission_code,pk"`
 	CreatedAt      int64
 }
 
@@ -42,10 +43,9 @@ func PlatformPermissionCodes(registry *authz.Registry) []string {
 	return codes
 }
 
-func validatePlatformPrincipal(principalID string) (string, error) {
-	principalID = strings.TrimSpace(principalID)
-	if principalID == "" || len(principalID) > 64 {
-		return "", fmt.Errorf("%w: invalid platform administrator principal", ErrInvalidArgument)
+func validatePlatformPrincipal(principalID guid.ID) (guid.ID, error) {
+	if principalID.Zero() {
+		return 0, fmt.Errorf("%w: invalid platform administrator principal", ErrInvalidArgument)
 	}
 	return principalID, nil
 }
@@ -61,7 +61,7 @@ func (r *Repository) ListPlatformAdministrators(ctx context.Context) ([]iamdomai
 	if err := r.executor.NewSelect().Model(&grantRows).Order("principal_id ASC", "permission_code ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list platform grants: %w", err)
 	}
-	byPrincipal := map[string]*iamdomain.PlatformAdministrator{}
+	byPrincipal := map[guid.ID]*iamdomain.PlatformAdministrator{}
 	for _, row := range adminRows {
 		byPrincipal[row.PrincipalID] = &iamdomain.PlatformAdministrator{
 			PrincipalID: row.PrincipalID, FullAdministrator: true,
@@ -78,11 +78,11 @@ func (r *Repository) ListPlatformAdministrators(ctx context.Context) ([]iamdomai
 		}
 		existing.Permissions = append(existing.Permissions, row.PermissionCode)
 	}
-	order := make([]string, 0, len(byPrincipal))
+	order := make([]guid.ID, 0, len(byPrincipal))
 	for principalID := range byPrincipal {
 		order = append(order, principalID)
 	}
-	sort.Strings(order)
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
 	result := make([]iamdomain.PlatformAdministrator, 0, len(order))
 	for _, principalID := range order {
 		result = append(result, *byPrincipal[principalID])
@@ -91,7 +91,7 @@ func (r *Repository) ListPlatformAdministrators(ctx context.Context) ([]iamdomai
 }
 
 // GetPlatformAdministrator returns one principal's platform authorization.
-func (r *Repository) GetPlatformAdministrator(ctx context.Context, principalID string) (iamdomain.PlatformAdministrator, error) {
+func (r *Repository) GetPlatformAdministrator(ctx context.Context, principalID guid.ID) (iamdomain.PlatformAdministrator, error) {
 	principalID, err := validatePlatformPrincipal(principalID)
 	if err != nil {
 		return iamdomain.PlatformAdministrator{}, err
@@ -111,7 +111,7 @@ func (r *Repository) GetPlatformAdministrator(ctx context.Context, principalID s
 // SetPlatformAdministrator replaces one principal's platform authorization.
 // A full administrator holds every platform permission; otherwise the supplied
 // codes become the exact grant set.
-func (r *Repository) SetPlatformAdministrator(ctx context.Context, principalID string, full bool, permissions []string) (iamdomain.PlatformAdministrator, error) {
+func (r *Repository) SetPlatformAdministrator(ctx context.Context, principalID guid.ID, full bool, permissions []string) (iamdomain.PlatformAdministrator, error) {
 	principalID, err := validatePlatformPrincipal(principalID)
 	if err != nil {
 		return iamdomain.PlatformAdministrator{}, err
@@ -144,7 +144,7 @@ func (r *Repository) SetPlatformAdministrator(ctx context.Context, principalID s
 }
 
 // DeletePlatformAdministrator removes every platform grant for one principal.
-func (r *Repository) DeletePlatformAdministrator(ctx context.Context, principalID string) (bool, error) {
+func (r *Repository) DeletePlatformAdministrator(ctx context.Context, principalID guid.ID) (bool, error) {
 	principalID, err := validatePlatformPrincipal(principalID)
 	if err != nil {
 		return false, err
@@ -207,7 +207,7 @@ func (s *Service) ListPlatformAdministrators(ctx context.Context) ([]iamdomain.P
 // SetPlatformAdministrator grants or restricts one principal's platform
 // authorization. It refuses unknown or tenant-scoped permission codes and
 // preserves at least one full platform administrator.
-func (s *Service) SetPlatformAdministrator(ctx context.Context, principalID string, full bool, permissions []string) (iamdomain.PlatformAdministrator, error) {
+func (s *Service) SetPlatformAdministrator(ctx context.Context, principalID guid.ID, full bool, permissions []string) (iamdomain.PlatformAdministrator, error) {
 	principalID, err := validatePlatformPrincipal(principalID)
 	if err != nil {
 		return iamdomain.PlatformAdministrator{}, err
@@ -241,7 +241,7 @@ func (s *Service) SetPlatformAdministrator(ctx context.Context, principalID stri
 
 // DeletePlatformAdministrator revokes every platform grant for one principal
 // while preserving a recoverable platform administration path.
-func (s *Service) DeletePlatformAdministrator(ctx context.Context, principalID string) (bool, error) {
+func (s *Service) DeletePlatformAdministrator(ctx context.Context, principalID guid.ID) (bool, error) {
 	principalID, err := validatePlatformPrincipal(principalID)
 	if err != nil {
 		return false, err

@@ -1,0 +1,1 @@
+{"conversation.message.invalid":"会话消息无效。","conversation.message.not_found":"未找到该会话频道。","conversation.message.forbidden":"消息作者不是频道的有效成员。","conversation.message.conflict":"该幂等键已用于其他消息内容。","conversation.message.unavailable":"会话消息服务暂不可用。"}

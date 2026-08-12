@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Bot, GitBranch, Hash, MoreHorizontal, Paperclip, Plus, RotateCw, Send, ShieldQuestion, Trash2, User as UserIcon } from "lucide-react"
+import { Bot, CircleCheck, GitBranch, Hash, MoreHorizontal, Paperclip, Plus, RotateCw, Send, ShieldQuestion, Trash2, TriangleAlert, User as UserIcon, Wrench } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import { useNavigate, useParams } from "react-router"
 import { Button } from "@workspace/ui/components/button"
@@ -264,7 +264,7 @@ export default function SessionsPage() {
 
     // PRD §9.1 实时:频道消息 WS 推送;按 id 去重合并,避免与轮询重复。
     const proto = location.protocol === "https:" ? "wss:" : "ws:"
-    const ws = new WebSocket(`${proto}//${location.host}/control/api/channels/${channelId}/events`)
+    const ws = new WebSocket(`${proto}//${location.host}/api/channels/${channelId}/events`)
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as ChannelMessage
@@ -313,7 +313,7 @@ export default function SessionsPage() {
   // 执行过程弹窗:打开时每秒轮询 agent 实时活动。
   useEffect(() => {
     if (!channelId || !execOpen) return
-    const load = () => void controlApi.execution(channelId).then((x) => setExecution(x ?? [])).catch(() => setExecution([]))
+    const load = () => void controlApi.execution().then((x) => setExecution(x ?? [])).catch(() => setExecution([]))
     load()
     const t = setInterval(load, 1000)
     return () => clearInterval(t)
@@ -329,7 +329,7 @@ export default function SessionsPage() {
 
   const addMember = async () => {
     if (!channelId || !addTarget) return
-    const kind = addTarget.startsWith("ag-") ? "agent" : "human"
+    const kind = addTarget === "human" ? "human" : "agent"
     await controlApi.addMember(channelId, addTarget, kind)
     setAddTarget("")
     void controlApi.members(channelId).then((x) => setMembers(x ?? []))
@@ -573,7 +573,7 @@ export default function SessionsPage() {
                     {messageAttachments(m).length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-2">
                         {messageAttachments(m).map((a) => {
-                          const url = `/control/api/attachments/${a.id}`
+                          const url = `/api/attachments/${a.id}/content`
                           return (
                             <a
                               key={a.id}
@@ -813,11 +813,11 @@ export default function SessionsPage() {
                 <div key={i} className="flex gap-2">
                   <span className="shrink-0 text-muted-foreground">{new Date(p.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
                   {p.kind === "tool" ? (
-                    <span className="text-primary">🔧 {p.content}</span>
+                    <span className="inline-flex items-center gap-1 text-primary"><Wrench className="size-3.5 shrink-0" aria-hidden="true" />{p.content}</span>
                   ) : p.kind === "error" ? (
-                    <span className="text-destructive">⚠️ {p.content}</span>
+                    <span className="inline-flex items-center gap-1 text-destructive"><TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />{p.content}</span>
                   ) : p.kind === "done" ? (
-                    <span className="text-green-600">✅ {p.content}</span>
+                    <span className="inline-flex items-center gap-1 text-green-600"><CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />{p.content}</span>
                   ) : (
                     <span className="whitespace-pre-wrap text-foreground/90">{p.content}</span>
                   )}

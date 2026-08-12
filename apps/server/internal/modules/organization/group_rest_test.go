@@ -27,13 +27,13 @@ func TestGroupHTTPWorkflow(t *testing.T) {
 	addTenantMember(t, db, "tenant-a", "principal/a", "Alice", iam.MemberActive)
 	_, api := humatest.New(t)
 	RegisterGroupREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant-a"
+	tenant := authz.TenantHeader + ": " + wireID("tenant-a")
 
 	created := api.Post("/iam/groups", tenant, map[string]any{"name": "Operators", "description": "Operators", "sort_order": 10})
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
 	group := decodeGroup(t, created.Body.Bytes())
 	assert.Equal(t, GroupTypeStatic, group.Type)
-	assert.Equal(t, http.StatusOK, api.Get("/iam/groups/"+group.ID, tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/groups/"+group.ID.String(), tenant).Code)
 	assert.Equal(t, http.StatusConflict, api.Post("/iam/groups", tenant, map[string]any{"name": "OPERATORS"}).Code)
 
 	listed := api.Get("/iam/groups", tenant)
@@ -44,36 +44,36 @@ func TestGroupHTTPWorkflow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(listed.Body.Bytes(), &groups))
 	require.Len(t, groups.Data, 1)
 
-	updated := api.Patch("/iam/groups/"+group.ID, tenant, map[string]any{"name": "Security Operators", "status": "disabled", "version": group.Version})
+	updated := api.Patch("/iam/groups/"+group.ID.String(), tenant, map[string]any{"name": "Security Operators", "status": "disabled", "version": group.Version})
 	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
 	group = decodeGroup(t, updated.Body.Bytes())
 	assert.Equal(t, int64(2), group.Version)
-	assert.Equal(t, http.StatusConflict, api.Patch("/iam/groups/"+group.ID, tenant, map[string]any{"name": "Stale", "version": 1}).Code)
+	assert.Equal(t, http.StatusConflict, api.Patch("/iam/groups/"+group.ID.String(), tenant, map[string]any{"name": "Stale", "version": 1}).Code)
 
 	start := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
-	memberResponse := api.Put("/iam/groups/"+group.ID+"/members/principal%2Fa", tenant, map[string]any{"starts_at": start, "ends_at": end})
+	memberResponse := api.Put("/iam/groups/"+group.ID.String()+"/members/"+wireID("principal/a"), tenant, map[string]any{"starts_at": start, "ends_at": end})
 	require.Equal(t, http.StatusOK, memberResponse.Code, memberResponse.Body.String())
-	members := api.Get("/iam/groups/"+group.ID+"/members", tenant)
+	members := api.Get("/iam/groups/"+group.ID.String()+"/members", tenant)
 	require.Equal(t, http.StatusOK, members.Code, members.Body.String())
 	var memberEnvelope struct {
 		Data []GroupMember `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(members.Body.Bytes(), &memberEnvelope))
 	require.Len(t, memberEnvelope.Data, 1)
-	assert.Equal(t, "principal/a", memberEnvelope.Data[0].PrincipalID)
-	assert.Equal(t, http.StatusConflict, api.Delete("/iam/groups/"+group.ID+"?version=2", tenant).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID+"/members/principal%2Fa", tenant).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID+"?version=2", tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID, authz.TenantHeader+": tenant-b").Code)
+	assert.Equal(t, wireGUID("principal/a"), memberEnvelope.Data[0].PrincipalID)
+	assert.Equal(t, http.StatusConflict, api.Delete("/iam/groups/"+group.ID.String()+"?version=2", tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID.String()+"/members/"+wireID("principal/a"), tenant).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID.String()+"?version=2", tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID.String(), tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID.String(), authz.TenantHeader + ": " + wireID("tenant-b")).Code)
 }
 
 func TestGroupHTTPEmptyCollectionsAndErrors(t *testing.T) {
 	db, service := newGroupService(t)
 	_, api := humatest.New(t)
 	RegisterGroupREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant"
+	tenant := authz.TenantHeader + ": " + wireID("tenant")
 
 	response := api.Get("/iam/groups", tenant)
 	require.Equal(t, http.StatusOK, response.Code)
@@ -90,11 +90,11 @@ func TestGroupHTTPEmptyCollectionsAndErrors(t *testing.T) {
 	dynamicGroup := decodeGroup(t, dynamic.Body.Bytes())
 	assert.Equal(t, GroupTypeDynamic, dynamicGroup.Type)
 	assert.JSONEq(t, `{"version":1,"match":"all","conditions":[{"field":"member.status","operator":"in","values":["active"]}]}`, string(dynamicGroup.Rule))
-	manualMember := api.Put("/iam/groups/"+dynamicGroup.ID+"/members/principal", tenant, map[string]any{})
+	manualMember := api.Put("/iam/groups/"+dynamicGroup.ID.String()+"/members/"+wireID("principal"), tenant, map[string]any{})
 	assert.Equal(t, http.StatusConflict, manualMember.Code)
 	assert.Contains(t, manualMember.Body.String(), "dynamic_group_members_computed")
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Delete("/iam/groups/missing?version=0", tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/groups/missing/members/missing", tenant, map[string]any{}).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Delete("/iam/groups/"+wireID("missing")+"?version=0", tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/groups/"+wireID("missing")+"/members/"+wireID("missing"), tenant, map[string]any{}).Code)
 
 	require.NoError(t, db.Close())
 	assert.Equal(t, http.StatusInternalServerError, api.Get("/iam/groups", tenant).Code)
@@ -106,18 +106,18 @@ func TestGroupHTTPPreservesLastAdministrator(t *testing.T) {
 	addTenantMember(t, db, "tenant", "administrator", "Administrator", iam.MemberActive)
 	_, api := humatest.New(t)
 	RegisterGroupREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	tenant := authz.TenantHeader + ": tenant"
+	tenant := authz.TenantHeader + ": " + wireID("tenant")
 	created := api.Post("/iam/groups", tenant, map[string]any{"name": "Administrators"})
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
 	group := decodeGroup(t, created.Body.Bytes())
-	assigned := api.Put("/iam/groups/"+group.ID+"/members/administrator", tenant, map[string]any{})
+	assigned := api.Put("/iam/groups/"+group.ID.String()+"/members/"+wireID("administrator"), tenant, map[string]any{})
 	require.Equal(t, http.StatusOK, assigned.Code, assigned.Body.String())
 	bindDirectoryAdministrator(t, db, "tenant", "group", group.ID)
 
 	for _, response := range []*httptest.ResponseRecorder{
-		api.Patch("/iam/groups/"+group.ID, tenant, map[string]any{"status": "disabled", "version": group.Version}),
-		api.Put("/iam/groups/"+group.ID+"/members/administrator", tenant, map[string]any{"ends_at": time.Now().UTC().Add(time.Hour)}),
-		api.Delete("/iam/groups/"+group.ID+"/members/administrator", tenant),
+		api.Patch("/iam/groups/"+group.ID.String(), tenant, map[string]any{"status": "disabled", "version": group.Version}),
+		api.Put("/iam/groups/"+group.ID.String()+"/members/"+wireID("administrator"), tenant, map[string]any{"ends_at": time.Now().UTC().Add(time.Hour)}),
+		api.Delete("/iam/groups/"+group.ID.String()+"/members/"+wireID("administrator"), tenant),
 	} {
 		assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
 		assert.Contains(t, response.Body.String(), "last_tenant_administrator")
@@ -174,7 +174,7 @@ func TestDynamicGroupErrorsAreLocalized(t *testing.T) {
 		require.NoError(t, err)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Accept-Language", item.locale)
-		request.Header.Set(authz.TenantHeader, "tenant")
+		request.Header.Set(authz.TenantHeader, wireID("tenant"))
 		response, err := server.Client().Do(request)
 		require.NoError(t, err)
 		data, err := io.ReadAll(response.Body)

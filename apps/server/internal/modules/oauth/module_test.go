@@ -10,7 +10,7 @@ import (
 
 func TestModuleRegistersOAuthRoutes(t *testing.T) {
 	service, authentication, _ := newOAuthTestService(t)
-	module := NewModule(service.db, authentication, nil)
+	module := NewModule(service.db, authentication, nil, newTestIDGenerator())
 	_, api := humatest.New(t)
 	module.RegisterREST(api)
 

@@ -16,24 +16,24 @@ func TestAuditModuleConstruction(t *testing.T) {
 	db, err := bunxtest.Memory()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	module := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{})
+	module := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{}, newTestIDGenerator())
 	require.NotNil(t, module.service)
 	// Start with no anchor config is a no-op.
 	require.NoError(t, module.Start(t.Context()))
 	declaration := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
 	assert.Nil(t, declaration.service)
-	assert.Panics(t, func() { NewModule(nil, nil, Config{}) })
-	assert.Panics(t, func() { NewModule(db, nil, Config{}) })
+	assert.Panics(t, func() { NewModule(nil, nil, Config{}, newTestIDGenerator()) })
+	assert.Panics(t, func() { NewModule(db, nil, Config{}, newTestIDGenerator()) })
 	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
 
 	// Invalid anchor config returns an error from Start, not a panic from NewModule.
-	badAnchor := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{Enabled: true}})
+	badAnchor := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{Enabled: true}}, newTestIDGenerator())
 	assert.Error(t, badAnchor.Start(t.Context()))
 
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	_, api := humatest.New(t)
 	module.RegisterREST(api)
-	assert.Equal(t, http.StatusOK, api.Get("/iam/audit-integrity", authz.TenantHeader+": tenant").Code)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/audit-integrity", authz.TenantHeader + ": " + wireID("tenant")).Code)
 	_, declarationAPI := humatest.New(t)
 	declaration.RegisterREST(declarationAPI)
 	require.NotNil(t, declarationAPI.OpenAPI().Paths["/iam/audit-events"].Get)
@@ -47,7 +47,7 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 	module := NewModule(db, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()), Config{Anchor: AnchorConfig{
 		Enabled: true, Endpoint: endpoint, Bucket: "audit-module-anchored",
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
-	}})
+	}}, newTestIDGenerator())
 	require.NotNil(t, module.service)
 	require.NoError(t, module.Start(t.Context()))
 	require.NotNil(t, module.service.anchor)
@@ -57,7 +57,7 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 		Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 		SigningKey: testSignerSeed(t),
-	}})
+	}}, newTestIDGenerator())
 	require.NoError(t, signed.Start(t.Context()))
 	require.NotNil(t, signed.service.anchor)
 	require.NotNil(t, signed.service.signer)
@@ -67,6 +67,6 @@ func TestAuditModuleWithAnchoredService(t *testing.T) {
 		Enabled: true, Endpoint: endpoint, Bucket: "audit-module-signed",
 		AccessKey: minioTestUser, SecretKey: minioTestPassword, RetentionDays: 30,
 		SigningKey: "not-a-seed",
-	}})
+	}}, newTestIDGenerator())
 	assert.Error(t, badSigner.Start(t.Context()))
 }

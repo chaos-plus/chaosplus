@@ -53,9 +53,9 @@ type loginInput struct {
 type registrationInput struct {
 	Origin string `header:"Origin" hidden:"true"`
 	Body   struct {
-		Email       string `json:"email" format:"email" maxLength:"320"`
-		Password    string `json:"password" minLength:"8" maxLength:"1024"`
-		DisplayName string `json:"display_name,omitempty" maxLength:"128"`
+		Email         string `json:"email" format:"email" maxLength:"320"`
+		Password      string `json:"password" minLength:"8" maxLength:"1024"`
+		DisplayName   string `json:"display_name,omitempty" maxLength:"128"`
 		CaptchaType   string `json:"captcha_type" minLength:"1"`
 		CaptchaID     string `json:"captcha_id" minLength:"1"`
 		CaptchaAnswer string `json:"captcha_answer" minLength:"1"`
@@ -283,7 +283,7 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-register", Method: http.MethodPost, Path: "/authn/register",
 		Summary: "Register a global principal pending email verification", Tags: []string{"authn"}, DefaultStatus: http.StatusAccepted,
-		Errors: []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusConflict, http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusInternalServerError},
+		Errors: []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusConflict, http.StatusServiceUnavailable, http.StatusInternalServerError},
 	}, func(ctx context.Context, in *registrationInput) (*respx.Body[map[string]bool], error) {
 		if err := web.ValidateLoginOrigin(in.Origin); err != nil {
 			return nil, huma.Error403Forbidden("registration_request_rejected")
@@ -299,8 +299,6 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 				return nil, huma.Error503ServiceUnavailable("registration_unavailable")
 			case errors.Is(err, authnext.ErrRegistrationConflict):
 				return nil, huma.Error409Conflict("registration_conflict")
-			case errors.Is(err, ErrVerificationCodeThrottled):
-				return nil, huma.Error429TooManyRequests("verification_code_throttled")
 			default:
 				return nil, huma.Error500InternalServerError("authentication_unavailable")
 			}

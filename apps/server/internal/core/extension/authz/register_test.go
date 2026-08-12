@@ -11,6 +11,7 @@ import (
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
@@ -22,6 +23,30 @@ import (
 )
 
 type routeOutput struct{ Body string }
+
+type adapterVerifier struct{}
+
+func (adapterVerifier) Authenticate(context.Context, string, string) (*authnext.Claims, error) {
+	return &authnext.Claims{Subject: "31", PrincipalID: 31}, nil
+}
+
+type adapterMembership struct{ active bool }
+
+func (m adapterMembership) IsMemberActive(context.Context, guid.ID, guid.ID) (bool, error) {
+	return m.active, nil
+}
+
+type adapterChecker struct{ allowed bool }
+
+func (c adapterChecker) Check(context.Context, guid.ID, string, guid.ID) (bool, error) {
+	return c.allowed, nil
+}
+func (c adapterChecker) CheckPlatform(context.Context, string, guid.ID) (bool, error) {
+	return c.allowed, nil
+}
+func (c adapterChecker) CheckEntity(context.Context, guid.ID, guid.ID, string, guid.ID) (bool, error) {
+	return c.allowed, nil
+}
 
 func TestRegisterDeclaresGuard(t *testing.T) {
 	_, api := humatest.New(t)
@@ -40,6 +65,34 @@ func TestRegisterDeclaresGuard(t *testing.T) {
 	assert.Contains(t, op.Errors, http.StatusForbidden)
 	assert.NoError(t, authz.ValidateOperations(api, registry))
 	assert.Equal(t, http.StatusOK, api.Post("/stores/query").Code)
+}
+
+func TestRegisterEntityAdapterExecutesEntityAuthorization(t *testing.T) {
+	registry := authz.MustRegistry(authz.Action{Resource: "workflow", Verb: "view", Scope: "entity"})
+	newAPI := func(allowed, active bool) humatest.TestAPI {
+		_, api := humatest.New(t)
+		registrar := authz.NewRegistrar(registry, adapterVerifier{}, adapterChecker{allowed: allowed}, adapterMembership{active: active})
+		authz.RegisterEntityAdapter(registrar, api, huma.Operation{OperationID: "workflow-events", Method: http.MethodGet, Path: "/runs/{id}/events"}, authz.Guard{Resource: "workflow", Verb: "view"}, func(ctx huma.Context) {
+			claims, ok := authnext.FromContext(ctx.Context())
+			if !ok || claims.TenantID != 11 || claims.EntityID != 21 || claims.PrincipalID != 31 {
+				ctx.SetStatus(http.StatusInternalServerError)
+				return
+			}
+			ctx.SetStatus(http.StatusNoContent)
+		})
+		return api
+	}
+
+	api := newAPI(true, true)
+	operation := api.OpenAPI().Paths["/runs/{id}/events"].Get
+	assert.Equal(t, "workflow_view", operation.Extensions[authz.GuardExtensionKey])
+	require.True(t, requiredParameter(operation, authz.TenantQuery, "query"))
+	require.True(t, requiredParameter(operation, authz.EntityQuery, "query"))
+	require.NoError(t, authz.ValidateOperations(api, registry))
+	assert.Equal(t, http.StatusForbidden, api.Get("/runs/41/events").Code)
+	assert.Equal(t, http.StatusNoContent, api.Get("/runs/41/events?tenant_id=11&entity_id=21").Code)
+	assert.Equal(t, http.StatusForbidden, newAPI(false, true).Get("/runs/41/events?tenant_id=11&entity_id=21").Code)
+	assert.Equal(t, http.StatusForbidden, newAPI(true, false).Get("/runs/41/events?tenant_id=11&entity_id=21").Code)
 }
 
 func TestRegisterTenantMemberDeclaresProtectedRoute(t *testing.T) {
@@ -93,8 +146,8 @@ func TestRegisterPlatformDeclaresAndEnforcesPlatformRoute(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, api.Get("/platform/tenants").Code)
 		assert.Equal(t, http.StatusForbidden, api.Get("/platform/tenants", "Cookie: "+environment.cookie).Code)
-		repo := iam.NewRepository(environment.db, func() (string, error) { return "", nil })
-		changed, err := repo.GrantPlatformAdministrator(t.Context(), environment.principalID)
+		repo := iam.NewRepository(environment.db, newTestIDGenerator())
+		changed, err := repo.GrantPlatformAdministrator(t.Context(), parseGUID(environment.principalID))
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, http.StatusOK, api.Get("/platform/tenants", "Cookie: "+environment.cookie).Code)
@@ -121,20 +174,20 @@ func TestRegisterEnforcesRealAuthenticationAndRBAC(t *testing.T) {
 		environment := newAuthorizationEnvironment(t)
 		_, api := humatest.New(t)
 		registerRoute(api, environment.registrar)
-		assert.Equal(t, http.StatusOK, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-a").Code)
-		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-b").Code)
-		_, err := environment.db.ExecContext(context.Background(), "UPDATE iam_tenant_members SET status = 'disabled' WHERE tenant_id = ? AND user_subject = ?", "tenant-a", environment.principalID)
+		assert.Equal(t, http.StatusOK, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-a")).Code)
+		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-b")).Code)
+		_, err := environment.db.ExecContext(context.Background(), "UPDATE iam_tenant_members SET status = 'disabled' WHERE tenant_id = ? AND principal_id = ?", testID("tenant-a"), parseGUID(environment.principalID))
 		require.NoError(t, err)
-		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-a").Code)
+		assert.Equal(t, http.StatusForbidden, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-a")).Code)
 	})
 
 	t.Run("csrf and unavailable database", func(t *testing.T) {
 		environment := newAuthorizationEnvironment(t)
 		_, api := humatest.New(t)
 		registerRoute(api, environment.registrar)
-		assert.Equal(t, http.StatusForbidden, api.Post("/guarded", "Cookie: "+environment.cookie, "Origin: https://evil.example", authz.TenantHeader+": tenant-a").Code)
+		assert.Equal(t, http.StatusForbidden, api.Post("/guarded", "Cookie: "+environment.cookie, "Origin: https://evil.example", authz.TenantHeader+": "+wireID("tenant-a")).Code)
 		require.NoError(t, environment.db.Close())
-		assert.Equal(t, http.StatusServiceUnavailable, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-a").Code)
+		assert.Equal(t, http.StatusServiceUnavailable, api.Get("/guarded", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-a")).Code)
 	})
 }
 
@@ -143,17 +196,17 @@ func TestRegisterTenantMemberEnforcesAuthenticationAndMembership(t *testing.T) {
 	_, api := humatest.New(t)
 	registerMemberRoutes(api, environment.registrar)
 
-	assert.Equal(t, http.StatusUnauthorized, api.Get("/member", authz.TenantHeader+": tenant-b").Code)
+	assert.Equal(t, http.StatusUnauthorized, api.Get("/member", authz.TenantHeader+": "+wireID("tenant-b")).Code)
 	assert.Equal(t, http.StatusForbidden, api.Get("/member", "Cookie: "+environment.cookie).Code)
-	assert.Equal(t, http.StatusOK, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-b").Code)
-	assert.Equal(t, http.StatusForbidden, api.Post("/member", "Cookie: "+environment.cookie, "Origin: https://evil.example", authz.TenantHeader+": tenant-b").Code)
+	assert.Equal(t, http.StatusOK, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-b")).Code)
+	assert.Equal(t, http.StatusForbidden, api.Post("/member", "Cookie: "+environment.cookie, "Origin: https://evil.example", authz.TenantHeader+": "+wireID("tenant-b")).Code)
 
-	_, err := environment.db.ExecContext(context.Background(), "UPDATE iam_tenant_members SET status = 'disabled' WHERE tenant_id = ? AND user_subject = ?", "tenant-b", environment.principalID)
+	_, err := environment.db.ExecContext(context.Background(), "UPDATE iam_tenant_members SET status = 'disabled' WHERE tenant_id = ? AND principal_id = ?", testID("tenant-b"), parseGUID(environment.principalID))
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusForbidden, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-b").Code)
+	assert.Equal(t, http.StatusForbidden, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-b")).Code)
 
 	require.NoError(t, environment.db.Close())
-	assert.Equal(t, http.StatusServiceUnavailable, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": tenant-a").Code)
+	assert.Equal(t, http.StatusServiceUnavailable, api.Get("/member", "Cookie: "+environment.cookie, authz.TenantHeader+": "+wireID("tenant-a")).Code)
 }
 
 func TestOperationGateAndRegistrarValidation(t *testing.T) {
@@ -215,29 +268,29 @@ func newAuthorizationEnvironment(t *testing.T) authorizationEnvironment {
 			Enabled: true, CookieName: "session", SessionTTL: time.Hour, IdleTTL: time.Minute,
 			PostLoginURL: "https://app.example/", AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"},
 		},
-	}, db)
+	}, db, authnmod.WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
-	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{LoginName: "alice", Password: "correct horse battery staple"})
+	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{LoginName: "alice", Password: "correct horse battery staple"}, newTestIDGenerator())
 	require.NoError(t, err)
 	now := time.Now().UTC().UnixMilli()
 	for _, tenant := range []string{"tenant-a", "tenant-b"} {
-		require.NoError(t, organization.EnsureTenant(context.Background(), db, tenant))
+		require.NoError(t, organization.EnsureTenant(context.Background(), db, testID(tenant)))
 		_, err = db.ExecContext(context.Background(), `INSERT INTO iam_tenant_members
- (tenant_id,user_subject,display_name,email,status,created_at,updated_at,disabled_at) VALUES (?,?,?,'','active',?,?,0)`, tenant, principalID, "Alice", now, now)
+ (tenant_id,principal_id,display_name,email,status,created_at,updated_at,disabled_at) VALUES (?,?,?,'','active',?,?,0)`, testID(tenant), principalID, "Alice", now, now)
 		require.NoError(t, err)
 	}
-	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", "tenant-a", "viewer", "Viewer", "", now, now)
+	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", testID("tenant-a"), testID("viewer"), "Viewer", "", now, now)
 	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_permissions (tenant_id,role_id,permission_code,created_at) VALUES (?,?,?,?)", "tenant-a", "viewer", "store_view", now)
+	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_permissions (tenant_id,role_id,permission_code,created_at) VALUES (?,?,?,?)", testID("tenant-a"), testID("viewer"), "store_view", now)
 	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_members (tenant_id,role_id,user_subject,created_at) VALUES (?,?,?,?)", "tenant-a", "viewer", principalID, now)
+	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_members (tenant_id,role_id,principal_id,created_at) VALUES (?,?,?,?)", testID("tenant-a"), testID("viewer"), principalID, now)
 	require.NoError(t, err)
 	session, _, err := web.Login(context.Background(), "alice", "correct horse battery staple", "")
 	require.NoError(t, err)
 	registry := authz.DefaultRegistry()
 	return authorizationEnvironment{
 		db: db, registrar: authz.NewRegistrar(registry, web, iam.NewAuthorizer(db), iam.NewMembershipChecker(db)),
-		principalID: principalID, cookie: web.SessionCookieName() + "=" + session,
+		principalID: guidString(principalID), cookie: web.SessionCookieName() + "=" + session,
 	}
 }
 
@@ -254,8 +307,12 @@ func registerMemberRoutes(api huma.API, registrar *authz.Registrar) {
 func okRoute(context.Context, *struct{}) (*routeOutput, error) { return &routeOutput{Body: "ok"}, nil }
 
 func requiredHeader(operation *huma.Operation, name string) bool {
+	return requiredParameter(operation, name, "header")
+}
+
+func requiredParameter(operation *huma.Operation, name, location string) bool {
 	for _, parameter := range operation.Parameters {
-		if parameter.In == "header" && parameter.Name == name {
+		if parameter.In == location && parameter.Name == name {
 			return parameter.Required
 		}
 	}

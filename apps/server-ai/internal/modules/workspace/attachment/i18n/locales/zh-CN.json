@@ -1,0 +1,6 @@
+{
+  "workspace.attachment.invalid": "附件数据无效。",
+  "workspace.attachment.not_found": "未找到该附件。",
+  "workspace.attachment.version_conflict": "附件已被其他请求修改，请刷新后重试。",
+  "workspace.attachment.unavailable": "附件服务暂不可用。"
+}

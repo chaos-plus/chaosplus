@@ -2,9 +2,7 @@ package iam
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
@@ -24,9 +23,9 @@ const (
 
 type entityRow struct {
 	bun.BaseModel `bun:"table:iam_entities"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
-	ParentID      *string
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
+	ParentID      *guid.ID
 	Type          string
 	Name          string
 	Status        iamdomain.EntityStatus
@@ -37,11 +36,11 @@ type entityRow struct {
 
 type entityRoleBindingRow struct {
 	bun.BaseModel `bun:"table:iam_role_bindings"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
-	PrincipalID   string `bun:"principal_id,pk"`
-	ScopeType     string `bun:"scope_type,pk"`
-	ScopeID       string `bun:"scope_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
+	ScopeType     string  `bun:"scope_type,pk"`
+	ScopeID       guid.ID `bun:"scope_id,pk"`
 	Effect        iamdomain.BindingEffect
 	ExpiresAt     int64
 	CreatedAt     int64
@@ -58,7 +57,7 @@ func (r *Repository) CreateEntity(ctx context.Context, entity iamdomain.Entity) 
 	}
 	now := r.now().UTC().UnixMilli()
 	row := entityRow{
-		TenantID: entity.TenantID, ID: id, ParentID: nullableString(entity.ParentID), Type: entity.Type,
+		TenantID: entity.TenantID, ID: id, ParentID: nullableID(entity.ParentID), Type: entity.Type,
 		Name: entity.Name, Status: entity.Status, Metadata: string(metadata), CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := r.executor.NewInsert().Model(&row).Exec(ctx); err != nil {
@@ -70,7 +69,7 @@ func (r *Repository) CreateEntity(ctx context.Context, entity iamdomain.Entity) 
 	return entityFromRow(row)
 }
 
-func (r *Repository) ListEntities(ctx context.Context, tenantID string) ([]iamdomain.Entity, error) {
+func (r *Repository) ListEntities(ctx context.Context, tenantID guid.ID) ([]iamdomain.Entity, error) {
 	var rows []entityRow
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).
 		Order("parent_id ASC", "type ASC", "name ASC", "id ASC").Scan(ctx); err != nil {
@@ -87,7 +86,7 @@ func (r *Repository) ListEntities(ctx context.Context, tenantID string) ([]iamdo
 	return entities, nil
 }
 
-func (r *Repository) GetEntity(ctx context.Context, tenantID, entityID string) (iamdomain.Entity, error) {
+func (r *Repository) GetEntity(ctx context.Context, tenantID, entityID guid.ID) (iamdomain.Entity, error) {
 	row, err := r.getEntityRow(ctx, tenantID, entityID)
 	if err != nil {
 		return iamdomain.Entity{}, err
@@ -102,7 +101,7 @@ func (r *Repository) UpdateEntity(ctx context.Context, entity iamdomain.Entity) 
 	}
 	now := r.now().UTC().UnixMilli()
 	result, err := r.executor.NewUpdate().Model((*entityRow)(nil)).
-		Set("parent_id = ?", nullableString(entity.ParentID)).Set("type = ?", entity.Type).
+		Set("parent_id = ?", nullableID(entity.ParentID)).Set("type = ?", entity.Type).
 		Set("name = ?", entity.Name).Set("status = ?", entity.Status).
 		Set("metadata = ?", string(metadata)).Set("updated_at = ?", now).
 		Where("tenant_id = ? AND id = ?", entity.TenantID, entity.ID).Exec(ctx)
@@ -118,7 +117,7 @@ func (r *Repository) UpdateEntity(ctx context.Context, entity iamdomain.Entity) 
 	return r.GetEntity(ctx, entity.TenantID, entity.ID)
 }
 
-func (r *Repository) DeleteEntity(ctx context.Context, tenantID, entityID string) error {
+func (r *Repository) DeleteEntity(ctx context.Context, tenantID, entityID guid.ID) error {
 	if _, err := r.getEntityRow(ctx, tenantID, entityID); err != nil {
 		return err
 	}
@@ -152,7 +151,7 @@ func (r *Repository) DeleteEntity(ctx context.Context, tenantID, entityID string
 	return nil
 }
 
-func (r *Repository) ListEntityRoleBindings(ctx context.Context, tenantID, entityID string) ([]iamdomain.EntityRoleBinding, error) {
+func (r *Repository) ListEntityRoleBindings(ctx context.Context, tenantID, entityID guid.ID) ([]iamdomain.EntityRoleBinding, error) {
 	if _, err := r.getEntityRow(ctx, tenantID, entityID); err != nil {
 		return nil, err
 	}
@@ -169,7 +168,7 @@ func (r *Repository) ListEntityRoleBindings(ctx context.Context, tenantID, entit
 	return bindings, nil
 }
 
-func (r *Repository) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID string, effect iamdomain.BindingEffect, expiresAt time.Time) (bool, iamdomain.EntityRoleBinding, error) {
+func (r *Repository) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID guid.ID, effect iamdomain.BindingEffect, expiresAt time.Time) (bool, iamdomain.EntityRoleBinding, error) {
 	key := "tenant_id = ? AND role_id = ? AND principal_id = ? AND scope_type = 'entity' AND scope_id = ?"
 	var current entityRoleBindingRow
 	err := r.executor.NewSelect().Model(&current).Where(key, tenantID, roleID, principalID, entityID).Scan(ctx)
@@ -199,7 +198,7 @@ func (r *Repository) PutEntityRoleBinding(ctx context.Context, tenantID, entityI
 	return true, bindingFromRow(row), nil
 }
 
-func (r *Repository) DeleteEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID string) (bool, error) {
+func (r *Repository) DeleteEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID guid.ID) (bool, error) {
 	result, err := r.executor.NewDelete().Model((*entityRoleBindingRow)(nil)).
 		Where("tenant_id = ? AND role_id = ? AND principal_id = ? AND scope_type = 'entity' AND scope_id = ?", tenantID, roleID, principalID, entityID).Exec(ctx)
 	if err != nil {
@@ -209,7 +208,7 @@ func (r *Repository) DeleteEntityRoleBinding(ctx context.Context, tenantID, enti
 	return affected > 0, nil
 }
 
-func (r *Repository) getEntityRow(ctx context.Context, tenantID, entityID string) (entityRow, error) {
+func (r *Repository) getEntityRow(ctx context.Context, tenantID, entityID guid.ID) (entityRow, error) {
 	var row entityRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, entityID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -220,17 +219,6 @@ func (r *Repository) getEntityRow(ctx context.Context, tenantID, entityID string
 	return row, nil
 }
 
-// inviteCodeKey 存在实体 metadata 里,用于邮箱邀请链接加入。
-const inviteCodeKey = "invite_code"
-
-func randomInviteCode() string {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		return "code" + fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return "inv-" + hex.EncodeToString(b)
-}
-
 func (s *Service) CreateEntity(ctx context.Context, entity iamdomain.Entity) (iamdomain.Entity, error) {
 	if err := normalizeEntity(&entity); err != nil {
 		return iamdomain.Entity{}, err
@@ -238,14 +226,11 @@ func (s *Service) CreateEntity(ctx context.Context, entity iamdomain.Entity) (ia
 	if entity.Metadata == nil {
 		entity.Metadata = map[string]any{}
 	}
-	if _, ok := entity.Metadata[inviteCodeKey]; !ok {
-		entity.Metadata[inviteCodeKey] = randomInviteCode()
-	}
-	record := newAuditRecord(ctx, entity.TenantID, "entity_created", "entity", "")
+	record := newAuditRecord(ctx, entity.TenantID, "entity_created", "entity", 0)
 	record.PolicyChanged = true
 	var created iamdomain.Entity
 	err := s.writes.Run(ctx, record, func(repo *Repository) error {
-		if err := validateEntityParent(ctx, repo, entity.TenantID, "", entity.ParentID); err != nil {
+		if err := validateEntityParent(ctx, repo, entity.TenantID, 0, entity.ParentID); err != nil {
 			return err
 		}
 		var err error
@@ -256,60 +241,21 @@ func (s *Service) CreateEntity(ctx context.Context, entity iamdomain.Entity) (ia
 	return created, err
 }
 
-// LookupEntityByInvite 按邀请码查实体(跨租户;邀请码全局唯一)。
-func (s *Service) LookupEntityByInvite(ctx context.Context, code string) (iamdomain.Entity, error) {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return iamdomain.Entity{}, errors.New("invite code is required")
-	}
-	var rows []entityRow
-	if err := s.repo.executor.NewSelect().Model(&rows).Where("metadata LIKE ?", "%"+code+"%").Limit(1).Scan(ctx); err != nil {
-		return iamdomain.Entity{}, fmt.Errorf("lookup entity invite: %w", err)
-	}
-	if len(rows) == 0 {
-		return iamdomain.Entity{}, errors.New("invite not found")
-	}
-	entity, err := entityFromRow(rows[0])
-	if err != nil {
-		return iamdomain.Entity{}, err
-	}
-	return entity, nil
-}
-
-// AcceptEntityInvite 校验邀请码并把当前用户加入该实体(实体 scope 绑角色)。
-func (s *Service) AcceptEntityInvite(ctx context.Context, code, principalID string) (iamdomain.Entity, error) {
-	entity, err := s.LookupEntityByInvite(ctx, code)
-	if err != nil {
-		return iamdomain.Entity{}, err
-	}
-	now := time.Now().UTC().UnixMilli()
-	// 实体级角色绑定:加入者获得该实体的访问授权。复用租户现有角色,失败不阻塞加入。
-	if _, err := s.repo.executor.NewInsert().
-		Model(&entityRoleBindingRow{
-			TenantID: entity.TenantID, RoleID: "owner", PrincipalID: principalID,
-			ScopeType: "entity", ScopeID: entity.ID, Effect: "allow",
-			CreatedAt: now, ExpiresAt: 0,
-		}).Ignore().Exec(ctx); err != nil {
-		// 角色可能不存在,仍返回实体让前端能进入。
-	}
-	return entity, nil
-}
-
-func (s *Service) ListEntities(ctx context.Context, tenantID string) ([]iamdomain.Entity, error) {
+func (s *Service) ListEntities(ctx context.Context, tenantID guid.ID) ([]iamdomain.Entity, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListEntities(ctx, tenantID)
 }
 
-func (s *Service) GetEntity(ctx context.Context, tenantID, entityID string) (iamdomain.Entity, error) {
+func (s *Service) GetEntity(ctx context.Context, tenantID, entityID guid.ID) (iamdomain.Entity, error) {
 	if err := validateEntityRef(tenantID, entityID); err != nil {
 		return iamdomain.Entity{}, err
 	}
 	return s.repo.GetEntity(ctx, tenantID, entityID)
 }
 
-func (s *Service) UpdateEntity(ctx context.Context, tenantID, entityID string, patch iamdomain.EntityPatch) (iamdomain.Entity, error) {
+func (s *Service) UpdateEntity(ctx context.Context, tenantID, entityID guid.ID, patch iamdomain.EntityPatch) (iamdomain.Entity, error) {
 	if err := validateEntityRef(tenantID, entityID); err != nil {
 		return iamdomain.Entity{}, err
 	}
@@ -346,7 +292,7 @@ func (s *Service) UpdateEntity(ctx context.Context, tenantID, entityID string, p
 	return updated, err
 }
 
-func (s *Service) DeleteEntity(ctx context.Context, tenantID, entityID string) error {
+func (s *Service) DeleteEntity(ctx context.Context, tenantID, entityID guid.ID) error {
 	if err := validateEntityRef(tenantID, entityID); err != nil {
 		return err
 	}
@@ -357,14 +303,14 @@ func (s *Service) DeleteEntity(ctx context.Context, tenantID, entityID string) e
 	})
 }
 
-func (s *Service) ListEntityRoleBindings(ctx context.Context, tenantID, entityID string) ([]iamdomain.EntityRoleBinding, error) {
+func (s *Service) ListEntityRoleBindings(ctx context.Context, tenantID, entityID guid.ID) ([]iamdomain.EntityRoleBinding, error) {
 	if err := validateEntityRef(tenantID, entityID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListEntityRoleBindings(ctx, tenantID, entityID)
 }
 
-func (s *Service) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID string, effect iamdomain.BindingEffect, expiresAt time.Time) (iamdomain.EntityRoleBinding, bool, error) {
+func (s *Service) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID guid.ID, effect iamdomain.BindingEffect, expiresAt time.Time) (iamdomain.EntityRoleBinding, bool, error) {
 	if err := validateEntityBinding(tenantID, entityID, roleID, principalID, effect, expiresAt); err != nil {
 		return iamdomain.EntityRoleBinding{}, false, err
 	}
@@ -399,7 +345,7 @@ func (s *Service) PutEntityRoleBinding(ctx context.Context, tenantID, entityID, 
 	return binding, changed, err
 }
 
-func (s *Service) DeleteEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID string) (bool, error) {
+func (s *Service) DeleteEntityRoleBinding(ctx context.Context, tenantID, entityID, roleID, principalID guid.ID) (bool, error) {
 	if err := validateEntityBinding(tenantID, entityID, roleID, principalID, iamdomain.BindingAllow, time.Time{}); err != nil {
 		return false, err
 	}
@@ -422,7 +368,6 @@ func normalizeEntity(entity *iamdomain.Entity) error {
 	if entity == nil || validateTenant(entity.TenantID) != nil {
 		return fmt.Errorf("%w: invalid entity tenant", iamdomain.ErrInvalidArgument)
 	}
-	entity.ParentID = strings.TrimSpace(entity.ParentID)
 	entity.Type = strings.TrimSpace(entity.Type)
 	entity.Name = strings.TrimSpace(entity.Name)
 	if !validEntityType(entity.Type) || entity.Name == "" || len(entity.Name) > 200 {
@@ -444,8 +389,8 @@ func normalizeEntity(entity *iamdomain.Entity) error {
 	return nil
 }
 
-func validateEntityParent(ctx context.Context, repo *Repository, tenantID, entityID, parentID string) error {
-	if parentID == "" {
+func validateEntityParent(ctx context.Context, repo *Repository, tenantID, entityID, parentID guid.ID) error {
+	if parentID.Zero() {
 		return nil
 	}
 	current := parentID
@@ -457,7 +402,7 @@ func validateEntityParent(ctx context.Context, repo *Repository, tenantID, entit
 		if err != nil {
 			return err
 		}
-		if parent.ParentID == "" {
+		if parent.ParentID.Zero() {
 			return nil
 		}
 		if ancestors >= maxEntityDepth-1 {
@@ -467,25 +412,24 @@ func validateEntityParent(ctx context.Context, repo *Repository, tenantID, entit
 	}
 }
 
-func validateEntityRef(tenantID, entityID string) error {
+func validateEntityRef(tenantID, entityID guid.ID) error {
 	if err := validateTenant(tenantID); err != nil {
 		return err
 	}
-	entityID = strings.TrimSpace(entityID)
-	if entityID == "" || len(entityID) > 64 {
+	if entityID.Zero() {
 		return fmt.Errorf("%w: invalid entity id", iamdomain.ErrInvalidArgument)
 	}
 	return nil
 }
 
-func validateEntityBinding(tenantID, entityID, roleID, principalID string, effect iamdomain.BindingEffect, expiresAt time.Time) error {
+func validateEntityBinding(tenantID, entityID, roleID, principalID guid.ID, effect iamdomain.BindingEffect, expiresAt time.Time) error {
 	if err := validateEntityRef(tenantID, entityID); err != nil {
 		return err
 	}
 	if err := validateRoleRef(tenantID, roleID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(principalID) == "" || len(principalID) > 64 {
+	if principalID.Zero() {
 		return fmt.Errorf("%w: invalid binding principal", iamdomain.ErrInvalidArgument)
 	}
 	if effect != iamdomain.BindingAllow && effect != iamdomain.BindingDeny {
@@ -532,7 +476,7 @@ func entityFromRow(row entityRow) (iamdomain.Entity, error) {
 	if err := json.Unmarshal([]byte(row.Metadata), &metadata); err != nil {
 		return iamdomain.Entity{}, fmt.Errorf("decode entity metadata: %w", err)
 	}
-	parentID := ""
+	var parentID guid.ID
 	if row.ParentID != nil {
 		parentID = *row.ParentID
 	}
@@ -553,8 +497,8 @@ func bindingFromRow(row entityRoleBindingRow) iamdomain.EntityRoleBinding {
 	return binding
 }
 
-func nullableString(value string) *string {
-	if value == "" {
+func nullableID(value guid.ID) *guid.ID {
+	if value.Zero() {
 		return nil
 	}
 	return &value

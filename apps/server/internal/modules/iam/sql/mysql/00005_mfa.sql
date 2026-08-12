@@ -2,7 +2,7 @@
 ALTER TABLE iam_credentials ADD COLUMN totp_last_used_step BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE iam_mfa_enrollments (
-    principal_id VARCHAR(64) PRIMARY KEY,
+    principal_id BIGINT PRIMARY KEY,
     secret_ciphertext TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE iam_mfa_enrollments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_recovery_codes (
-    principal_id VARCHAR(64) NOT NULL,
+    principal_id BIGINT NOT NULL,
     code_hash CHAR(64) NOT NULL,
     created_at BIGINT NOT NULL,
     used_at BIGINT NOT NULL DEFAULT 0,
@@ -21,7 +21,7 @@ CREATE TABLE iam_recovery_codes (
 
 CREATE TABLE iam_mfa_challenges (
     id_hash CHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL,
+    principal_id BIGINT NOT NULL,
     return_url TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,

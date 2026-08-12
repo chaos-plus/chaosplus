@@ -28,7 +28,7 @@ const EMPTY_FORM = {
 }
 
 /** 运行时即供应商(二选一):claude→anthropic, codex→openai, mock→空。 */
-const RUNTIME_PROVIDER: Record<string, string> = { claude: "anthropic", codex: "openai", mock: "" }
+const RUNTIME_PROVIDER: Record<string, string> = { claude: "anthropic", codex: "openai" }
 
 function fail(action: string, e: unknown) {
   toast.error(`${action}失败:${e instanceof Error ? e.message : String(e)}`)
@@ -57,7 +57,7 @@ export default function AgentsPage() {
   /** runtime 选项来自所选 machine 的检测结果(PRD D.4);离线时退回已知运行时。 */
   const runtimeOptions = (() => {
     const m = machines.find((x) => x.id === form.machineId)
-    return m?.runtimes?.length ? m.runtimes : ["claude", "codex", "mock"]
+    return m?.runtimes?.length ? m.runtimes : ["claude", "codex"]
   })()
 
   const openCreate = () => {

@@ -49,7 +49,10 @@ type App struct {
 	authnRequest    authz.TokenVerifier
 	authnWeb        *authnmod.WebService
 	authzRegistrar  *authz.Registrar
+	authzRegistry   *authz.Registry
 	claimPlugins    *plugin.Claims
+	extensions      []Extension
+	resourceProfile bool
 	federationKey   []byte
 	provisioningKey []byte
 	rest            *http.Server
@@ -67,15 +70,28 @@ type App struct {
 	serveErr chan error
 }
 
-func NewApp(cfg Config) *App {
+func NewApp(cfg Config, extensions ...Extension) *App {
+	return newApp(cfg, false, extensions...)
+}
+
+// NewResourceApp creates a business-resource host backed by the same runtime,
+// transport, IAM, and lifecycle owners as NewApp, without mounting IAM and
+// identity management modules into the business process.
+func NewResourceApp(cfg Config, extensions ...Extension) *App {
+	return newApp(cfg, true, extensions...)
+}
+
+func newApp(cfg Config, resourceProfile bool, extensions ...Extension) *App {
 	if cfg.Name == "" {
 		cfg.Name = utils.GetExecutableName()
 	}
 	cfg.Name = strings.ToUpper(cfg.Name)
 	return &App{
-		name:     cfg.Name,
-		cfg:      cfg,
-		serveErr: make(chan error, 3),
+		name:            cfg.Name,
+		cfg:             cfg,
+		extensions:      append([]Extension(nil), extensions...),
+		resourceProfile: resourceProfile,
+		serveErr:        make(chan error, 3),
 	}
 }
 

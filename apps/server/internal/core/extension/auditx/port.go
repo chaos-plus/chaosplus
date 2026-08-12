@@ -3,45 +3,30 @@ package auditx
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
-const SystemActor = "_system"
-
 type Event struct {
-	TenantID    string
-	PrincipalID string
+	TenantID    guid.ID
+	PrincipalID guid.ID
 	EventType   string
 	TargetType  string
-	TargetID    string
+	TargetID    guid.ID
 	Detail      map[string]any
 }
 
 type Appender func(context.Context, bun.IDB, Event) error
 
-func NewEvent(ctx context.Context, tenantID, eventType, targetType, targetID string) Event {
-	principalID := SystemActor
-	if claims, ok := authnext.FromContext(ctx); ok && claims.Subject != "" {
-		principalID = BoundedID(claims.Subject, 64)
+func NewEvent(ctx context.Context, tenantID guid.ID, eventType, targetType string, targetID guid.ID) Event {
+	var principalID guid.ID
+	if claims, ok := authnext.FromContext(ctx); ok {
+		principalID = claims.PrincipalID
 	}
 	return Event{
 		TenantID: tenantID, PrincipalID: principalID, EventType: eventType,
-		TargetType: targetType, TargetID: BoundedID(targetID, 128), Detail: map[string]any{},
+		TargetType: targetType, TargetID: targetID, Detail: map[string]any{},
 	}
-}
-
-func BoundedID(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-	sum := sha256.Sum256([]byte(value))
-	encoded := hex.EncodeToString(sum[:])
-	if limit < len(encoded) {
-		return encoded[:limit]
-	}
-	return encoded
 }

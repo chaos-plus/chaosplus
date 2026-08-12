@@ -10,13 +10,14 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type directoryRow struct {
 	bun.BaseModel `bun:"table:iam_scim_directories,alias:directory"`
-	ID            string `bun:"id,pk"`
-	TenantID      string
+	ID            guid.ID `bun:"id,pk"`
+	TenantID      guid.ID
 	Name          string
 	NameKey       string
 	Status        string
@@ -27,8 +28,8 @@ type directoryRow struct {
 
 type credentialRow struct {
 	bun.BaseModel `bun:"table:iam_scim_credentials,alias:credential"`
-	ID            string `bun:"id,pk"`
-	DirectoryID   string
+	ID            guid.ID `bun:"id,pk"`
+	DirectoryID   guid.ID
 	Name          string
 	TokenHash     string
 	ExpiresAt     int64
@@ -39,15 +40,15 @@ type credentialRow struct {
 
 type credentialAuthRow struct {
 	credentialRow   `bun:",embed"`
-	TenantID        string `bun:"tenant_id"`
-	DirectoryStatus string `bun:"directory_status"`
+	TenantID        guid.ID `bun:"tenant_id"`
+	DirectoryStatus string  `bun:"directory_status"`
 }
 
 type resourceRow struct {
 	bun.BaseModel `bun:"table:iam_scim_resources,alias:resource"`
-	DirectoryID   string `bun:"directory_id,pk"`
-	ResourceType  string `bun:"resource_type,pk"`
-	ResourceID    string `bun:"resource_id,pk"`
+	DirectoryID   guid.ID `bun:"directory_id,pk"`
+	ResourceType  string  `bun:"resource_type,pk"`
+	ResourceID    guid.ID `bun:"resource_id,pk"`
 	ExternalID    string
 	ExternalKey   string
 	Version       int64
@@ -58,8 +59,8 @@ type resourceRow struct {
 
 type targetRow struct {
 	bun.BaseModel         `bun:"table:iam_scim_targets,alias:target"`
-	ID                    string `bun:"id,pk"`
-	TenantID              string
+	ID                    guid.ID `bun:"id,pk"`
+	TenantID              guid.ID
 	Name                  string
 	NameKey               string
 	BaseURL               string
@@ -72,9 +73,9 @@ type targetRow struct {
 
 type targetResourceRow struct {
 	bun.BaseModel `bun:"table:iam_scim_target_resources,alias:target_resource"`
-	TargetID      string `bun:"target_id,pk"`
-	ResourceType  string `bun:"resource_type,pk"`
-	ResourceID    string `bun:"resource_id,pk"`
+	TargetID      guid.ID `bun:"target_id,pk"`
+	ResourceType  string  `bun:"resource_type,pk"`
+	ResourceID    guid.ID `bun:"resource_id,pk"`
 	ExternalID    string
 	Version       int64
 	CreatedAt     int64
@@ -111,7 +112,7 @@ func NewRepository(db *bun.DB) *Repository {
 
 func (r *Repository) withExecutor(db bun.IDB) *Repository { return &Repository{db: r.db, executor: db} }
 
-func (r *Repository) listTargets(ctx context.Context, tenantID string) ([]targetRow, error) {
+func (r *Repository) listTargets(ctx context.Context, tenantID guid.ID) ([]targetRow, error) {
 	rows := make([]targetRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name_key ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list SCIM targets: %w", err)
@@ -119,7 +120,7 @@ func (r *Repository) listTargets(ctx context.Context, tenantID string) ([]target
 	return rows, nil
 }
 
-func (r *Repository) getTarget(ctx context.Context, tenantID, id string) (targetRow, error) {
+func (r *Repository) getTarget(ctx context.Context, tenantID, id guid.ID) (targetRow, error) {
 	var row targetRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -158,7 +159,7 @@ func (r *Repository) replaceTarget(ctx context.Context, row *targetRow, expected
 	return nil
 }
 
-func (r *Repository) deleteTarget(ctx context.Context, id string) error {
+func (r *Repository) deleteTarget(ctx context.Context, id guid.ID) error {
 	if _, err := r.executor.NewDelete().Table("iam_scim_targets").Where("id = ?", id).Exec(ctx); err != nil {
 		return fmt.Errorf("delete SCIM target: %w", err)
 	}
@@ -167,7 +168,7 @@ func (r *Repository) deleteTarget(ctx context.Context, id string) error {
 
 // getTargetResource returns sql.ErrNoRows when no mapping exists yet; a
 // missing mapping is the normal first-push condition, not an error.
-func (r *Repository) listTargetResources(ctx context.Context, targetID string) ([]targetResourceRow, error) {
+func (r *Repository) listTargetResources(ctx context.Context, targetID guid.ID) ([]targetResourceRow, error) {
 	var rows []targetResourceRow
 	if err := r.executor.NewSelect().Model(&rows).Where("target_id = ?", targetID).Order("resource_type ASC", "resource_id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list SCIM target resources: %w", err)
@@ -175,7 +176,7 @@ func (r *Repository) listTargetResources(ctx context.Context, targetID string) (
 	return rows, nil
 }
 
-func (r *Repository) getTargetResource(ctx context.Context, targetID, resourceType, resourceID string) (targetResourceRow, error) {
+func (r *Repository) getTargetResource(ctx context.Context, targetID guid.ID, resourceType string, resourceID guid.ID) (targetResourceRow, error) {
 	var row targetResourceRow
 	if err := r.executor.NewSelect().Model(&row).Where("target_id = ? AND resource_type = ? AND resource_id = ?", targetID, resourceType, resourceID).Scan(ctx); err != nil {
 		return row, err
@@ -205,14 +206,14 @@ func (r *Repository) upsertTargetResource(ctx context.Context, row *targetResour
 	return nil
 }
 
-func (r *Repository) markTargetResourceDeleted(ctx context.Context, targetID, resourceType, resourceID string, at int64) error {
+func (r *Repository) markTargetResourceDeleted(ctx context.Context, targetID guid.ID, resourceType string, resourceID guid.ID, at int64) error {
 	if _, err := r.executor.NewUpdate().Table("iam_scim_target_resources").Set("deleted_at = ?", at).Set("updated_at = ?", at).Where("target_id = ? AND resource_type = ? AND resource_id = ?", targetID, resourceType, resourceID).Exec(ctx); err != nil {
 		return fmt.Errorf("mark SCIM target resource deleted: %w", err)
 	}
 	return nil
 }
 
-func (r *Repository) listDirectories(ctx context.Context, tenantID string) ([]directoryRow, error) {
+func (r *Repository) listDirectories(ctx context.Context, tenantID guid.ID) ([]directoryRow, error) {
 	rows := make([]directoryRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name_key ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list SCIM directories: %w", err)
@@ -220,7 +221,7 @@ func (r *Repository) listDirectories(ctx context.Context, tenantID string) ([]di
 	return rows, nil
 }
 
-func (r *Repository) getDirectory(ctx context.Context, tenantID, id string) (directoryRow, error) {
+func (r *Repository) getDirectory(ctx context.Context, tenantID, id guid.ID) (directoryRow, error) {
 	var row directoryRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -256,7 +257,7 @@ func (r *Repository) updateDirectory(ctx context.Context, row *directoryRow, ver
 	return nil
 }
 
-func (r *Repository) listCredentials(ctx context.Context, directoryID string) ([]credentialRow, error) {
+func (r *Repository) listCredentials(ctx context.Context, directoryID guid.ID) ([]credentialRow, error) {
 	rows := make([]credentialRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("directory_id = ?", directoryID).Order("created_at DESC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list SCIM credentials: %w", err)
@@ -264,7 +265,7 @@ func (r *Repository) listCredentials(ctx context.Context, directoryID string) ([
 	return rows, nil
 }
 
-func (r *Repository) activeCredentialCount(ctx context.Context, directoryID string, now int64) (int, error) {
+func (r *Repository) activeCredentialCount(ctx context.Context, directoryID guid.ID, now int64) (int, error) {
 	return r.executor.NewSelect().Model((*credentialRow)(nil)).Where("directory_id = ? AND revoked_at = 0 AND (expires_at = 0 OR expires_at > ?)", directoryID, now).Count(ctx)
 }
 
@@ -275,7 +276,7 @@ func (r *Repository) insertCredential(ctx context.Context, row *credentialRow) e
 	return nil
 }
 
-func (r *Repository) revokeCredential(ctx context.Context, directoryID, id string, now int64) (bool, error) {
+func (r *Repository) revokeCredential(ctx context.Context, directoryID, id guid.ID, now int64) (bool, error) {
 	result, err := r.executor.NewUpdate().Model((*credentialRow)(nil)).Set("revoked_at = ?", now).
 		Where("directory_id = ? AND id = ? AND revoked_at = 0", directoryID, id).Exec(ctx)
 	if err != nil {
@@ -295,7 +296,7 @@ func (r *Repository) revokeCredential(ctx context.Context, directoryID, id strin
 	return false, nil
 }
 
-func (r *Repository) credentialForAuth(ctx context.Context, id string) (credentialAuthRow, error) {
+func (r *Repository) credentialForAuth(ctx context.Context, id guid.ID) (credentialAuthRow, error) {
 	var row credentialAuthRow
 	err := r.executor.NewSelect().TableExpr("iam_scim_credentials AS credential").
 		ColumnExpr("credential.*").ColumnExpr("directory.tenant_id AS tenant_id, directory.status AS directory_status").
@@ -309,13 +310,13 @@ func (r *Repository) credentialForAuth(ctx context.Context, id string) (credenti
 	return row, nil
 }
 
-func (r *Repository) touchCredential(ctx context.Context, id string, now int64) error {
+func (r *Repository) touchCredential(ctx context.Context, id guid.ID, now int64) error {
 	_, err := r.executor.NewUpdate().Model((*credentialRow)(nil)).Set("last_used_at = ?", now).
 		Where("id = ? AND revoked_at = 0 AND last_used_at < ?", id, now-300000).Exec(ctx)
 	return err
 }
 
-func (r *Repository) getResource(ctx context.Context, directoryID, resourceType, resourceID string, includeDeleted bool) (resourceRow, error) {
+func (r *Repository) getResource(ctx context.Context, directoryID guid.ID, resourceType string, resourceID guid.ID, includeDeleted bool) (resourceRow, error) {
 	var row resourceRow
 	query := r.executor.NewSelect().Model(&row).Where("directory_id = ? AND resource_type = ? AND resource_id = ?", directoryID, resourceType, resourceID)
 	if !includeDeleted {
@@ -330,7 +331,7 @@ func (r *Repository) getResource(ctx context.Context, directoryID, resourceType,
 	return row, nil
 }
 
-func (r *Repository) getResourceByExternalKey(ctx context.Context, directoryID, resourceType, key string) (resourceRow, error) {
+func (r *Repository) getResourceByExternalKey(ctx context.Context, directoryID guid.ID, resourceType, key string) (resourceRow, error) {
 	var row resourceRow
 	if err := r.executor.NewSelect().Model(&row).Where("directory_id = ? AND resource_type = ? AND external_key = ?", directoryID, resourceType, key).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -366,7 +367,7 @@ func (r *Repository) updateResource(ctx context.Context, row *resourceRow, expec
 	return nil
 }
 
-func (r *Repository) user(ctx context.Context, directoryID, resourceID string) (userRecord, error) {
+func (r *Repository) user(ctx context.Context, directoryID, resourceID guid.ID) (userRecord, error) {
 	var row userRecord
 	err := r.userQuery(directoryID, false).Where("resource.resource_id = ?", resourceID).Scan(ctx, &row)
 	if err != nil {
@@ -378,7 +379,7 @@ func (r *Repository) user(ctx context.Context, directoryID, resourceID string) (
 	return row, nil
 }
 
-func (r *Repository) userPage(ctx context.Context, directoryID string, request ListRequest, dialect string) ([]userRecord, int, error) {
+func (r *Repository) userPage(ctx context.Context, directoryID guid.ID, request ListRequest, dialect string) ([]userRecord, int, error) {
 	query := r.userQuery(directoryID, false)
 	if err := applySCIMFilter(query, request.Filter, ResourceUser, dialect); err != nil {
 		return nil, 0, err
@@ -401,13 +402,13 @@ func (r *Repository) userPage(ctx context.Context, directoryID string, request L
 	return rows, total, nil
 }
 
-func (r *Repository) userQuery(directoryID string, includeDeleted bool) *bun.SelectQuery {
+func (r *Repository) userQuery(directoryID guid.ID, includeDeleted bool) *bun.SelectQuery {
 	query := r.executor.NewSelect().TableExpr("iam_scim_resources AS resource").ColumnExpr("resource.*").
 		ColumnExpr("principal.login_name, principal.email, principal.display_name, principal.status AS principal_status").
 		ColumnExpr("member.status AS membership_status").
 		Join("JOIN iam_scim_directories AS directory ON directory.id = resource.directory_id").
 		Join("JOIN iam_principals AS principal ON principal.id = resource.resource_id").
-		Join("JOIN iam_tenant_members AS member ON member.tenant_id = directory.tenant_id AND member.user_subject = resource.resource_id").
+		Join("JOIN iam_tenant_members AS member ON member.tenant_id = directory.tenant_id AND member.principal_id = resource.resource_id").
 		Where("resource.directory_id = ? AND resource.resource_type = ?", directoryID, ResourceUser)
 	if !includeDeleted {
 		query = query.Where("resource.deleted_at = 0")
@@ -415,7 +416,7 @@ func (r *Repository) userQuery(directoryID string, includeDeleted bool) *bun.Sel
 	return query
 }
 
-func (r *Repository) group(ctx context.Context, directoryID, resourceID string) (groupRecord, error) {
+func (r *Repository) group(ctx context.Context, directoryID, resourceID guid.ID) (groupRecord, error) {
 	var row groupRecord
 	err := r.groupQuery(directoryID, false).Where("resource.resource_id = ?", resourceID).Scan(ctx, &row)
 	if err != nil {
@@ -427,7 +428,7 @@ func (r *Repository) group(ctx context.Context, directoryID, resourceID string) 
 	return row, nil
 }
 
-func (r *Repository) groupPage(ctx context.Context, directoryID string, request ListRequest, dialect string) ([]groupRecord, int, error) {
+func (r *Repository) groupPage(ctx context.Context, directoryID guid.ID, request ListRequest, dialect string) ([]groupRecord, int, error) {
 	query := r.groupQuery(directoryID, false)
 	if err := applySCIMFilter(query, request.Filter, ResourceGroup, dialect); err != nil {
 		return nil, 0, err
@@ -450,7 +451,7 @@ func (r *Repository) groupPage(ctx context.Context, directoryID string, request 
 	return rows, total, nil
 }
 
-func (r *Repository) groupQuery(directoryID string, includeDeleted bool) *bun.SelectQuery {
+func (r *Repository) groupQuery(directoryID guid.ID, includeDeleted bool) *bun.SelectQuery {
 	query := r.executor.NewSelect().TableExpr("iam_scim_resources AS resource").ColumnExpr("resource.*").
 		ColumnExpr("scim_group.name, scim_group.status").
 		Join("JOIN iam_scim_directories AS directory ON directory.id = resource.directory_id").
@@ -462,8 +463,8 @@ func (r *Repository) groupQuery(directoryID string, includeDeleted bool) *bun.Se
 	return query
 }
 
-func (r *Repository) groupMembers(ctx context.Context, directoryID, groupID string) ([]string, error) {
-	ids := make([]string, 0)
+func (r *Repository) groupMembers(ctx context.Context, directoryID, groupID guid.ID) ([]guid.ID, error) {
+	ids := make([]guid.ID, 0)
 	err := r.executor.NewSelect().TableExpr("iam_group_members AS member").ColumnExpr("member.principal_id").
 		Join("JOIN iam_scim_directories AS directory ON directory.tenant_id = member.tenant_id").
 		Join("JOIN iam_scim_resources AS resource ON resource.directory_id = directory.id AND resource.resource_type = ? AND resource.resource_id = member.principal_id AND resource.deleted_at = 0", ResourceUser).
@@ -474,9 +475,9 @@ func (r *Repository) groupMembers(ctx context.Context, directoryID, groupID stri
 	return ids, nil
 }
 
-func externalKey(externalID, resourceID string) string {
+func externalKey(externalID string, resourceID guid.ID) string {
 	if externalID == "" {
-		return "id:" + resourceID
+		return "id:" + resourceID.String()
 	}
 	digest := sha256.Sum256([]byte(externalID))
 	return "ext:" + hex.EncodeToString(digest[:])

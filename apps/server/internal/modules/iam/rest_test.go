@@ -1,14 +1,16 @@
 package iam_test
 
 import (
+	"hash/fnv"
+	"strconv"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ import (
 
 func TestIAMManagementHTTPFlow(t *testing.T) {
 	db, api, authorization := newIAMAPI(t)
-	header := []string{authorization.header, authz.TenantHeader + ": tenant"}
+	header := []string{authorization.header, authz.TenantHeader + ": " + wireID("tenant")}
 
 	for _, path := range []string{"/iam/permission-catalog", "/iam/scope-model", "/iam/menu-catalog", "/iam/entities", "/iam/roles", "/iam/members?limit=50", "/iam/menus"} {
 		response := api.Get(path, header[0], header[1])
@@ -58,17 +60,17 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	now := time.Now().UTC().UnixMilli()
 	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_departments
 		(tenant_id,id,parent_id,name,name_key,status,sort_order,version,created_at,updated_at)
-		VALUES ('tenant','department','','Operations','operations','active',0,1,?,?)`, now, now)
+		VALUES (?,?,?,'Operations','operations','active',0,1,?,?)`, wireGUID("tenant"), wireGUID("department"), guid.ID(0), now, now)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_department_closure
-		(tenant_id,ancestor_id,descendant_id,depth) VALUES ('tenant','department','department',0)`)
+		(tenant_id,ancestor_id,descendant_id,depth) VALUES (?,?,?,0)`, wireGUID("tenant"), wireGUID("department"), wireGUID("department"))
 	require.NoError(t, err)
 	setDataScope := api.Put("/iam/roles/"+roleID+"/data-scope", header[0], header[1], map[string]any{
-		"scope": "selected_departments", "department_ids": []string{"department"},
+		"scope": "selected_departments", "department_ids": []string{wireID("department")},
 	})
 	require.Equal(t, http.StatusOK, setDataScope.Code, setDataScope.Body.String())
 	assert.Contains(t, setDataScope.Body.String(), `"scope":"selected_departments"`)
-	assert.Contains(t, setDataScope.Body.String(), `"department_ids":["department"]`)
+	assert.Contains(t, setDataScope.Body.String(), `"department_ids":["`+wireID("department")+`"]`)
 	assert.Equal(t, http.StatusOK, api.Get("/iam/roles/"+roleID+"/data-scope", header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Patch("/iam/roles/"+roleID, header[0], header[1], map[string]any{"name": "Operators"}).Code)
 	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/permissions/user_view", header[0], header[1]).Code)
@@ -84,29 +86,29 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	assert.Contains(t, permissionGrants.Body.String(), `"condition":{"gte":`)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_groups
 		(tenant_id,id,name,name_key,group_type,description,status,sort_order,version,created_at,updated_at)
-		VALUES ('tenant','group','Operators','operators','static','','active',0,1,?,?)`, now, now)
+		VALUES (?,?,?,'operators','static','','active',0,1,?,?)`, wireGUID("tenant"), wireGUID("group"), "Operators", now, now)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_positions
 		(tenant_id,id,code,name,status,sort_order,version,created_at,updated_at)
-		VALUES ('tenant','position','operator','Operator','active',0,1,?,?)`, now, now)
+		VALUES (?,?,?,'Operator','active',0,1,?,?)`, wireGUID("tenant"), wireGUID("position"), "operator", now, now)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/directory-bindings/group/group", header[0], header[1]).Code)
-	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/directory-bindings/position/position", header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/directory-bindings/group/"+wireID("group"), header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/directory-bindings/position/"+wireID("position"), header[0], header[1]).Code)
 	directoryBindings := api.Get("/iam/roles/"+roleID+"/directory-bindings", header[0], header[1])
 	require.Equal(t, http.StatusOK, directoryBindings.Code, directoryBindings.Body.String())
 	assert.Contains(t, directoryBindings.Body.String(), `"assignee_type":"group"`)
 	assert.Contains(t, directoryBindings.Body.String(), `"assignee_type":"position"`)
 
 	member := api.Post("/iam/members", header[0], header[1], map[string]any{
-		"subject": "external-subject", "display_name": "External User", "email": "external@example.com", "department_id": "department", "status": "active",
+		"subject": wireID("external-subject"), "display_name": "External User", "email": "external@example.com", "department_id": wireID("department"), "status": "active",
 	})
 	require.Equal(t, http.StatusCreated, member.Code, member.Body.String())
-	assert.Contains(t, member.Body.String(), `"department_id":"department"`)
-	assert.Equal(t, http.StatusOK, api.Get("/iam/members/external-subject", header[0], header[1]).Code)
-	assert.Equal(t, http.StatusOK, api.Patch("/iam/members/external-subject", header[0], header[1], map[string]any{"status": "disabled"}).Code)
-	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/members/"+authorization.principalID, header[0], header[1]).Code)
+	assert.Contains(t, member.Body.String(), `"department_id":"`+wireID("department")+`"`)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/members/"+wireID("external-subject"), header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Patch("/iam/members/"+wireID("external-subject"), header[0], header[1], map[string]any{"status": "disabled"}).Code)
+	assert.Equal(t, http.StatusOK, api.Put("/iam/roles/"+roleID+"/members/"+authorization.principalID.String(), header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Get("/iam/roles/"+roleID+"/members", header[0], header[1]).Code)
-	assert.Equal(t, http.StatusOK, api.Get("/iam/members/"+authorization.principalID+"/roles", header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/members/"+authorization.principalID.String()+"/roles", header[0], header[1]).Code)
 
 	rootEntity := api.Post("/iam/entities", header[0], header[1], map[string]any{
 		"type": "company", "name": "Acme", "metadata": map[string]any{"region": "west"},
@@ -120,11 +122,11 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	childEntityID := responseID(t, childEntity.Body.Bytes())
 	assert.Equal(t, http.StatusOK, api.Get("/iam/entities/"+childEntityID, header[0], header[1]).Code)
 	relationshipMember := api.Post("/iam/members", header[0], header[1], map[string]any{
-		"subject": "relationship-user", "display_name": "Relationship User", "status": "active",
+		"subject": wireID("relationship-user"), "display_name": "Relationship User", "status": "active",
 	})
 	require.Equal(t, http.StatusCreated, relationshipMember.Code, relationshipMember.Body.String())
 	directRelationship := map[string]any{
-		"subject_type": "principal", "subject_id": "relationship-user", "relation": "owner",
+		"subject_type": "principal", "subject_id": wireID("relationship-user"), "relation": "owner",
 		"resource_type": "company", "resource_id": rootEntityID,
 		"starts_at": time.Now().UTC().Add(-time.Minute), "ends_at": time.Now().UTC().Add(time.Hour),
 		"condition": map[string]any{"version": 1, "gte": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}}},
@@ -135,7 +137,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	assert.Contains(t, directRelationshipResponse.Body.String(), `"ends_at":`)
 	assert.Contains(t, directRelationshipResponse.Body.String(), `"condition":{"gte":`)
 	invalidRelationshipWindow := map[string]any{
-		"subject_type": "principal", "subject_id": "relationship-user", "relation": "viewer",
+		"subject_type": "principal", "subject_id": wireID("relationship-user"), "relation": "viewer",
 		"resource_type": "store", "resource_id": childEntityID, "ends_at": time.Now().UTC().Add(-time.Minute),
 	}
 	invalidWindowResponse := api.Post("/iam/relationships", header[0], header[1], invalidRelationshipWindow)
@@ -151,60 +153,61 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, listedRelationships.Code, listedRelationships.Body.String())
 	assert.Contains(t, listedRelationships.Body.String(), `"subject_relation":"owner"`)
 	checkRelationship := api.Post("/iam/authorization/check", header[0], header[1], map[string]any{
-		"entity_id": childEntityID, "permission_code": "store_view", "subject": "relationship-user",
+		"entity_id": childEntityID, "permission_code": "store_view", "subject": wireID("relationship-user"),
 	})
 	require.Equal(t, http.StatusOK, checkRelationship.Code, checkRelationship.Body.String())
 	assert.Contains(t, checkRelationship.Body.String(), `"allowed":true`)
 	assert.Contains(t, checkRelationship.Body.String(), `"reason":"relationship_grant"`)
 	resourceRelationship := map[string]any{
 		"entity_id": childEntityID, "subject_type": "entity", "subject_id": rootEntityID, "subject_relation": "owner",
-		"relation": "viewer", "resource_type": "store", "resource_id": "business-store-1",
+		"relation": "viewer", "resource_type": "store", "resource_id": wireID("business-store-1"),
 	}
 	require.Equal(t, http.StatusOK, api.Post("/iam/relationships", header[0], header[1], resourceRelationship).Code)
 	listedResourceRelationships := api.Get("/iam/relationships?entity_id="+childEntityID+"&resource_type=store", header[0], header[1])
 	require.Equal(t, http.StatusOK, listedResourceRelationships.Code, listedResourceRelationships.Body.String())
-	assert.Contains(t, listedResourceRelationships.Body.String(), `"resource_id":"business-store-1"`)
+	assert.Contains(t, listedResourceRelationships.Body.String(), `"resource_id":"`+wireID("business-store-1")+`"`)
 	checkResource := api.Post("/iam/authorization/check", header[0], header[1], map[string]any{
-		"entity_id": childEntityID, "resource_type": "store", "resource_id": "business-store-1",
-		"permission_code": "store_view", "subject": "relationship-user",
+		"entity_id": childEntityID, "resource_type": "store", "resource_id": wireID("business-store-1"),
+		"permission_code": "store_view", "subject": wireID("relationship-user"),
 	})
 	require.Equal(t, http.StatusOK, checkResource.Code, checkResource.Body.String())
 	assert.Contains(t, checkResource.Body.String(), `"allowed":true`)
 	resourceExplanation := api.Post("/iam/authorization/explain", header[0], header[1], map[string]any{
-		"entity_id": childEntityID, "resource_type": "store", "resource_id": "business-store-1",
-		"permission_code": "store_view", "subject": "relationship-user",
+		"entity_id": childEntityID, "resource_type": "store", "resource_id": wireID("business-store-1"),
+		"permission_code": "store_view", "subject": wireID("relationship-user"),
 	})
 	require.Equal(t, http.StatusOK, resourceExplanation.Code, resourceExplanation.Body.String())
 	assert.Contains(t, resourceExplanation.Body.String(), `"entity_id":"`+childEntityID+`"`)
-	for _, invalidResourceAuthorization := range []map[string]any{
-		{"entity_id": childEntityID, "resource_type": "store", "permission_code": "store_view", "subject": "relationship-user"},
-		{"entity_id": childEntityID, "resource_id": "business-store-1", "permission_code": "store_view", "subject": "relationship-user"},
-		{"entity_id": childEntityID, "resource_type": "store", "resource_id": "business-store-1", "permission_code": "merchant_view", "subject": "relationship-user"},
+	for index, invalidResourceAuthorization := range []map[string]any{
+		{"entity_id": childEntityID, "resource_type": "store", "permission_code": "store_view", "subject": wireID("relationship-user")},
+		{"entity_id": childEntityID, "resource_id": wireID("business-store-1"), "permission_code": "store_view", "subject": wireID("relationship-user")},
+		{"entity_id": childEntityID, "resource_type": "store", "resource_id": wireID("business-store-1"), "permission_code": "merchant_view", "subject": wireID("relationship-user")},
 	} {
 		response := api.Post("/iam/authorization/check", header[0], header[1], invalidResourceAuthorization)
+		t.Logf("DEBUG invalid case %d -> %d body=%s", index, response.Code, response.Body.String())
 		require.Equal(t, http.StatusUnprocessableEntity, response.Code, response.Body.String())
 		assert.Contains(t, response.Body.String(), i18n.TContext(t.Context(), "invalid_resource_authorization"))
 		assert.NotContains(t, response.Body.String(), `"message":"invalid_resource_authorization"`)
 	}
 	missingResourceParent := map[string]any{
-		"entity_id": "missing", "subject_type": "principal", "subject_id": "relationship-user",
-		"relation": "viewer", "resource_type": "store", "resource_id": "business-store-2",
+		"entity_id": wireGUID("missing"), "subject_type": "principal", "subject_id": wireID("relationship-user"),
+		"relation": "viewer", "resource_type": "store", "resource_id": wireID("business-store-2"),
 	}
 	assert.Equal(t, http.StatusNotFound, api.Post("/iam/relationships", header[0], header[1], missingResourceParent).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Get("/iam/relationships?resource_type=bad%20type", header[0], header[1]).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/relationships", header[0], header[1], map[string]any{
-		"subject_type": "principal", "subject_id": "relationship-user", "subject_relation": "member", "relation": "viewer",
+		"subject_type": "principal", "subject_id": wireID("relationship-user"), "subject_relation": "member", "relation": "viewer",
 		"resource_type": "store", "resource_id": childEntityID,
 	}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Delete("/iam/relationships", header[0], header[1]).Code)
 	assert.Equal(t, http.StatusNotFound, api.Post("/iam/authorization/check", header[0], header[1], map[string]any{
-		"entity_id": "missing", "permission_code": "store_view", "subject": "relationship-user",
+		"entity_id": wireGUID("missing"), "permission_code": "store_view", "subject": wireID("relationship-user"),
 	}).Code)
 	assert.Equal(t, http.StatusOK, api.Patch("/iam/entities/"+childEntityID, header[0], header[1], map[string]any{
 		"name": "Flagship", "status": "disabled", "metadata": map[string]any{"tier": 1},
 	}).Code)
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
-	entityBindingPath := "/iam/entities/" + childEntityID + "/role-bindings/" + roleID + "/" + authorization.principalID
+	entityBindingPath := "/iam/entities/" + childEntityID + "/role-bindings/" + roleID + "/" + authorization.principalID.String()
 	binding := api.Put(entityBindingPath, header[0], header[1], map[string]any{"effect": "deny", "expires_at": expiresAt})
 	require.Equal(t, http.StatusOK, binding.Code, binding.Body.String())
 	assert.Contains(t, binding.Body.String(), `"effect":"deny"`)
@@ -227,8 +230,8 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, idempotentDelete.Code, idempotentDelete.Body.String())
 	assert.Contains(t, idempotentDelete.Body.String(), `"changed":false`)
 	deleteInherited := "/iam/relationships?subject_type=entity&subject_id=" + rootEntityID + "&subject_relation=owner&relation=viewer&resource_type=store&resource_id=" + childEntityID
-	deleteDirect := "/iam/relationships?subject_type=principal&subject_id=relationship-user&relation=owner&resource_type=company&resource_id=" + rootEntityID
-	deleteResource := "/iam/relationships?entity_id=" + childEntityID + "&subject_type=entity&subject_id=" + rootEntityID + "&subject_relation=owner&relation=viewer&resource_type=store&resource_id=business-store-1"
+	deleteDirect := "/iam/relationships?subject_type=principal&subject_id=" + wireID("relationship-user") + "&relation=owner&resource_type=company&resource_id=" + rootEntityID
+	deleteResource := "/iam/relationships?entity_id=" + childEntityID + "&subject_type=entity&subject_id=" + rootEntityID + "&subject_relation=owner&relation=viewer&resource_type=store&resource_id=" + wireID("business-store-1")
 	assert.Equal(t, http.StatusOK, api.Delete(deleteResource, header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Delete(deleteInherited, header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Delete(deleteDirect, header[0], header[1]).Code)
@@ -256,33 +259,33 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(auditResponse.Body.Bytes(), &auditEnvelope))
 	require.NotEmpty(t, auditEnvelope.Data)
 	for _, event := range auditEnvelope.Data {
-		if event.TenantID == "tenant" {
+		if event.TenantID == wireGUID("tenant") {
 			assert.Equal(t, authorization.principalID, event.PrincipalID)
 		}
 	}
 	_, err = db.ExecContext(t.Context(), "DELETE FROM iam_platform_administrators WHERE principal_id = ?", authorization.principalID)
 	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/members/"+authorization.principalID, header[0], header[1]).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/directory-bindings/group/group", header[0], header[1]).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/directory-bindings/position/position", header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/members/"+authorization.principalID.String(), header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/directory-bindings/group/"+wireID("group"), header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/directory-bindings/position/"+wireID("position"), header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID+"/permissions/user_view", header[0], header[1]).Code)
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+roleID, header[0], header[1]).Code)
-	lastAdministrator := api.Delete("/iam/roles/administrator/members/"+authorization.principalID, header[0], header[1])
+	lastAdministrator := api.Delete("/iam/roles/"+wireID("administrator")+"/members/"+authorization.principalID.String(), header[0], header[1])
 	assert.Equal(t, http.StatusConflict, lastAdministrator.Code, lastAdministrator.Body.String())
 	assert.Contains(t, lastAdministrator.Body.String(), i18n.TContext(t.Context(), "last_tenant_administrator"))
 	assert.NotContains(t, lastAdministrator.Body.String(), `"message":"last_tenant_administrator"`)
 	backupID, err := authnmod.EnsureBootstrapPrincipal(t.Context(), db, authnmod.BootstrapPrincipal{
 		LoginName: "backup-admin", Password: "backup administrator password", DisplayName: "Backup Admin",
-	})
+	}, newRESTIDGenerator)
 	require.NoError(t, err)
 	backupMember := api.Post("/iam/members", header[0], header[1], map[string]any{
 		"subject": backupID, "display_name": "Backup Admin", "status": "active",
 	})
 	require.Equal(t, http.StatusCreated, backupMember.Code, backupMember.Body.String())
-	backupRole := api.Put("/iam/roles/administrator/members/"+backupID, header[0], header[1])
+	backupRole := api.Put("/iam/roles/"+wireID("administrator")+"/members/"+backupID.String(), header[0], header[1])
 	require.Equal(t, http.StatusOK, backupRole.Code, backupRole.Body.String())
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/administrator/members/"+authorization.principalID, header[0], header[1]).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/roles/"+wireID("administrator")+"/members/"+authorization.principalID.String(), header[0], header[1]).Code)
 	assert.Equal(t, http.StatusForbidden, api.Get("/iam/menus", header[0], header[1]).Code)
 	rolelessMenus := api.Get("/iam/me/menus", header[0], header[1])
 	require.Equal(t, http.StatusOK, rolelessMenus.Code, rolelessMenus.Body.String())
@@ -290,7 +293,7 @@ func TestIAMManagementHTTPFlow(t *testing.T) {
 
 func TestIAMDataScopeHTTPErrorsAndLocales(t *testing.T) {
 	db, api, authorization := newIAMAPI(t)
-	header := []string{authorization.header, authz.TenantHeader + ": tenant"}
+	header := []string{authorization.header, authz.TenantHeader + ": " + wireID("tenant")}
 	role := api.Post("/iam/roles", header[0], header[1], map[string]any{"name": "Scoped"})
 	require.Equal(t, http.StatusCreated, role.Code, role.Body.String())
 	roleID := responseID(t, role.Body.Bytes())
@@ -298,7 +301,7 @@ func TestIAMDataScopeHTTPErrorsAndLocales(t *testing.T) {
 	for _, department := range []struct{ id, status string }{{"active", "active"}, {"disabled", "disabled"}} {
 		_, err := db.ExecContext(t.Context(), `INSERT INTO iam_departments
 			(tenant_id,id,parent_id,name,name_key,status,sort_order,version,created_at,updated_at)
-			VALUES ('tenant',?,?,?,?,?,0,1,?,?)`, department.id, "", department.id, department.id, department.status, now, now)
+			VALUES (?,?,?,?,?,?,0,1,?,?)`, wireGUID("tenant"), wireGUID(department.id), guid.ID(0), department.id, department.id, department.status, now, now)
 		require.NoError(t, err)
 	}
 
@@ -308,11 +311,11 @@ func TestIAMDataScopeHTTPErrorsAndLocales(t *testing.T) {
 		body            map[string]any
 	}{
 		{"selected departments required", "/iam/roles/" + roleID + "/data-scope", "role_data_scope_department_required", http.StatusUnprocessableEntity, map[string]any{"scope": "selected_departments"}},
-		{"departments rejected for all", "/iam/roles/" + roleID + "/data-scope", "role_data_scope_departments_not_allowed", http.StatusUnprocessableEntity, map[string]any{"scope": "all", "department_ids": []string{"active"}}},
-		{"scope department missing", "/iam/roles/" + roleID + "/data-scope", "role_scope_department_not_found", http.StatusNotFound, map[string]any{"scope": "selected_departments", "department_ids": []string{"missing"}}},
-		{"scope department inactive", "/iam/roles/" + roleID + "/data-scope", "role_scope_department_inactive", http.StatusConflict, map[string]any{"scope": "selected_departments", "department_ids": []string{"disabled"}}},
-		{"member department missing", "/iam/members", "member_department_not_found", http.StatusNotFound, map[string]any{"subject": "missing-member", "display_name": "Missing", "department_id": "missing", "status": "active"}},
-		{"member department inactive", "/iam/members", "member_department_inactive", http.StatusConflict, map[string]any{"subject": "inactive-member", "display_name": "Inactive", "department_id": "disabled", "status": "active"}},
+		{"departments rejected for all", "/iam/roles/" + roleID + "/data-scope", "role_data_scope_departments_not_allowed", http.StatusUnprocessableEntity, map[string]any{"scope": "all", "department_ids": []string{wireID("active")}}},
+		{"scope department missing", "/iam/roles/" + roleID + "/data-scope", "role_scope_department_not_found", http.StatusNotFound, map[string]any{"scope": "selected_departments", "department_ids": []string{wireID("missing")}}},
+		{"scope department inactive", "/iam/roles/" + roleID + "/data-scope", "role_scope_department_inactive", http.StatusConflict, map[string]any{"scope": "selected_departments", "department_ids": []string{wireID("disabled")}}},
+		{"member department missing", "/iam/members", "member_department_not_found", http.StatusNotFound, map[string]any{"subject": wireID("missing-member"), "display_name": "Missing", "department_id": wireID("missing"), "status": "active"}},
+		{"member department inactive", "/iam/members", "member_department_inactive", http.StatusConflict, map[string]any{"subject": wireID("inactive-member"), "display_name": "Inactive", "department_id": wireID("disabled"), "status": "active"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -334,7 +337,7 @@ func TestIAMDataScopeHTTPErrorsAndLocales(t *testing.T) {
 
 	invalidCondition := map[string]any{
 		"subject_type": "principal", "subject_id": authorization.principalID, "relation": "viewer",
-		"resource_type": "store", "resource_id": "missing", "condition": map[string]any{
+		"resource_type": "store", "resource_id": wireGUID("missing"), "condition": map[string]any{
 			"version": 2, "eq": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}},
 		},
 	}
@@ -358,60 +361,60 @@ func TestIAMManagementHTTPAuditFailureRollsBack(t *testing.T) {
 		WHEN NEW.event_type = 'role_created' BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`)
 	require.NoError(t, err)
 
-	response := api.Post("/iam/roles", authorization.header, authz.TenantHeader+": tenant", map[string]any{"name": "Must Roll Back"})
+	response := api.Post("/iam/roles", authorization.header, authz.TenantHeader+": " + wireID("tenant"), map[string]any{"name": "Must Roll Back"})
 	assert.Equal(t, http.StatusInternalServerError, response.Code, response.Body.String())
-	roles, err := db.NewSelect().Table("iam_roles").Where("tenant_id = ? AND name = ?", "tenant", "Must Roll Back").Count(t.Context())
+	roles, err := db.NewSelect().Table("iam_roles").Where("tenant_id = ? AND name = ?", wireGUID("tenant"), "Must Roll Back").Count(t.Context())
 	require.NoError(t, err)
 	assert.Zero(t, roles)
-	revisions, err := db.NewSelect().Table("iam_policy_revisions").Where("tenant_id = ?", "tenant").Count(t.Context())
+	revisions, err := db.NewSelect().Table("iam_policy_revisions").Where("tenant_id = ?", wireGUID("tenant")).Count(t.Context())
 	require.NoError(t, err)
 	assert.Zero(t, revisions)
 }
 
 func TestIAMManagementHTTPFailures(t *testing.T) {
 	db, api, authorization := newIAMAPI(t)
-	authorizationHeader, tenant := authorization.header, authz.TenantHeader+": tenant"
+	authorizationHeader, tenant := authorization.header, authz.TenantHeader+": " + wireID("tenant")
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": ""}).Code)
 	assert.Equal(t, http.StatusConflict, api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": "Administrator"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/entities/missing", authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/entities/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Post("/iam/entities", authorizationHeader, tenant, map[string]any{"parent_id": "missing", "type": "store", "name": "Missing parent"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/entities/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/entities/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Post("/iam/entities", authorizationHeader, tenant, map[string]any{"parent_id": wireGUID("missing"), "type": "store", "name": "Missing parent"}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/entities", authorizationHeader, tenant, map[string]any{"type": "Company", "name": "Invalid"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/missing/role-bindings", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/entities/missing/role-bindings/administrator/"+authorization.principalID, authorizationHeader, tenant, map[string]any{"effect": "allow"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Post("/iam/authorization/explain", authorizationHeader, tenant, map[string]any{"entity_id": "missing", "permission_code": "user_view", "subject": authorization.principalID}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/"+wireID("missing")+"/role-bindings", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/entities/"+wireID("missing")+"/role-bindings/"+wireID("administrator")+"/"+authorization.principalID.String(), authorizationHeader, tenant, map[string]any{"effect": "allow"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Post("/iam/authorization/explain", authorizationHeader, tenant, map[string]any{"entity_id": wireGUID("missing"), "permission_code": "user_view", "subject": authorization.principalID}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/authorization/constraints", authorizationHeader, tenant, map[string]any{"permission_code": "role_view", "subject": authorization.principalID}).Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/authorization/constraints", authorizationHeader, tenant, map[string]any{"permission_code": "missing", "subject": authorization.principalID}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing/directory-bindings", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/authorization/constraints", authorizationHeader, tenant, map[string]any{"permission_code": wireGUID("missing"), "subject": authorization.principalID}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/directory-bindings", authorizationHeader, tenant).Code)
 	now := time.Now().UTC().UnixMilli()
 	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_groups
 		(tenant_id,id,name,name_key,group_type,description,status,sort_order,version,created_at,updated_at)
-		VALUES ('tenant','disabled-group','Disabled','disabled','static','','disabled',0,1,?,?)`, now, now)
+		VALUES (?,?,?,'disabled','static','','disabled',0,1,?,?)`, wireGUID("tenant"), wireGUID("disabled-group"), "Disabled", now, now)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/administrator/directory-bindings/group/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusConflict, api.Put("/iam/roles/administrator/directory-bindings/group/disabled-group", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/administrator/directory-bindings/dynamic/disabled-group", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/members/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/menus/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/roles/missing", authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing/permissions", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing/permission-grants", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/missing/permissions/user_view", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/missing/permissions/user_view/condition", authorizationHeader, tenant, map[string]any{"condition": map[string]any{"version": 1, "gte": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}}}}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/permissions/user_view", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/permissions/user_view/condition", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/missing/members", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusConflict, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/" + wireID("disabled-group"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/dynamic/" + wireID("disabled-group"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/members/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/menus/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/roles/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/permissions", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/permission-grants", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/permissions/user_view", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/permissions/user_view/condition", authorizationHeader, tenant, map[string]any{"condition": map[string]any{"version": 1, "gte": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}}}}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing")+"/permissions/user_view", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing")+"/permissions/user_view/condition", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/members", authorizationHeader, tenant).Code)
 	// The escalation guard resolves the role before the member, so a missing
 	// role now reports 404 instead of leaking a membership conflict.
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/missing/members/subject", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/missing/members/subject", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/members/missing", authorizationHeader, tenant, map[string]any{"display_name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/menus/missing", authorizationHeader, tenant, map[string]any{"label": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/menus/missing", authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/administrator/permissions/not_declared", authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/members/" + wireID("subject"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing")+"/members/" + wireID("subject"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/members/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"display_name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/menus/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"label": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/menus/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/"+wireID("administrator")+"/permissions/not_declared", authorizationHeader, tenant).Code)
 	emptyRole := api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": "No Permissions"})
 	require.Equal(t, http.StatusCreated, emptyRole.Code, emptyRole.Body.String())
 	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+responseID(t, emptyRole.Body.Bytes())+"/permissions/user_view/condition", authorizationHeader, tenant, map[string]any{"condition": map[string]any{"version": 1, "gte": []any{map[string]any{"context": "auth.acr"}, map[string]any{"value": 1}}}}).Code)
@@ -422,8 +425,26 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, api.Get("/iam/roles", tenant).Code)
 }
 
+func wireID(value string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(value))
+	return strconv.FormatInt(int64(h.Sum64()>>1), 10)
+}
+
+func wireGUID(value string) guid.ID {
+	id, _ := guid.Parse(wireID(value))
+	return id
+}
+
+var restIDCounter int64
+
+func newRESTIDGenerator() (guid.ID, error) {
+	restIDCounter++
+	return guid.ID(restIDCounter), nil
+}
+
 type iamAuthorization struct {
-	principalID string
+	principalID guid.ID
 	header      string
 }
 
@@ -437,24 +458,24 @@ func newIAMAPI(t *testing.T) (*bun.DB, humatest.TestAPI, iamAuthorization) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, iam.Migrate(context.Background(), db))
 	require.NoError(t, organization.Migrate(context.Background(), db))
-	require.NoError(t, organization.EnsureTenant(context.Background(), db, "tenant"))
+	require.NoError(t, organization.EnsureTenant(context.Background(), db, wireGUID("tenant")))
 	seed := make([]byte, ed25519.SeedSize)
 	web, err := authnmod.NewWebService(authnext.Config{
 		Enabled: true, Issuer: "https://iam.example", Audience: []string{"api"}, SigningKey: base64.RawStdEncoding.EncodeToString(seed),
 		MFA: authnext.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
 		Web: authnext.WebConfig{Enabled: true, CookieName: "session", SessionTTL: time.Hour, IdleTTL: time.Minute, PostLoginURL: "https://app.example/", AllowedReturnURLs: []string{"https://app.example/"}},
-	}, db)
+	}, db, authnmod.WithIDGenerator(newRESTIDGenerator))
 	require.NoError(t, err)
-	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{LoginName: "admin", Password: "correct horse battery staple", DisplayName: "Admin"})
+	principalID, err := authnmod.EnsureBootstrapPrincipal(context.Background(), db, authnmod.BootstrapPrincipal{LoginName: "admin", Password: "correct horse battery staple", DisplayName: "Admin"}, newRESTIDGenerator)
 	require.NoError(t, err)
 	registry := authz.DefaultRegistry()
 	now := time.Now().UTC().UnixMilli()
 	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_platform_administrators (principal_id, created_at) VALUES (?, ?)", principalID, now)
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), `INSERT INTO iam_tenant_members
- (tenant_id,user_subject,display_name,email,status,created_at,updated_at,disabled_at) VALUES (?,?,?,'','active',?,?,0)`, "tenant", principalID, "Admin", now, now)
+ (tenant_id,principal_id,display_name,email,status,created_at,updated_at,disabled_at) VALUES (?,?,?,'','active',?,?,0)`, wireGUID("tenant"), principalID, "Admin", now, now)
 	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", "tenant", "administrator", "Administrator", "", now, now)
+	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)", wireGUID("tenant"), wireGUID("administrator"), "Administrator", "", now, now)
 	require.NoError(t, err)
 	// Platform-scope permissions are deliberately excluded: the service refuses
 	// to grant them to a tenant role, so seeding them would build a state
@@ -463,17 +484,16 @@ func newIAMAPI(t *testing.T) (*bun.DB, humatest.TestAPI, iamAuthorization) {
 		if action.Scope == "platform" {
 			continue
 		}
-		_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_permissions (tenant_id,role_id,permission_code,created_at) VALUES (?,?,?,?)", "tenant", "administrator", action.Code, now)
+		_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_permissions (tenant_id,role_id,permission_code,created_at) VALUES (?,?,?,?)", wireGUID("tenant"), wireGUID("administrator"), action.Code, now)
 		require.NoError(t, err)
 	}
-	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_members (tenant_id,role_id,user_subject,created_at) VALUES (?,?,?,?)", "tenant", "administrator", principalID, now)
+	_, err = db.ExecContext(context.Background(), "INSERT INTO iam_role_members (tenant_id,role_id,principal_id,created_at) VALUES (?,?,?,?)", wireGUID("tenant"), wireGUID("administrator"), principalID, now)
 	require.NoError(t, err)
 
 	authorizer := iam.NewAuthorizer(db)
 	registrar := authz.NewRegistrar(registry, web, authorizer, iam.NewMembershipChecker(db))
-	var sequence atomic.Int64
-	repository := iam.NewRepository(db, func() (string, error) { return fmt.Sprintf("id-%d", sequence.Add(1)), nil })
-	auditTrail := auditmod.NewService(db)
+	repository := iam.NewRepository(db, newRESTIDGenerator)
+	auditTrail := auditmod.NewService(db, newRESTIDGenerator)
 	service := iam.NewService(registry, repository, authorizer, func(ctx context.Context, executor bun.IDB, event auditx.Event) error {
 		_, err := auditTrail.AppendTo(ctx, executor, auditmod.EventInput{
 			TenantID: event.TenantID, PrincipalID: event.PrincipalID,

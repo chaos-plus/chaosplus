@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,7 @@ func TestEntityTreeCRUDValidationAndIsolation(t *testing.T) {
 	ctx := t.Context()
 
 	root, err := service.CreateEntity(ctx, iamdomain.Entity{
-		TenantID: "tenant-a", Type: "company", Name: " Acme ", Metadata: map[string]any{"region": "west"},
+		TenantID: testID("tenant-a"), Type: "company", Name: " Acme ", Metadata: map[string]any{"region": "west"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Acme", root.Name)
@@ -27,28 +28,28 @@ func TestEntityTreeCRUDValidationAndIsolation(t *testing.T) {
 	assert.Equal(t, "west", root.Metadata["region"])
 
 	child, err := service.CreateEntity(ctx, iamdomain.Entity{
-		TenantID: "tenant-a", ParentID: root.ID, Type: "store", Name: "Main",
+		TenantID: testID("tenant-a"), ParentID: root.ID, Type: "store", Name: "Main",
 	})
 	require.NoError(t, err)
-	entities, err := service.ListEntities(ctx, "tenant-a")
+	entities, err := service.ListEntities(ctx, testID("tenant-a"))
 	require.NoError(t, err)
 	require.Len(t, entities, 2)
-	_, err = service.GetEntity(ctx, "tenant-b", root.ID)
+	_, err = service.GetEntity(ctx, testID("tenant-b"), root.ID)
 	assert.ErrorIs(t, err, iamdomain.ErrEntityNotFound)
 
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", Type: "company", Name: "Acme"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), Type: "company", Name: "Acme"})
 	assert.ErrorIs(t, err, iamdomain.ErrEntityConflict)
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", ParentID: root.ID, Type: "store", Name: "Main"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), ParentID: root.ID, Type: "store", Name: "Main"})
 	assert.ErrorIs(t, err, iamdomain.ErrEntityConflict)
-	otherTenant, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-b", Type: "company", Name: "Other"})
+	otherTenant, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-b"), Type: "company", Name: "Other"})
 	require.NoError(t, err)
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", ParentID: otherTenant.ID, Type: "store", Name: "Cross tenant"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), ParentID: otherTenant.ID, Type: "store", Name: "Cross tenant"})
 	assert.ErrorIs(t, err, iamdomain.ErrEntityNotFound)
 
 	name := "Flagship"
 	status := iamdomain.EntityDisabled
 	metadata := map[string]any{"tier": float64(1)}
-	updated, err := service.UpdateEntity(ctx, "tenant-a", child.ID, iamdomain.EntityPatch{
+	updated, err := service.UpdateEntity(ctx, testID("tenant-a"), child.ID, iamdomain.EntityPatch{
 		Name: &name, Status: &status, Metadata: &metadata,
 	})
 	require.NoError(t, err)
@@ -57,61 +58,62 @@ func TestEntityTreeCRUDValidationAndIsolation(t *testing.T) {
 	assert.Equal(t, float64(1), updated.Metadata["tier"])
 
 	cycle := child.ID
-	_, err = service.UpdateEntity(ctx, "tenant-a", root.ID, iamdomain.EntityPatch{ParentID: &cycle})
+	_, err = service.UpdateEntity(ctx, testID("tenant-a"), root.ID, iamdomain.EntityPatch{ParentID: &cycle})
 	assert.ErrorIs(t, err, iamdomain.ErrEntityHierarchy)
-	assert.ErrorIs(t, service.DeleteEntity(ctx, "tenant-a", root.ID), iamdomain.ErrEntityHasChildren)
-	require.NoError(t, service.DeleteEntity(ctx, "tenant-a", child.ID))
-	require.NoError(t, service.DeleteEntity(ctx, "tenant-a", root.ID))
-	_, err = service.GetEntity(ctx, "tenant-a", root.ID)
+	assert.ErrorIs(t, service.DeleteEntity(ctx, testID("tenant-a"), root.ID), iamdomain.ErrEntityHasChildren)
+	require.NoError(t, service.DeleteEntity(ctx, testID("tenant-a"), child.ID))
+	require.NoError(t, service.DeleteEntity(ctx, testID("tenant-a"), root.ID))
+	_, err = service.GetEntity(ctx, testID("tenant-a"), root.ID)
 	assert.ErrorIs(t, err, iamdomain.ErrEntityNotFound)
 
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", Type: "Company", Name: "Invalid"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), Type: "Company", Name: "Invalid"})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", Type: "company", Name: "Invalid", Metadata: map[string]any{"value": math.NaN()}})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), Type: "company", Name: "Invalid", Metadata: map[string]any{"value": math.NaN()}})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant-a", Type: "company", Name: "Invalid", Metadata: map[string]any{"value": strings.Repeat("x", maxEntityMetadataBytes)}})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant-a"), Type: "company", Name: "Invalid", Metadata: map[string]any{"value": strings.Repeat("x", maxEntityMetadataBytes)}})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
 }
 
 func TestEntityRejectsInvalidReferencesAndBindingFields(t *testing.T) {
 	service := newTestService(t)
 	ctx := t.Context()
-	root, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: "company", Name: "Root"})
+	root, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), Type: "company", Name: "Root"})
 	require.NoError(t, err)
-	child, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", ParentID: root.ID, Type: "store", Name: "Store"})
+	child, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), ParentID: root.ID, Type: "store", Name: "Store"})
 	require.NoError(t, err)
 
-	_, err = service.ListEntities(ctx, "")
+	_, err = service.ListEntities(ctx, 0)
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, err = service.GetEntity(ctx, "tenant", "")
+	_, err = service.GetEntity(ctx, testID("tenant"), 0)
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, err = service.UpdateEntity(ctx, "tenant", child.ID, iamdomain.EntityPatch{})
+	_, err = service.UpdateEntity(ctx, testID("tenant"), child.ID, iamdomain.EntityPatch{})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	assert.ErrorIs(t, service.DeleteEntity(ctx, "tenant", ""), iamdomain.ErrInvalidArgument)
-	_, err = service.ListEntityRoleBindings(ctx, "tenant", "")
+	assert.ErrorIs(t, service.DeleteEntity(ctx, testID("tenant"), 0), iamdomain.ErrInvalidArgument)
+	_, err = service.ListEntityRoleBindings(ctx, testID("tenant"), 0)
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
 
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, "", "principal", iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, 0, testID("principal"), iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, "role", "", iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("role"), 0, iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, "role", "principal", "permit", time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("role"), testID("principal"), "permit", time.Time{})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	_, err = service.DeleteEntityRoleBinding(ctx, "tenant", child.ID, "role", "")
+	_, err = service.DeleteEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("role"), 0)
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
 
 	invalidStatus := iamdomain.EntityStatus("pending")
-	_, err = service.UpdateEntity(ctx, "tenant", child.ID, iamdomain.EntityPatch{Status: &invalidStatus})
+	_, err = service.UpdateEntity(ctx, testID("tenant"), child.ID, iamdomain.EntityPatch{Status: &invalidStatus})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
 	for _, entityType := range []string{"", "1company", "company.unit", "a" + strings.Repeat("b", 64)} {
-		_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: entityType, Name: "Invalid"})
+		_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), Type: entityType, Name: "Invalid"})
 		assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
 	}
 
-	parentID, entityType := "", "branch"
-	updated, err := service.UpdateEntity(ctx, "tenant", child.ID, iamdomain.EntityPatch{ParentID: &parentID, Type: &entityType})
+	parentID := guid.ID(0)
+	entityType := "branch"
+	updated, err := service.UpdateEntity(ctx, testID("tenant"), child.ID, iamdomain.EntityPatch{ParentID: &parentID, Type: &entityType})
 	require.NoError(t, err)
-	assert.Empty(t, updated.ParentID)
+	assert.True(t, updated.ParentID.Zero())
 	assert.Equal(t, entityType, updated.Type)
 }
 
@@ -119,22 +121,22 @@ func TestEntityHierarchyDepthAndCorruptMetadataFailClosed(t *testing.T) {
 	service := newTestService(t)
 	repo := service.repo
 	ctx := t.Context()
-	root, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: "company", Name: "Root"})
+	root, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), Type: "company", Name: "Root"})
 	require.NoError(t, err)
 	parentID := root.ID
 	for level := 1; level < maxEntityDepth; level++ {
 		entity, createErr := service.CreateEntity(ctx, iamdomain.Entity{
-			TenantID: "tenant", ParentID: parentID, Type: "unit", Name: "Level " + string(rune('A'+level)),
+			TenantID: testID("tenant"), ParentID: parentID, Type: "unit", Name: "Level " + string(rune('A'+level)),
 		})
 		require.NoError(t, createErr)
 		parentID = entity.ID
 	}
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", ParentID: parentID, Type: "unit", Name: "Too deep"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), ParentID: parentID, Type: "unit", Name: "Too deep"})
 	assert.ErrorIs(t, err, iamdomain.ErrEntityHierarchy)
 
-	_, err = repo.db.ExecContext(ctx, "UPDATE iam_entities SET metadata = '{' WHERE tenant_id = ? AND id = ?", "tenant", root.ID)
+	_, err = repo.db.ExecContext(ctx, "UPDATE iam_entities SET metadata = '{' WHERE tenant_id = ? AND id = ?", testID("tenant"), root.ID)
 	require.NoError(t, err)
-	_, err = service.GetEntity(ctx, "tenant", root.ID)
+	_, err = service.GetEntity(ctx, testID("tenant"), root.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode entity metadata")
 }
@@ -143,77 +145,77 @@ func TestEntityRoleBindingsAuthorizationAndDeletionGuards(t *testing.T) {
 	repo := newIAMRepository(t)
 	service := NewService(authz.DefaultRegistry(), repo, NewAuthorizer(repo.db), newTestAuditAppender(repo.db))
 	ctx := context.Background()
-	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, "tenant"))
-	parent, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: "company", Name: "Company"})
+	require.NoError(t, organization.EnsureTenant(t.Context(), repo.db, testID("tenant")))
+	parent, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), Type: "company", Name: "Company"})
 	require.NoError(t, err)
-	child, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", ParentID: parent.ID, Type: "store", Name: "Store"})
+	child, err := service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), ParentID: parent.ID, Type: "store", Name: "Store"})
 	require.NoError(t, err)
-	allowRole, err := service.CreateRole(ctx, "tenant", "Viewer", "")
+	allowRole, err := service.CreateRole(ctx, testID("tenant"), "Viewer", "")
 	require.NoError(t, err)
-	denyRole, err := service.CreateRole(ctx, "tenant", "Restricted", "")
+	denyRole, err := service.CreateRole(ctx, testID("tenant"), "Restricted", "")
 	require.NoError(t, err)
-	_, err = service.GrantPermission(ctx, "tenant", allowRole.ID, "store_view")
+	_, err = service.GrantPermission(ctx, testID("tenant"), allowRole.ID, "store_view")
 	require.NoError(t, err)
-	_, err = service.GrantPermission(ctx, "tenant", denyRole.ID, "store_view")
+	_, err = service.GrantPermission(ctx, testID("tenant"), denyRole.ID, "store_view")
 	require.NoError(t, err)
-	_, err = service.PutTenantMember(ctx, "tenant", "principal", "Principal", "", "", MemberActive)
+	_, err = service.PutTenantMember(ctx, testID("tenant"), testID("principal"), "Principal", "", 0, MemberActive)
 	require.NoError(t, err)
 
-	revision, err := repo.policyRevision(ctx, "tenant")
+	revision, err := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, err)
-	binding, changed, err := service.PutEntityRoleBinding(ctx, "tenant", parent.ID, allowRole.ID, "principal", iamdomain.BindingAllow, time.Time{})
+	binding, changed, err := service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, parent.ID, binding.EntityID)
-	revisionAfterAllow, err := repo.policyRevision(ctx, "tenant")
+	revisionAfterAllow, err := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, err)
 	assert.Equal(t, revision+1, revisionAfterAllow)
-	_, changed, err = service.PutEntityRoleBinding(ctx, "tenant", parent.ID, allowRole.ID, "principal", iamdomain.BindingAllow, time.Time{})
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
 	require.NoError(t, err)
 	assert.False(t, changed)
-	revisionAfterNoop, err := repo.policyRevision(ctx, "tenant")
+	revisionAfterNoop, err := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, err)
 	assert.Equal(t, revisionAfterAllow, revisionAfterNoop)
 
 	authorizer := NewAuthorizer(repo.db)
-	allowed, err := authorizer.CheckEntity(ctx, "tenant", child.ID, "store_view", "principal")
+	allowed, err := authorizer.CheckEntity(ctx, testID("tenant"), child.ID, "store_view", testID("principal"))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	_, changed, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, denyRole.ID, "principal", iamdomain.BindingDeny, time.Time{})
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID , testID("principal"), iamdomain.BindingDeny, time.Time{})
 	require.NoError(t, err)
 	assert.True(t, changed)
-	allowed, err = authorizer.CheckEntity(ctx, "tenant", child.ID, "store_view", "principal")
+	allowed, err = authorizer.CheckEntity(ctx, testID("tenant"), child.ID, "store_view", testID("principal"))
 	require.NoError(t, err)
 	assert.False(t, allowed)
-	assert.ErrorIs(t, service.DeleteEntity(ctx, "tenant", child.ID), iamdomain.ErrEntityHasBindings)
+	assert.ErrorIs(t, service.DeleteEntity(ctx, testID("tenant"), child.ID), iamdomain.ErrEntityHasBindings)
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
-	_, changed, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, denyRole.ID, "principal", iamdomain.BindingAllow, expiresAt)
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID , testID("principal"), iamdomain.BindingAllow, expiresAt)
 	require.NoError(t, err)
 	assert.True(t, changed)
 	authorizer.now = func() time.Time { return expiresAt.Add(time.Second) }
-	allowed, err = authorizer.CheckEntity(ctx, "tenant", child.ID, "store_view", "principal")
+	allowed, err = authorizer.CheckEntity(ctx, testID("tenant"), child.ID, "store_view", testID("principal"))
 	require.NoError(t, err)
 	assert.True(t, allowed, "the expired child binding must not override the inherited allow")
 
-	bindings, err := service.ListEntityRoleBindings(ctx, "tenant", child.ID)
+	bindings, err := service.ListEntityRoleBindings(ctx, testID("tenant"), child.ID)
 	require.NoError(t, err)
 	require.Len(t, bindings, 1)
 	assert.Equal(t, expiresAt.UnixMilli(), bindings[0].ExpiresAt.UnixMilli())
-	changed, err = service.DeleteEntityRoleBinding(ctx, "tenant", child.ID, denyRole.ID, "principal")
+	changed, err = service.DeleteEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID, testID("principal"))
 	require.NoError(t, err)
 	assert.True(t, changed)
-	changed, err = service.DeleteEntityRoleBinding(ctx, "tenant", child.ID, denyRole.ID, "principal")
+	changed, err = service.DeleteEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID, testID("principal"))
 	require.NoError(t, err)
 	assert.False(t, changed)
 
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, "missing", "principal", iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("missing") , testID("principal"), iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, ErrRoleNotFound)
-	_, err = service.SetTenantMemberStatus(ctx, "tenant", "principal", MemberDisabled)
+	_, err = service.SetTenantMemberStatus(ctx, testID("tenant"), testID("principal"), MemberDisabled)
 	require.NoError(t, err)
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, allowRole.ID, "principal", iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, ErrMemberInactive)
-	_, _, err = service.PutEntityRoleBinding(ctx, "tenant", child.ID, allowRole.ID, "principal", iamdomain.BindingAllow, time.Now().UTC().Add(-time.Second))
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Now().UTC().Add(-time.Second))
 	assert.ErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -224,12 +226,12 @@ func TestEntityWritesRollBackWhenAuditFails(t *testing.T) {
 	_, err := repo.db.ExecContext(ctx, `CREATE TRIGGER reject_entity_audit BEFORE INSERT ON iam_audit_events
 		WHEN NEW.event_type = 'entity_created' BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`)
 	require.NoError(t, err)
-	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: "tenant", Type: "company", Name: "Rolled back"})
+	_, err = service.CreateEntity(ctx, iamdomain.Entity{TenantID: testID("tenant"), Type: "company", Name: "Rolled back"})
 	require.Error(t, err)
-	entities, listErr := repo.ListEntities(ctx, "tenant")
+	entities, listErr := repo.ListEntities(ctx, testID("tenant"))
 	require.NoError(t, listErr)
 	assert.Empty(t, entities)
-	revision, revisionErr := repo.policyRevision(ctx, "tenant")
+	revision, revisionErr := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, revisionErr)
 	assert.Zero(t, revision)
 }

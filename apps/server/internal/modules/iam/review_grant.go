@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 // RemoveGroupMembership removes a principal from a static group, severing every
 // role that was derived through that group. It is used by access reviews to
 // revoke derived access at its source.
-func RemoveGroupMembership(ctx context.Context, db bun.IDB, tenantID, groupID, principalID string) (bool, error) {
-	if db == nil {
+func RemoveGroupMembership(ctx context.Context, db bun.IDB, tenantID, groupID, principalID guid.ID) (bool, error) {
+	if db == nil || tenantID.Zero() || groupID.Zero() || principalID.Zero() {
 		return false, fmt.Errorf("remove group membership: %w", ErrInvalidArgument)
 	}
 	result, err := db.NewDelete().Table("iam_group_members").
@@ -25,8 +26,8 @@ func RemoveGroupMembership(ctx context.Context, db bun.IDB, tenantID, groupID, p
 
 // RemovePositionMembership removes a principal from a position, severing every
 // role that was derived through that position.
-func RemovePositionMembership(ctx context.Context, db bun.IDB, tenantID, positionID, principalID string) (bool, error) {
-	if db == nil {
+func RemovePositionMembership(ctx context.Context, db bun.IDB, tenantID, positionID, principalID guid.ID) (bool, error) {
+	if db == nil || tenantID.Zero() || positionID.Zero() || principalID.Zero() {
 		return false, fmt.Errorf("remove position membership: %w", ErrInvalidArgument)
 	}
 	result, err := db.NewDelete().Table("iam_position_members").
@@ -40,8 +41,8 @@ func RemovePositionMembership(ctx context.Context, db bun.IDB, tenantID, positio
 
 // RemoveEntityRoleBinding removes one entity-scoped role binding, severing the
 // scoped permissions the principal held on that entity.
-func RemoveEntityRoleBinding(ctx context.Context, db bun.IDB, tenantID, entityID, roleID, principalID string) (bool, error) {
-	if db == nil {
+func RemoveEntityRoleBinding(ctx context.Context, db bun.IDB, tenantID, entityID, roleID, principalID guid.ID) (bool, error) {
+	if db == nil || tenantID.Zero() || entityID.Zero() || roleID.Zero() || principalID.Zero() {
 		return false, fmt.Errorf("remove entity role binding: %w", ErrInvalidArgument)
 	}
 	result, err := db.NewDelete().Table("iam_role_bindings").

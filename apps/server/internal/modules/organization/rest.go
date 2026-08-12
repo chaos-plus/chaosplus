@@ -4,11 +4,29 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/danielgtaylor/huma/v2"
 )
+
+func parseOrganizationID(value string) (guid.ID, error) {
+	id, err := guid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return 0, huma.Error422UnprocessableEntity("invalid_id")
+	}
+	return id, nil
+}
+
+func parseOptionalOrganizationID(value string) (guid.ID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	return parseOrganizationID(value)
+}
 
 type departmentListInput struct {
 	TenantID string `header:"X-Tenant-Id" maxLength:"128"`
@@ -56,7 +74,11 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		OperationID: "organization-list-departments", Method: http.MethodGet, Path: "/iam/departments",
 		Summary: "List the tenant department hierarchy", Tags: []string{"organization"}, Errors: []int{http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "dept", Verb: "view"}, func(ctx context.Context, in *departmentListInput) (*respx.Body[[]Department], error) {
-		departments, err := service.List(ctx, in.TenantID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		departments, err := service.List(ctx, tenantID)
 		if err != nil {
 			return nil, organizationError(err)
 		}
@@ -68,8 +90,16 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Create a tenant department", Tags: []string{"organization"}, DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "dept", Verb: "create"}, func(ctx context.Context, in *createDepartmentInput) (*respx.Body[Department], error) {
-		department, err := service.Create(ctx, in.TenantID, CreateDepartment{
-			ParentID: in.Body.ParentID, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder,
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		parentID, err := parseOptionalOrganizationID(in.Body.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		department, err := service.Create(ctx, tenantID, CreateDepartment{
+			ParentID: parentID, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder,
 		})
 		if err != nil {
 			return nil, organizationError(err)
@@ -81,7 +111,15 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		OperationID: "organization-get-department", Method: http.MethodGet, Path: "/iam/departments/{id}",
 		Summary: "Get a tenant department", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "dept", Verb: "view"}, func(ctx context.Context, in *departmentIDInput) (*respx.Body[Department], error) {
-		department, err := service.Get(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		department, err := service.Get(ctx, tenantID, id)
 		if err != nil {
 			return nil, organizationError(err)
 		}
@@ -93,10 +131,26 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Update or move a tenant department", Tags: []string{"organization"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "dept", Verb: "update"}, func(ctx context.Context, in *updateDepartmentInput) (*respx.Body[Department], error) {
-		department, err := service.Update(ctx, in.TenantID, in.ID, UpdateDepartment{
-			ParentID: in.Body.ParentID, Name: in.Body.Name, Status: in.Body.Status,
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		update := UpdateDepartment{
+			Name: in.Body.Name, Status: in.Body.Status,
 			SortOrder: in.Body.SortOrder, Version: in.Body.Version,
-		})
+		}
+		if in.Body.ParentID != nil {
+			parentID, err := parseOptionalOrganizationID(*in.Body.ParentID)
+			if err != nil {
+				return nil, err
+			}
+			update.ParentID = &parentID
+		}
+		department, err := service.Update(ctx, tenantID, id, update)
 		if err != nil {
 			return nil, organizationError(err)
 		}
@@ -108,7 +162,15 @@ func RegisterREST(api huma.API, service *Service, registrar *authz.Registrar) {
 		Summary: "Delete an empty tenant department", Tags: []string{"organization"},
 		Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "dept", Verb: "delete"}, func(ctx context.Context, in *deleteDepartmentInput) (*respx.Body[deletedDepartment], error) {
-		if err := service.Delete(ctx, in.TenantID, in.ID, in.Version); err != nil {
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.Delete(ctx, tenantID, id, in.Version); err != nil {
 			return nil, organizationError(err)
 		}
 		return respx.OK(ctx, deletedDepartment{Deleted: true}), nil

@@ -1,6 +1,6 @@
 -- +goose Up
 CREATE TABLE iam_tenants (
-    id TEXT NOT NULL PRIMARY KEY,
+    id BIGINT NOT NULL PRIMARY KEY,
     slug TEXT NOT NULL COLLATE NOCASE UNIQUE,
     name TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'deleted')),

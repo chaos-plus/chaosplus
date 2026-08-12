@@ -1,5 +1,7 @@
 # chaos.plus
 ## 通用自治工作流运行时 —— PRD 定稿
+
+> **不可豁免的设计基线：** 所有产品、架构、接口、数据、安全、部署、运维、UI、UX、UE 与测试设计，必须采用对应场景下最正规、具备全球工程共识、广泛采用且基于标准的通用方案；优先使用官方规范与组件、成熟协议、可互操作的常规模型及持续维护的主流库。严禁将 demo/示例方案、产品链路中的 mock 或 fake 服务、临时实现、权宜捷径、无必要的偏门或私有方案、仅本地成立的假设以及未经验证的 fallback 纳入设计或交付。测试替身仅允许存在于隔离的自动化测试中，不得进入运行时代码，也不得代替集成、协议、迁移、安全、无障碍、性能或端到端验收。若对应问题尚无公认通用方案，必须先提交并评审 ADR，对主流候选方案及其互操作性、安全、运维、迁移、回滚和验证进行完整裁决，未经裁决不得实现。
 ### Product Requirements Document — v2.0 (Final)
 
 版本：2.0｜状态：**定稿**｜生成日期：2026-08-01
@@ -170,8 +172,8 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 |----------|---------|------|
 | Runner = Go 静态二进制 (C4) | runner = TS/Bun | Mastra agent runtime 集成更快；Go 重写无 v1 用户收益 |
 | Admin = Next.js (C4/C9) | Vite SPA | 单页管理后台无需 SSR/ISR；shadcn/ui + tailwind 未变 |
-| DB 查询 = sqlc (C9) | goose 迁移 + 手写 SQL | SQLite-only 阶段 sqlc 收益低；Postgres 上线后再切 |
-| API = gRPC + grpc-gateway (C2) | NATS + HTTP/WS | 桌面单机 profile 下 gRPC 是过度设计；NATS 为零配置发现 |
+| DB 查询生成器（原 C9） | Goose migration + Bun ORM/查询/事务 | 与 `apps/server/internal/modules` 保持一致；不使用查询代码生成器 |
+| API gateway（原 C2） | Huma REST + WebSocket；runner 消息走 NATS | 按 `apps/server` 的 module-owned REST 注册模式实现，不虚构未交付的 gateway |
 
 | 因素 | 判断 |
 |------|------|
@@ -188,11 +190,11 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 
 **契约源单一化：** WorkflowDef schema、网络协议类型，统一用 protobuf / JSON Schema 定义，**codegen 出 Go 结构体 + TS 类型**，两端类型安全。
 
-**API 协议分层（C2 决议）：** 内部（控制面↔runner、控制面↔客户端实时流）走 gRPC / WebSocket；对外开放 API 经 **grpc-gateway 暴露 RESTful**，列表查询支持 **RSQL** 语法糖。契约仍单源于 `/schema`，不维护两套定义。
+**API 协议分层（C2 修订）：** 对外 API 使用按业务 module 注册的 **Huma REST**，实时流使用 WebSocket；控制面与 runner 的命令/事件传输使用 NATS。列表接口只接受各资源显式声明并校验的 query 参数，**server-ai 不使用 RSQL，也不使用 grpc-gateway**。契约由 Huma/OpenAPI、JSON Schema 与共享事件类型共同约束，不维护虚构的 proto 实现。
 
 **消息传输（C3 决议）：** ConversationHub 的事件日志是唯一真相（P1/P2）。**NATS 仅作为 cloud / self-hosted profile 的传输/扇出层实现**（WebSocket/TCP）；desktop profile 进程内直连，不引入 NATS 硬依赖（P8）。
 
-**DB 工具链（C9 决议）：** SQLite-first（§16），迁移用内置 `PRAGMA user_version` 顺序迁移函数、零外部框架；**sqlc** 生成类型安全查询代码（SQLite/Postgres 双方言）；**goose 仅在 cloud/Postgres profile 引入**。
+**DB 工具链（C9 修订）：** SQLite-first；所有环境统一由 **Goose** 执行 migration，由 **Bun** 负责 ORM、查询和事务。`*bun.DB` 只在 `internal/app` 组合根创建并注入 module；每个 module 独立内嵌 `sql/<dialect>`、维护自己的 Goose version table 和 Repository。**项目不使用 sqlc**，也不允许共享业务 `Store`。
 
 **扩展逃生口：** `transform` / 自定义逻辑先用声明式（JSON Logic）；真需要可编程时，挂 **WASM（wazero）或 Lua（gopher-lua）沙箱插件**——比内嵌 JS 更干净、可沙箱、多语言。
 
@@ -247,6 +249,58 @@ Account → Instance(Org) → Project → Workspace
 - 未经确认的临时 machine 不出现在列表。
 - 列表项 + 过滤筛选。
 - 详情 Tab：**关键信息** / **运行时**（该机可用执行器 runtime 检测结果，§18 `meta` 表）/ **agent 列表**（该机托管的数字人：基本信息、实时状态、操作按钮；搜索过滤）。
+
+### 5.4 Runner Preview Gateway（随机唯一域名反向隧道）
+
+用户可从 Web 安全访问已确认 runner 上明确发布的本地 API、Web 服务或授权目录，无需给 runner 配置公网入口。该能力是独立的 **Tunnel / Preview Gateway 有界上下文**，不属于 machine CRUD，也不复用工作流命令通道承载数据流量。
+
+#### 5.4.1 用户流程
+
+1. 用户在某台在线 machine 的「预览服务」中选择发布类型：`http`（API/Web/WebSocket）或 `directory`（只读目录）。
+2. `http` 仅允许 runner 明确注册的 loopback 目标（`127.0.0.1` / `[::1]` + port）；`directory` 仅允许 runner 配置的 preview roots 下的规范化相对路径。
+3. 控制面生成 128-bit 随机、全局唯一、不可枚举的 DNS label，例如 `k7m4...q2.preview.example.com`。数据库唯一约束冲突时重新生成；域名不包含 tenant、runner、project 或端口信息。
+4. runner 监管固定版本的官方 `frpc` 子进程，由 `frpc` 主动连接独立部署的官方 `frps`；外部不需要且不得连接 runner 入站端口。
+5. 用户打开随机域名后，Preview Gateway 先完成 IAM 会话和资源授权，再把已授权的 HTTP/1.1、HTTP streaming、WebSocket 或目录读取流量代理到 FRPS vhost 入口。
+6. 用户可暂停、恢复、轮换域名、设置过期时间或立即撤销。runner 离线、machine token 吊销或 lease 过期时入口立即停止转发。
+
+#### 5.4.2 访问模式与 IAM 边界
+
+- `iam_required`（默认且生产推荐）：必须持有 `apps/server` 签发/验证的会话；按 tenant/entity、machine 和 preview resource 做 `runner_preview.read` 授权。
+- `share_token`（显式开启）：由具备 `runner_preview.share` 权限的用户签发一次性可撤销分享凭据；只存 SHA-256 hash，必须设置到期时间和访问范围。凭据放在安全 Cookie 或 Authorization header，禁止进入 query string。
+- 随机域名仅降低枚举风险，**绝不等同认证或授权**。不提供匿名 `public` 模式。
+- `apps/server` 是 IAM 权威边界：权限登记、tenant membership、entity data scope、会话验证和审计遵循现有 authn/authz/iam/organization/audit 模块。server-ai 只消费可信身份结果，不解析角色、不信任浏览器自报的 tenant/user/permission header。
+
+#### 5.4.3 安全硬约束
+
+- HTTP 目标禁止任意 host、Unix socket、link-local、局域网地址和云 metadata；仅允许当前 runner 上已注册且存活的 loopback 端口，防止 SSRF。
+- 目录目标必须 `EvalSymlinks` 后仍位于配置的 preview root；拒绝绝对路径、`..`、NUL、符号链接逃逸、dotfile、`.chaosplus`、`.git`、token/secret/env/key 等敏感文件和设备文件。
+- Gateway 严格校验 `Host/SNI -> preview` 唯一映射，移除 hop-by-hop/proxy headers，不把 IAM cookie、控制面 token、runner token转发给目标服务。
+- 每 preview、用户、IP 和 stream 都有限流、并发、带宽、请求体、响应体、空闲/总时长限制；流控必须有背压，慢客户端不能耗尽 runner 或控制面内存。
+- 控制通道（注册、心跳、撤销）与数据通道隔离；预览大流量不能阻塞 runner 15s 心跳、工作流 spawn/kill 或 machine token 轮换。
+- 所有创建、授权、打开、拒绝、暂停、过期、撤销和异常断开写结构化审计；日志不得记录凭据、完整敏感路径或请求正文。
+
+#### 5.4.4 FRP 实现边界
+
+- 数据面只使用 `fatedier/frp` 官方发布的固定版本 `frps`/`frpc` 与官方镜像；生产中 `frps` 独立部署，runner 监管官方 `frpc` 子进程。
+- 禁止 fork/修改 FRP、禁止把 `frps` 内嵌进 server-ai、禁止自行实现隧道帧/多路复用协议；不使用 Cloudflare Tunnel 或任何 Cloudflare 托管依赖。
+- server-ai 仅实现 `TunnelProvider` port 及 FRP adapter，负责生成最小权限配置、`verify` 后启用、reload/status/revoke，以及把 FRP 状态映射为领域状态；FRP token 只认证 `frpc -> frps`，不能作为浏览器访问凭据。
+- FRPS vhost 不直接成为绕过鉴权的公网终点。公网 DNS/TLS 入口必须先经过 IAM-aware Preview Gateway；Gateway 剥离身份凭据后才转发到内部 FRPS vhost。
+- `directory` 模式由 runner 启动项目自有的受限只读 HTTP directory service，再由 `frpc` 发布该 loopback 服务；不得直接使用 FRP `static_file` 绕过路径和敏感文件策略。
+- runner 将配置写入权限 `0600` 的临时文件，先执行 `frpc verify` 再启动或 reload；停止、吊销和 lease 到期必须清理代理配置及临时凭据。
+
+#### 5.4.5 状态机和可用性
+
+```text
+requested -> active <-> suspended -> revoked
+              |   |         |
+              |   +-------> expired
+              +-----------> runner_offline -> active（同 token runner 重连且 lease 未过期）
+```
+
+- 默认 lease 8 小时，最长 24 小时；服务端是 lease/状态权威，runner 只缓存可服务快照。
+- 同一 preview 任一时刻只有一个有效 FRP proxy owner；领域 lease、connection epoch 和 FRP proxy name 共同阻止旧 runner 配置重新激活。
+- Gateway 多副本部署时共享 Preview registry；FRP 负责隧道重连和数据面多路复用，断线重连与 Gateway 实例迁移不改变 hostname。
+- 泛域名 DNS 与 TLS（`*.preview-domain`）由部署层提供；生产必须 TLS，Cookie 使用 `Secure + HttpOnly + SameSite=Lax/Strict`。
 
 ---
 
@@ -624,7 +678,7 @@ interface Scheduler {             // per-run 租约 + fencing
 
 ## 16. 数据模型
 
-> 所有持久化结构带 `schema_version`；启动按 `PRAGMA user_version` 顺序执行迁移函数，每个迁移原子事务，零外部框架（C9 决议：sqlc 生成查询代码；goose 仅 cloud/Postgres profile）。**多租户列从第一天起存在**（desktop 单值，cloud 隔离）。
+> Schema migration 统一由 **Goose** 执行；每个 `internal/modules/<domain>` 内嵌并独立管理自己的 `sql/<dialect>` 和 Goose version table。ORM、查询和事务统一使用 **Bun**，`*bun.DB` 由 `internal/app` 组合根创建后注入模块。禁止共享业务 `Store`、跨模块持有他域表模型或在 handler 中直接写 SQL。**多租户列从第一天起存在**（desktop 单值，cloud 隔离）。
 
 ```sql
 -- 平台层
@@ -684,6 +738,18 @@ CREATE TABLE validation_results ( id TEXT PRIMARY KEY, artifact_id TEXT, executi
                       evidence_json TEXT, reviewed_by TEXT, ts INTEGER );
 CREATE TABLE feedback_log ( id TEXT PRIMARY KEY, artifact_id TEXT, execution_id TEXT,
                       reviewer TEXT, category TEXT, location TEXT, expected TEXT, detail TEXT, ts INTEGER );
+
+-- Tunnel / Preview Gateway 模块
+CREATE TABLE runner_previews ( id TEXT PRIMARY KEY, instance_id TEXT, entity_id TEXT,
+                      machine_id TEXT, hostname TEXT UNIQUE, kind TEXT, target_json TEXT,
+                      access_mode TEXT, status TEXT, connection_epoch INTEGER DEFAULT 0,
+                      lease_expires_at INTEGER, created_by TEXT, created_at INTEGER, updated_at INTEGER );
+CREATE INDEX idx_runner_previews_machine_status ON runner_previews(instance_id, machine_id, status);
+CREATE TABLE preview_share_tokens ( id TEXT PRIMARY KEY, preview_id TEXT, token_hash TEXT UNIQUE,
+                      expires_at INTEGER, revoked_at INTEGER, created_by TEXT, created_at INTEGER );
+CREATE TABLE preview_audit_events ( seq INTEGER PRIMARY KEY AUTOINCREMENT, preview_id TEXT,
+                      instance_id TEXT, principal_id TEXT, action TEXT, outcome TEXT,
+                      remote_ip_hash TEXT, detail_json TEXT, ts INTEGER );
 ```
 
 > 数字人 memory 写入的审计事件记入 `events`（§6.3）；memory 内容本体存于 workspace（不入表）。
@@ -694,10 +760,11 @@ CREATE TABLE feedback_log ( id TEXT PRIMARY KEY, artifact_id TEXT, execution_id 
 
 ### 17.1 协议（含 C2 决议）
 
-- **控制面 ↔ runner、控制面 ↔ 客户端/IM**：gRPC / WebSocket（protobuf 契约，codegen Go+TS）。desktop 跑 localhost，cloud 跨网。
-- **对外开放 API**：grpc-gateway 暴露 RESTful；列表查询支持 RSQL。契约单源 `/schema`。
+- **控制面 ↔ runner**：命令/事件走 NATS，machine 接入及实时交互走 WebSocket；Preview 数据面由官方 FRP 提供。desktop 跑 localhost，self-hosted/cloud 跨网。
+- **对外开放 API**：各业务 module 通过 Huma 注册 REST/OpenAPI；列表查询使用显式、白名单化 query 参数。server-ai 不使用 RSQL、sqlc 或 grpc-gateway。
 - **控制面 = 唯一写者**；CLI/客户端/runner/外部工具不得直接写 StateStore（只读查询可）。一切变更经协议。
 - **AG-UI 对齐**（§29.4）：客户端协议设计时对齐 AG-UI 的流式状态同步与 HITL 语义（或提供兼容适配层）。
+- **Runner Tunnel**：控制面负责 register/renew/revoke/epoch，数据面交给固定版本的官方 FRP。项目不实现隧道帧、流量窗口或多路复用协议；Gateway 与 FRP 分别实施入口限流和数据面带宽/连接限制。
 
 ### 17.2 安全
 
@@ -706,6 +773,7 @@ CREATE TABLE feedback_log ( id TEXT PRIMARY KEY, artifact_id TEXT, execution_id 
 - **AuthProvider 抽象**：desktop = 本地 token / 近 no-op；cloud = SSO / RBAC。数据模型多租户感知，隔离强度按 profile。
 - **密钥**：配置敏感字段用 `{ $env: 'VAR' }` 引用，不写值；init 自动建 `.chaosplus.env` 并入 `.gitignore`。
 - **执行器隔离**：worktree 沙箱，最小权限环境变量；Constitution 层强制 forbiddenActions（禁访问**自身 run 目录（`.chaosplus/runs/{run_id}/{node_id}/{attempt}/`）之外的** `.chaosplus/` 路径、其他 worktree、token 文件、IPC 调用）。v1 不引入 OS 级沙箱。
+- **Preview Gateway**：随机 hostname 不是认证；所有入口执行 §5.4 的 IAM/分享凭据授权、目标 allowlist、目录 canonicalization、凭据剥离、限流、审计和 TLS 硬约束。
 
 ### 17.3 部署 profile
 
@@ -807,8 +875,9 @@ ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'm
 | 技能沉淀闭环（从 run 提炼 skill）| §6.4 |
 | Git 平台深度集成（PR/Issue/Actions 作 validator）、移动监督面板加强 | §29.2 |
 | A2A 端点（数字人对外互操作）| §29.4 |
+| Runner Preview Gateway（随机唯一域名反向隧道，API/Web/WebSocket/受限目录）| §5.4 / 附录 F.11 |
 | 协作区（需求/任务/缺陷/测试 = 工作流 artifact 视图；OKR/绩效/洞察/脑暴/设计 另议）、看板 | 附录 A（C5 决议）|
-| 预览区（runner 端口转发/隧道；desktop=localhost 直连，cloud=frp 类隧道）| 附录 A（C6 决议）|
+| 预览区（desktop 可回环直连；self-hosted/cloud 使用自托管官方 FRP）| 附录 A（C6 决议）|
 | 在线文件（v2 先 artifact 预览 md/pdf/图片；doc/xls/ppt 在线编辑另议）| 附录 A（C5 决议）|
 | 定时任务 UI（提醒人类）| §7.2 |
 | 完整 i18n（繁中/英）、5 套主题全量 | 附录 A |
@@ -1085,7 +1154,7 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 | | 频道：名称/成员管理/消息钩子 | v1，§9.2 |
 | | 消息桥接（mqtt/websocket/http push+hook）| v2+，§9.2 |
 | **看板** | 任务看板（任务生命周期视角：enqueue/claim/start/complete/fail）| v2+，§21.2 |
-| **预览区** | 以进程为单位的实时预览（如 frp-api、frp-web、进程 n…）；runner 端口转发/隧道：desktop=localhost 直连，cloud=frp 类隧道（C6 决议）| v2+，§21.2 |
+| **预览区** | 以 machine/进程为单位管理 Preview Gateway：随机唯一域名、API/Web/WebSocket/受限目录、访问策略、到期时间、暂停/撤销和连接状态 | v2+，§5.4 / F.11 |
 | **协作区** | 需求/任务/缺陷/测试 → 工作流模板的 artifact 视图（C5 决议：不新造模块）| v2+ |
 | | OKR/脑暴/设计/洞察/绩效 | v2+（另议）|
 | **扩展区** | 在线文件：v2 先 artifact 预览（md/pdf/图片）；doc/xls/ppt/任意文件在线编辑另议（C5 决议）| v2+ |
@@ -1100,7 +1169,7 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 
 ### A.3 服务端与消息（产品视角）
 
-- **接口 API**：Golang；对外 RESTful + RSQL（经 grpc-gateway，C2 决议）；查询代码 sqlc 生成（C9 决议）。
+- **接口 API**：Golang；各 module 注册 Huma REST/OpenAPI，列表使用显式 query 参数且不支持 RSQL；Goose 管 migration，Bun 管 ORM/查询/事务，各 module 独立拥有 SQL 与 Repository。
 - **消息**：NATS（WebSocket/TCP）仅 cloud/self-hosted 传输层（C3 决议）；desktop 进程内直连。
 
 ### A.4 machine 侧（产品视角）
@@ -1134,13 +1203,13 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 | **C8** | 命名 | **统一用 chaos.plus**（产品/引擎/品牌）；代码标识符用 `chaosplus` |
 | **R1** | v1 范围 | **软件开发楔子**：执行核 + software-dev 模板 + 最小 web UI（machine/agent 管理、聊天审批）；其余降 v2+（§1.4/§21）|
 | **C1** | 实例/项目关系 | 数据层一实例多项目；desktop UI 默认 1:1 简化呈现 |
-| **C2** | API 协议 | 内部 gRPC/ws；对外 grpc-gateway REST + RSQL；契约单源 `/schema` |
+| **C2** | API 协议 | 对外 Huma REST/OpenAPI + WebSocket；runner 传输用 NATS；显式 query 参数，不使用 RSQL/grpc-gateway |
 | **C3** | 消息中间件 | NATS 仅 cloud/self-hosted 传输层；desktop 进程内直连；事件日志唯一真相 |
 | **C4** | 前端框架 | Next.js + ShadCN + tailwindcss，静态导出由桌面壳承载 |
 | **C5** | 协作区/在线文件 | 需求/任务/缺陷/测试 = 工作流 artifact 视图（v2+）；OKR/绩效/洞察与在线编辑另议；在线文件 v2 先 artifact 预览 |
-| **C6** | 预览区 | runner 补端口转发/隧道能力（desktop=localhost，cloud=frp 类），v2+ |
+| **C6** | 预览区 | 自托管官方 FRP：生产独立 `frps` 官方镜像、runner 监管官方 `frpc`；IAM-aware Gateway 在公网入口，禁用 Cloudflare Tunnel，v2+ |
 | **C7** | 工作流可视化 | 遵循 P7：JSON 唯一真相，画布是投影；非 n8n 双向模式 |
-| **C9** | DB 工具链 | SQLite-first + 内置迁移；sqlc 生成查询（双方言）；goose 仅 cloud/Postgres |
+| **C9** | DB 工具链 | SQLite-first；所有环境 Goose migration + Bun ORM/查询/事务；module-owned SQL/Repository，不使用 sqlc |
 | **R4** | ICP | 多项目独立开发者 / 小团队技术负责人；旅程 J1–J10 为 v1 验收基线（§1.5）|
 | **市场** | §30 | 冻结，v2 再议 |
 | **X-1** | 双「唯一真相」矛盾 | `events` 表是全系统唯一真相；channel 日志为其投影，`channel_messages` 可删除重建（§9.1/§16）|
@@ -1248,10 +1317,10 @@ message ExecutorEvent { string spawn_id; oneof { HeartbeatTick, LogChunk, Exited
 message KillRequest   { string spawn_id; string signal; }  // 'TERM'(优雅,10s宽限)→'KILL'
 ```
 
-**ClientAPI（控制面 ↔ web/CLI；经 grpc-gateway 暴露 REST + RSQL）**
+**ClientAPI（控制面 ↔ web/CLI；Huma REST/OpenAPI + WebSocket，不使用 RSQL）**
 
 变更型：`Login / CreateProject / RegisterMachineBegin|Confirm|Cancel / CreateAgent / AgentAction(start|stop|restart|retire{normal|forced}) / SubmitWorkflow / StartRun / ApproveReview / RejectReview / PostMessage`。
-只读型（免 token，见 F.7）：`Get* / List* / Subscribe(stream Event)`（按 channel/run 订阅事件流）。
+只读型：`Get* / List* / Subscribe(stream Event)`（按 channel/run 订阅事件流）；生产环境同样必须通过可信会话与资源级授权。
 
 **RPC 幂等（C-10）**：所有变更型 RPC 必带 `client_request_id`（客户端生成 UUID）。服务端按 `(方法, client_request_id)` 去重：重复请求返回首次结果，不重复执行。该 id 同时进入平台域事件的 `idempotency_key`（§15.1）。
 
@@ -1362,7 +1431,7 @@ CREATE TABLE executors ( id TEXT PRIMARY KEY, instance_id TEXT, runtime TEXT,  -
 - Token 一律为**不透明随机 256-bit**，库中只存 SHA-256 hash；比对走 `tokens` 表。
 - **runner_bootstrap**：TTL 300s（§5.3.1）；确认后签发长期 **runner** token（轮换 = 新发旧废、24h 宽限期；吊销 = 置 `revoked_at`，连接即断）。
 - **session**：登录签发；desktop 首启创建本地账号（密码必设，email 可后补），本机回环地址默认放行只读。
-- **只读免 token 清单** = ClientAPI 的 `Get* / List* / Subscribe`；其余一律要求 `Authorization: Bearer`。
+- **鉴权默认拒绝**：生产环境的 `Get* / List* / Subscribe` 与变更接口都必须验证可信会话并执行资源级授权；仅 desktop profile 的 loopback 开发模式可显式启用受限的本地免鉴权，不得由 HTTP 方法隐式放行。
 
 ### F.8 执行器适配器目录契约（H-2）
 
@@ -1392,3 +1461,43 @@ CREATE TABLE executors ( id TEXT PRIMARY KEY, instance_id TEXT, runtime TEXT,  -
 
 - **相似度检测（H-7）**：比较对象 = 本 attempt 与上一 attempt 的 **produces 文件集**（路径并集），逐文件 SHA-256 判同异；`变化文件数 / 并集文件数 < 0.08` → `pause_for_human`。attempt=1 无基线，不触发。
 - **消息 payload（H-9）**：`channel_messages.payload_json = { kind: 'text'|'workflow_event'|'approval_card', text?, mentions: memberId[], ref?: { run_id, node_id, execution_id } }`。@mention 由客户端拾取器解析为 memberId 落库（不存显示名，无歧义）；审批卡片经 `ref` 关联 node_execution。工作流事件在 UI 按 run 聚合折叠：同一 run 的连续 `workflow_event` 消息合并为一条可展开的摘要消息（显示最新事件 + 计数）；审批卡片与 `pause_for_human` 事件永不折叠。
+
+### F.11 Preview Gateway / FRP Adapter
+
+**领域模型：** `Preview` 聚合拥有 `Hostname`、`Target`、`AccessPolicy`、`Lease` 和 `ShareCredential`。`machine_id`、`instance_id/entity_id` 与 `created_by` 创建后不可由客户端改写；任何状态迁移都校验当前版本与 lease epoch。
+
+**端口：**
+
+```go
+type IAMAuthorizer interface { Authorize(ctx context.Context, permission string, resource PreviewResource) error }
+type MachineRegistry interface { RequireOnline(ctx context.Context, machineID, entityID string) error }
+type TunnelProvider interface {
+    Provision(context.Context, TunnelSpec) (ProviderBinding, error)
+    Activate(context.Context, ProviderBinding) error
+    Suspend(context.Context, ProviderBinding) error
+    Revoke(context.Context, ProviderBinding) error
+    Status(context.Context, ProviderBinding) (ProviderStatus, error)
+}
+type AuditAppender interface { Append(context.Context, PreviewAuditEvent) error }
+```
+
+生产 `TunnelProvider` 只有官方 FRP adapter：server-ai 生成不可猜测的 proxy name/subdomain 和短期 provider credential；runner supervisor 写入 `0600` 配置、执行固定版本 `frpc verify`，再 start/reload。`frps` 使用固定版本官方镜像独立部署，开启 TLS、认证、Prometheus 与连接/带宽限制；公网 vhost 只允许 Preview Gateway 访问。FRP 配置和 token 不是业务状态权威，控制面数据库中的 lease/status/epoch 才是权威。
+
+**领域事件：** `PREVIEW_CREATED`、`PREVIEW_ACTIVATED`、`PREVIEW_OPENED`、`PREVIEW_DENIED`、`PREVIEW_SUSPENDED`、`PREVIEW_EXPIRED`、`PREVIEW_REVOKED`、`PREVIEW_RUNNER_OFFLINE`。事件至少包含 preview、instance/entity、machine、actor、outcome、epoch 和时间；不得包含分享 token、FRP token、完整敏感路径或正文。
+
+**权限：** `runner_preview.read`、`runner_preview.manage`、`runner_preview.share`。若这些权限尚未存在，只能通过 `apps/server` 现有 authz catalog/registrar 机制登记；不得在 server-ai 自造角色或信任 `X-Tenant`、`X-User`、`X-Role` 等客户端 header。
+
+**Given / When / Then 验收：**
+
+| 场景 | 验收标准 |
+|---|---|
+| HTTP/API | Given runner 仅监听 loopback，When 已授权用户打开 hostname，Then path/query/body/status/stream 正确透传且 IAM/控制面凭据不进入目标服务 |
+| WebSocket | Given 目标提供 WebSocket，When 浏览器升级并持续双向传输，Then upgrade、ping/pong、close code 和背压正确，长连接不阻塞控制通道 |
+| 目录 | Given root 内文件和指向 root 外的 symlink，When 请求两者，Then 普通文件可读且目录逃逸、dotfile、secret 与设备文件全部拒绝并审计 |
+| 授权 | Given 无会话、跨 tenant/entity 或权限不足，When 访问随机 hostname，Then 全部拒绝；hostname 不被当作认证因素 |
+| 分享 | Given 有 `runner_preview.share` 权限，When 创建限时分享并撤销，Then 凭据只以 hash 落库且撤销后在目标延迟内失效 |
+| 唯一性 | Given 并发创建，When hostname 唯一约束冲突，Then 服务端重试且无重复 hostname |
+| 生命周期 | Given active preview，When suspend/revoke/expire/machine offline，Then Gateway 立即停止新请求并在规定时间内终止或排空现有流 |
+| 恢复 | Given `frpc`/runner/Gateway/`frps` 任一重启，When lease 仍有效且 epoch 匹配，Then 自动恢复同一 hostname；旧 epoch 不得重放 |
+
+**非功能闸门：** 授权绕过测试必须为零；撤销 P95 生效时间不超过 5 秒；hostname 使用至少 128-bit CSPRNG 熵并有数据库唯一约束；HTTP streaming/WebSocket 不做全量缓冲；Gateway 与 FRP 双层限制连接数、速率、带宽和空闲时间；在目标发布前完成固定版本许可证、SBOM 与漏洞扫描。真实验收必须使用官方 `frps`/`frpc` 进程覆盖 HTTP、WebSocket、目录、拒绝、撤销、到期、掉线重连和限流，不接受 mock 代替端到端证据。

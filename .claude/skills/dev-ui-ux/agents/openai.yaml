@@ -1,0 +1,6 @@
+interface:
+  display_name: "Dev 界面与体验设计"
+  short_description: "设计、实现并深度评审产品界面与体验"
+  default_prompt: "使用 $dev-ui-ux 设计、实现并验证本次 UI/UX/UE 变更。"
+policy:
+  allow_implicit_invocation: true

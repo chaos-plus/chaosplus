@@ -1,63 +1,49 @@
 ---
 name: dev-frontend
-description: Develop, review, test, optimize, and deploy the Dev IAM administration frontend. Use for changes under apps/admin, React or TypeScript code, the Bun/Turborepo workspace, shared UI components, API clients, browser authentication, responsive behavior, accessibility, frontend tests, Nginx, or frontend containers.
+description: 开发、评审、测试、优化和部署 Dev 管理前端。涉及 React、TypeScript、Bun workspace、共享 UI、API client、浏览器认证、响应式、可访问性、前端测试、Nginx 或容器时必须使用。
 ---
 
-# Dev Frontend
+# Dev 前端开发
 
-Build a quiet, efficient IAM administration application on the repository's Bun, Turborepo, React, Vite, and shared UI stack.
+构建安静、高效、适合重复操作的管理应用，复用仓库现有 Bun、React、Vite 和共享 UI 体系。
 
-## Start With Repository Truth
+## 从仓库事实开始
 
-1. Run `python .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh` from the repository root.
-2. Read `../dev-quality-gate/references/repository-facts.md` and `references/lessons.md`.
-3. Inspect `apps/admin/package.json`, the affected app/package manifest, routing, API client, and nearby components.
-4. Confirm the backend operation in `/openapi.json` or backend source before coding against it.
+1. 运行 `python3 .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh`。
+2. 完整读取 `../dev-quality-gate/references/repository-facts.md` 和 `references/lessons.md`。
+3. 读取受影响 manifest、router、API client、相邻组件和真实后端 OpenAPI/source。
+4. 复制来的工程只提供框架结构，不提供当前业务合同；发现残留假设必须删除。
 
-The copied SevenLink project supplies framework and design-system structure, not mall business contracts. Remove copied assumptions instead of adapting IAM around them.
+## 保持前端边界
 
-## Preserve Workspace Boundaries
+- deployable app、共享 UI、页面组合、业务组件和 typed API client 各归其位。
+- 先复用现有 `@workspace/ui`、设计 token 和 Lucide，再评估新增依赖。
+- 全应用只保留一个 request 实现；开发和生产浏览器调用统一经同源 `/api` proxy。
+- `VITE_*` 是公开配置，严禁放 secret。
+- 前端只消费后端已验证的 IAM 契约，不自创 tenant/entity/principal 可信来源。
 
-- Keep the deployable application in `apps/admin/apps/web`.
-- Keep reusable primitives and design tokens in `apps/admin/packages/ui`; do not couple that package to IAM routes or API payloads.
-- Keep page composition in `apps/web/src/app`, reusable app components in `src/components`, and the typed backend client in `src/lib`.
-- Use existing `@workspace/ui` and Lucide components before adding dependencies.
-- Keep one API request implementation. Route development and production browser calls through `/api`, with credentials included and the prefix stripped by the proxy.
-- Do not place secrets in `VITE_*`; browser configuration is public.
+## 完成真实工作流
 
-## Implement Complete Operator Workflows
+- Cookie session、保护路由、return URL 校验、匿名/加载/错误态和 logout 必须完整。
+- tenant/entity 上下文可见、稳定且不暗示跨租户访问。
+- mutation 必须有 pending、success、validation、authorization、empty、retry 状态。
+- 操作型界面优先紧凑表格和表单，避免营销页式装饰、嵌套卡片和过度圆角。
+- 熟悉动作使用图标按钮，歧义动作带标签；具备可见 focus、语义 HTML、关联 label 和合理触控区域。
+- 桌面与移动端文字不得溢出，固定格式控件使用稳定尺寸，加载状态不得引起布局跳动。
 
-- Preserve Cookie session authentication, protected routes, return URL validation, anonymous/loading/error states, and explicit logout.
-- Make tenant context visible and stable. Future entity selection belongs beneath tenant context and must not imply cross-tenant access.
-- Represent mutations with pending, success, validation, authorization, empty, and retry states.
-- Use dense tables and forms suited to repeated IAM operations; avoid decorative landing-page composition.
-- Use icon buttons for familiar actions, labels for ambiguous actions, visible focus, semantic HTML, associated form labels, and 44px touch targets where practical.
-- Keep text within controls at desktop and mobile widths. Reserve fixed dimensions for navigation, toolbars, icon buttons, and tables so loading state does not shift layout.
-- Avoid nested cards, excessive rounding, one-hue screens, and explanatory feature prose in the application.
+## 验证真实行为
 
-## Test Real Behavior
+- API client 测试使用真实 TCP listener。
+- 认证、路由、Cookie、mutation 使用真实后端和浏览器。
+- 禁止 mock、fake、stub、fixture interception 和测试专用应用分支。
+- 同时验证失败 envelope 与非 2xx，不只验证成功 JSON。
+- 检查桌面/移动截图的溢出、重叠、不可读、空白和 focus。
+- lint warning 视为失败；构建后检查生产 bundle。
 
-- Use real `Bun.serve` TCP listeners for API-client tests.
-- Use a real backend and browser for authentication, route, Cookie, and mutation workflows.
-- Do not use mocks, fakes, stubs, intercepted fixtures, or test-only application branches.
-- Test failure envelopes and non-2xx statuses, not only successful JSON.
-- Inspect desktop and mobile screenshots for overflow, overlap, unreadable text, empty rendering, and focus behavior.
-- Treat lint warnings as failures and review production bundle size after build.
-
-## Verify And Learn
-
-Run:
+运行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope frontend
 ```
 
-The gate runs lint, typecheck, real tests, production build, forbidden-test-substitute scans, and deployment-file checks. Use `-Full` before release for browser/runtime checks configured by the repository.
-
-After fixing a verified recurring failure, append an evidence-backed lesson:
-
-```text
-python .claude/skills/dev-quality-gate/scripts/skill-runtime.py record --domain frontend --symptom "..." --cause "..." --prevention "..." --evidence "test, screenshot, or build output"
-```
-
-Do not teach the skill visual preferences from a single page or weaken checks to preserve copied code.
+发布前运行完整门禁。只有有复现和验证证据的通用失败才写入 `references/lessons.md`，严禁因单页偏好污染通用规则或降低检查。

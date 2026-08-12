@@ -6,6 +6,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -33,7 +34,7 @@ func (c *transactionCoordinator) Run(ctx context.Context, record *transactionRec
 		if err := mutate(repo); err != nil {
 			return err
 		}
-		if record.PolicyChanged {
+		if record.PolicyChanged && !record.TenantID.Zero() {
 			if err := repo.bumpPolicyRevision(ctx, record.TenantID); err != nil {
 				return err
 			}
@@ -45,15 +46,15 @@ func (c *transactionCoordinator) Run(ctx context.Context, record *transactionRec
 	})
 }
 
-func newAuditRecord(ctx context.Context, tenantID, eventType, targetType, targetID string) *transactionRecord {
+func newAuditRecord(ctx context.Context, tenantID guid.ID, eventType, targetType string, targetID guid.ID) *transactionRecord {
 	return &transactionRecord{Event: auditx.NewEvent(ctx, tenantID, eventType, targetType, targetID)}
 }
 
-func (r *Repository) bumpPolicyRevision(ctx context.Context, tenantID string) error {
+func (r *Repository) bumpPolicyRevision(ctx context.Context, tenantID guid.ID) error {
 	return policyx.Advance(ctx, r.executor, r.dialect, tenantID, r.now().UTC().UnixMilli())
 }
 
-func (r *Repository) policyRevision(ctx context.Context, tenantID string) (int64, error) {
+func (r *Repository) policyRevision(ctx context.Context, tenantID guid.ID) (int64, error) {
 	revision, err := policyx.Current(ctx, r.executor, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("get IAM policy revision: %w", err)

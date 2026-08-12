@@ -9,14 +9,15 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type departmentRow struct {
 	bun.BaseModel `bun:"table:iam_departments"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
-	ParentID      string
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
+	ParentID      guid.ID
 	Name          string
 	NameKey       string
 	Status        string
@@ -28,9 +29,9 @@ type departmentRow struct {
 
 type closureRow struct {
 	bun.BaseModel `bun:"table:iam_department_closure"`
-	TenantID      string `bun:"tenant_id,pk"`
-	AncestorID    string `bun:"ancestor_id,pk"`
-	DescendantID  string `bun:"descendant_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	AncestorID    guid.ID `bun:"ancestor_id,pk"`
+	DescendantID  guid.ID `bun:"descendant_id,pk"`
 	Depth         int
 }
 
@@ -55,7 +56,7 @@ func (r *Repository) withExecutor(executor bun.IDB) *Repository {
 	return &Repository{db: r.db, executor: executor, dialect: r.dialect}
 }
 
-func countRelationshipSubject(ctx context.Context, db bun.IDB, tenantID, subjectType, subjectID string) (int, error) {
+func countRelationshipSubject(ctx context.Context, db bun.IDB, tenantID guid.ID, subjectType string, subjectID guid.ID) (int, error) {
 	entityCount, err := db.NewSelect().Table("iam_relationships").
 		Where("tenant_id = ? AND subject_type = ? AND subject_id = ?", tenantID, subjectType, subjectID).
 		Count(ctx)
@@ -68,7 +69,7 @@ func countRelationshipSubject(ctx context.Context, db bun.IDB, tenantID, subject
 	return entityCount + resourceCount, err
 }
 
-func (r *Repository) list(ctx context.Context, tenantID string) ([]departmentRow, error) {
+func (r *Repository) list(ctx context.Context, tenantID guid.ID) ([]departmentRow, error) {
 	rows := make([]departmentRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list departments: %w", err)
@@ -76,7 +77,7 @@ func (r *Repository) list(ctx context.Context, tenantID string) ([]departmentRow
 	return rows, nil
 }
 
-func (r *Repository) get(ctx context.Context, tenantID, id string) (departmentRow, error) {
+func (r *Repository) get(ctx context.Context, tenantID, id guid.ID) (departmentRow, error) {
 	var row departmentRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -88,7 +89,7 @@ func (r *Repository) get(ctx context.Context, tenantID, id string) (departmentRo
 }
 
 func (r *Repository) insert(ctx context.Context, row *departmentRow) error {
-	if row.ParentID != "" {
+	if !row.ParentID.Zero() {
 		if _, err := r.get(ctx, row.TenantID, row.ParentID); err != nil {
 			return err
 		}
@@ -103,7 +104,7 @@ func (r *Repository) insert(ctx context.Context, row *departmentRow) error {
 	if _, err := r.executor.NewInsert().Model(&self).Exec(ctx); err != nil {
 		return fmt.Errorf("insert department self closure: %w", err)
 	}
-	if row.ParentID == "" {
+	if row.ParentID.Zero() {
 		return nil
 	}
 	ancestors, err := r.ancestors(ctx, row.TenantID, row.ParentID)
@@ -142,7 +143,7 @@ func (r *Repository) update(ctx context.Context, row *departmentRow, expectedVer
 	return nil
 }
 
-func (r *Repository) move(ctx context.Context, tenantID, id, parentID string) error {
+func (r *Repository) move(ctx context.Context, tenantID, id, parentID guid.ID) error {
 	subtree, err := r.descendants(ctx, tenantID, id)
 	if err != nil {
 		return err
@@ -151,11 +152,11 @@ func (r *Repository) move(ctx context.Context, tenantID, id, parentID string) er
 	if err != nil {
 		return err
 	}
-	subtreeIDs := make([]string, 0, len(subtree))
+	subtreeIDs := make([]guid.ID, 0, len(subtree))
 	for _, link := range subtree {
 		subtreeIDs = append(subtreeIDs, link.DescendantID)
 	}
-	oldAncestorIDs := make([]string, 0, len(oldAncestors))
+	oldAncestorIDs := make([]guid.ID, 0, len(oldAncestors))
 	for _, link := range oldAncestors {
 		if link.AncestorID != id {
 			oldAncestorIDs = append(oldAncestorIDs, link.AncestorID)
@@ -169,7 +170,7 @@ func (r *Repository) move(ctx context.Context, tenantID, id, parentID string) er
 			return fmt.Errorf("remove old department closures: %w", err)
 		}
 	}
-	if parentID == "" {
+	if parentID.Zero() {
 		return nil
 	}
 	newAncestors, err := r.ancestors(ctx, tenantID, parentID)
@@ -194,7 +195,7 @@ func (r *Repository) move(ctx context.Context, tenantID, id, parentID string) er
 	return nil
 }
 
-func (r *Repository) delete(ctx context.Context, tenantID, id string, version int64) error {
+func (r *Repository) delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
 	count, err := r.executor.NewSelect().Model((*departmentRow)(nil)).
 		Where("tenant_id = ? AND parent_id = ?", tenantID, id).Count(ctx)
 	if err != nil {
@@ -223,7 +224,7 @@ func (r *Repository) delete(ctx context.Context, tenantID, id string, version in
 	return nil
 }
 
-func (r *Repository) isDescendant(ctx context.Context, tenantID, ancestorID, descendantID string) (bool, error) {
+func (r *Repository) isDescendant(ctx context.Context, tenantID, ancestorID, descendantID guid.ID) (bool, error) {
 	count, err := r.executor.NewSelect().Model((*closureRow)(nil)).
 		Where("tenant_id = ? AND ancestor_id = ? AND descendant_id = ?", tenantID, ancestorID, descendantID).
 		Count(ctx)
@@ -233,7 +234,7 @@ func (r *Repository) isDescendant(ctx context.Context, tenantID, ancestorID, des
 	return count > 0, nil
 }
 
-func (r *Repository) ancestors(ctx context.Context, tenantID, descendantID string) ([]closureRow, error) {
+func (r *Repository) ancestors(ctx context.Context, tenantID, descendantID guid.ID) ([]closureRow, error) {
 	rows := make([]closureRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).
 		Where("tenant_id = ? AND descendant_id = ?", tenantID, descendantID).
@@ -243,7 +244,7 @@ func (r *Repository) ancestors(ctx context.Context, tenantID, descendantID strin
 	return rows, nil
 }
 
-func (r *Repository) descendants(ctx context.Context, tenantID, ancestorID string) ([]closureRow, error) {
+func (r *Repository) descendants(ctx context.Context, tenantID, ancestorID guid.ID) ([]closureRow, error) {
 	rows := make([]closureRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).
 		Where("tenant_id = ? AND ancestor_id = ?", tenantID, ancestorID).
@@ -254,7 +255,7 @@ func (r *Repository) descendants(ctx context.Context, tenantID, ancestorID strin
 }
 
 func orderDepartments(rows []departmentRow) ([]Department, error) {
-	children := make(map[string][]departmentRow, len(rows))
+	children := make(map[guid.ID][]departmentRow, len(rows))
 	for _, row := range rows {
 		children[row.ParentID] = append(children[row.ParentID], row)
 	}
@@ -271,9 +272,9 @@ func orderDepartments(rows []departmentRow) ([]Department, error) {
 		})
 	}
 	result := make([]Department, 0, len(rows))
-	visited := make(map[string]bool, len(rows))
-	var visit func(string, int)
-	visit = func(parentID string, depth int) {
+	visited := make(map[guid.ID]bool, len(rows))
+	var visit func(guid.ID, int)
+	visit = func(parentID guid.ID, depth int) {
 		for _, row := range children[parentID] {
 			if visited[row.ID] {
 				continue
@@ -283,7 +284,7 @@ func orderDepartments(rows []departmentRow) ([]Department, error) {
 			visit(row.ID, depth+1)
 		}
 	}
-	visit("", 0)
+	visit(0, 0)
 	if len(result) != len(rows) {
 		return nil, ErrHierarchyCorrupt
 	}

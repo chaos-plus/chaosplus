@@ -1,13 +1,13 @@
 -- +goose Up
 CREATE TABLE iam_passkey_users (
-    principal_id TEXT NOT NULL PRIMARY KEY REFERENCES iam_principals (id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL PRIMARY KEY REFERENCES iam_principals (id) ON DELETE CASCADE,
     user_handle TEXT NOT NULL UNIQUE,
     created_at BIGINT NOT NULL
 );
 
 CREATE TABLE iam_passkeys (
     id_hash TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     credential_ciphertext TEXT NOT NULL,
     sign_count BIGINT NOT NULL DEFAULT 0,
@@ -20,7 +20,7 @@ CREATE INDEX idx_iam_passkeys_principal ON iam_passkeys (principal_id, created_a
 CREATE TABLE iam_passkey_challenges (
     id_hash TEXT NOT NULL PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('registration', 'login')),
-    principal_id TEXT NOT NULL DEFAULT '',
+    principal_id BIGINT NOT NULL DEFAULT '',
     return_url TEXT NOT NULL DEFAULT '',
     session_data TEXT NOT NULL,
     created_at BIGINT NOT NULL,

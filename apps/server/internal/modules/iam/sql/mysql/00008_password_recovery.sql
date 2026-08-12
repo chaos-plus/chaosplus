@@ -6,7 +6,7 @@ ALTER TABLE iam_principals ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FA
 
 CREATE TABLE iam_password_recovery_tokens (
     token_hmac CHAR(64) NOT NULL PRIMARY KEY,
-    principal_id VARCHAR(255) NOT NULL,
+    principal_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NOT NULL DEFAULT 0,
@@ -15,7 +15,7 @@ CREATE TABLE iam_password_recovery_tokens (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_notification_outbox (
-    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    id BIGINT NOT NULL PRIMARY KEY,
     kind VARCHAR(64) NOT NULL,
     recipient VARCHAR(320) NOT NULL,
     payload_ciphertext TEXT NOT NULL,

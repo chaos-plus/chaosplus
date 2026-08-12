@@ -1,4 +1,6 @@
 interface:
-  display_name: "Dev Quality Gate"
-  short_description: "Route work and enforce repository quality"
-  default_prompt: "Use $dev-quality-gate to route this change and run every applicable gate."
+  display_name: "Dev 质量门禁"
+  short_description: "路由任务并执行全部适用质量门禁"
+  default_prompt: "使用 $dev-quality-gate 路由本次变更并运行全部适用门禁。"
+policy:
+  allow_implicit_invocation: true

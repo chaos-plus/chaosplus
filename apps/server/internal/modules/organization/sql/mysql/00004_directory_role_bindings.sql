@@ -1,8 +1,8 @@
 -- +goose Up
 CREATE TABLE iam_group_role_bindings (
-    tenant_id VARCHAR(128) NOT NULL,
-    role_id VARCHAR(32) NOT NULL,
-    group_id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    group_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, role_id, group_id),
     KEY idx_iam_group_role_bindings_group (tenant_id, group_id, role_id),
@@ -11,9 +11,9 @@ CREATE TABLE iam_group_role_bindings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_position_role_bindings (
-    tenant_id VARCHAR(128) NOT NULL,
-    role_id VARCHAR(32) NOT NULL,
-    position_id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    position_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, role_id, position_id),
     KEY idx_iam_position_role_bindings_position (tenant_id, position_id, role_id),

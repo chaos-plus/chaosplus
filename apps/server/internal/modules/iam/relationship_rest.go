@@ -8,6 +8,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/humax/respx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -107,7 +108,19 @@ func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registr
 		OperationID: "iam-list-relationships", Method: http.MethodGet, Path: "/iam/relationships",
 		Summary: "List tenant entity or business-resource relationship grants", Tags: []string{"iam"}, Errors: []int{http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "entity", Verb: "view"}, func(ctx context.Context, in *listRelationshipsInput) (*respx.Body[[]Relationship], error) {
-		items, err := svc.ListRelationships(ctx, in.TenantID, iamdomain.RelationshipFilter{EntityID: in.EntityID, ResourceType: in.ResourceType, ResourceID: in.ResourceID})
+		tenantID, err := requireID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		entityID, err := optionalID(in.EntityID)
+		if err != nil {
+			return nil, err
+		}
+		resourceID, err := optionalID(in.ResourceID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := svc.ListRelationships(ctx, tenantID, iamdomain.RelationshipFilter{EntityID: entityID, ResourceType: in.ResourceType, ResourceID: resourceID})
 		if err != nil {
 			return nil, apiError("list relationships", err)
 		}
@@ -118,7 +131,11 @@ func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registr
 		OperationID: "iam-put-relationship", Method: http.MethodPost, Path: "/iam/relationships",
 		Summary: "Create or update a constrained relationship grant", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "entity", Verb: "manage_binding"}, func(ctx context.Context, in *putRelationshipInput) (*respx.Body[Relationship], error) {
-		item, _, err := svc.PutRelationship(ctx, relationshipToDomain(in.TenantID, in.Body))
+		relationship, err := relationshipToDomain(in.TenantID, in.Body)
+		if err != nil {
+			return nil, err
+		}
+		item, _, err := svc.PutRelationship(ctx, relationship)
 		if err != nil {
 			return nil, apiError("put relationship", err)
 		}
@@ -129,9 +146,25 @@ func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registr
 		OperationID: "iam-delete-relationship", Method: http.MethodDelete, Path: "/iam/relationships",
 		Summary: "Revoke a relationship grant immediately", Tags: []string{"iam"}, Errors: []int{http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "entity", Verb: "manage_binding"}, func(ctx context.Context, in *deleteRelationshipInput) (*respx.Body[MutationResult], error) {
+		tenantID, err := requireID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		entityID, err := optionalID(in.EntityID)
+		if err != nil {
+			return nil, err
+		}
+		subjectID, err := requireID(in.SubjectID)
+		if err != nil {
+			return nil, err
+		}
+		resourceID, err := requireID(in.ResourceID)
+		if err != nil {
+			return nil, err
+		}
 		changed, err := svc.DeleteRelationship(ctx, iamdomain.Relationship{
-			TenantID: in.TenantID, EntityID: in.EntityID, SubjectType: in.SubjectType, SubjectID: in.SubjectID, SubjectRelation: in.SubjectRelation,
-			Relation: in.Relation, ResourceType: in.ResourceType, ResourceID: in.ResourceID,
+			TenantID: tenantID, EntityID: entityID, SubjectType: in.SubjectType, SubjectID: subjectID, SubjectRelation: in.SubjectRelation,
+			Relation: in.Relation, ResourceType: in.ResourceType, ResourceID: resourceID,
 		})
 		if err != nil {
 			return nil, apiError("delete relationship", err)
@@ -144,11 +177,27 @@ func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registr
 		Summary: "Check an entity or business-resource authorization decision", Tags: []string{"iam"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity},
 	}, authz.Guard{Resource: "role", Verb: "view"}, func(ctx context.Context, in *authorizationCheckInput) (*respx.Body[AuthorizationDecision], error) {
 		var explanation authz.Explanation
-		var err error
+		tenantID, err := requireID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		entityID, err := requireID(in.Body.EntityID)
+		if err != nil {
+			return nil, err
+		}
+		subject, err := requireID(in.Body.Subject)
+		if err != nil {
+			return nil, err
+		}
 		if in.Body.ResourceType != "" || in.Body.ResourceID != "" {
-			explanation, err = svc.CheckResourceAuthorization(ctx, in.TenantID, in.Body.EntityID, in.Body.ResourceType, in.Body.ResourceID, in.Body.PermissionCode, in.Body.Subject)
+			var resourceID guid.ID
+			resourceID, err = requireID(in.Body.ResourceID)
+			if err != nil {
+				return nil, err
+			}
+			explanation, err = svc.CheckResourceAuthorization(ctx, tenantID, entityID, in.Body.ResourceType, resourceID, in.Body.PermissionCode, subject)
 		} else {
-			explanation, err = svc.CheckEntityAuthorization(ctx, in.TenantID, in.Body.EntityID, in.Body.PermissionCode, in.Body.Subject)
+			explanation, err = svc.CheckEntityAuthorization(ctx, tenantID, entityID, in.Body.PermissionCode, subject)
 		}
 		if err != nil {
 			return nil, apiError("check entity authorization", err)
@@ -157,17 +206,33 @@ func registerRelationshipREST(a huma.API, svc *Service, registrar *authz.Registr
 	})
 }
 
-func relationshipToDomain(tenantID string, fields relationshipFields) iamdomain.Relationship {
-	return iamdomain.Relationship{
-		TenantID: tenantID, EntityID: fields.EntityID, SubjectType: fields.SubjectType, SubjectID: fields.SubjectID, SubjectRelation: fields.SubjectRelation,
-		Relation: fields.Relation, ResourceType: fields.ResourceType, ResourceID: fields.ResourceID, StartsAt: fields.StartsAt, EndsAt: fields.EndsAt, Condition: json.RawMessage(fields.Condition),
+func relationshipToDomain(tenantIDValue string, fields relationshipFields) (iamdomain.Relationship, error) {
+	tenantID, err := requireID(tenantIDValue)
+	if err != nil {
+		return iamdomain.Relationship{}, err
 	}
+	entityID, err := optionalID(fields.EntityID)
+	if err != nil {
+		return iamdomain.Relationship{}, err
+	}
+	subjectID, err := requireID(fields.SubjectID)
+	if err != nil {
+		return iamdomain.Relationship{}, err
+	}
+	resourceID, err := requireID(fields.ResourceID)
+	if err != nil {
+		return iamdomain.Relationship{}, err
+	}
+	return iamdomain.Relationship{
+		TenantID: tenantID, EntityID: entityID, SubjectType: fields.SubjectType, SubjectID: subjectID, SubjectRelation: fields.SubjectRelation,
+		Relation: fields.Relation, ResourceType: fields.ResourceType, ResourceID: resourceID, StartsAt: fields.StartsAt, EndsAt: fields.EndsAt, Condition: json.RawMessage(fields.Condition),
+	}, nil
 }
 
 func relationshipFromDomain(item iamdomain.Relationship) Relationship {
 	return Relationship{
-		EntityID: item.EntityID, SubjectType: item.SubjectType, SubjectID: item.SubjectID, SubjectRelation: item.SubjectRelation,
-		Relation: item.Relation, ResourceType: item.ResourceType, ResourceID: item.ResourceID,
+		EntityID: item.EntityID.String(), SubjectType: item.SubjectType, SubjectID: item.SubjectID.String(), SubjectRelation: item.SubjectRelation,
+		Relation: item.Relation, ResourceType: item.ResourceType, ResourceID: item.ResourceID.String(),
 		StartsAt: item.StartsAt, EndsAt: item.EndsAt, Condition: policyCondition(item.Condition), CreatedAt: item.CreatedAt,
 	}
 }

@@ -1,6 +1,6 @@
 -- +goose Up
 CREATE TABLE iam_passkey_users (
-    principal_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    principal_id BIGINT NOT NULL PRIMARY KEY,
     user_handle VARCHAR(86) NOT NULL UNIQUE,
     created_at BIGINT NOT NULL,
     CONSTRAINT fk_iam_passkey_users_principal FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE
@@ -8,7 +8,7 @@ CREATE TABLE iam_passkey_users (
 
 CREATE TABLE iam_passkeys (
     id_hash CHAR(64) NOT NULL PRIMARY KEY,
-    principal_id VARCHAR(255) NOT NULL,
+    principal_id BIGINT NOT NULL,
     name VARCHAR(200) NOT NULL,
     credential_ciphertext TEXT NOT NULL,
     sign_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -22,7 +22,7 @@ CREATE TABLE iam_passkeys (
 CREATE TABLE iam_passkey_challenges (
     id_hash CHAR(64) NOT NULL PRIMARY KEY,
     kind VARCHAR(16) NOT NULL,
-    principal_id VARCHAR(255) NOT NULL DEFAULT '',
+    principal_id BIGINT NOT NULL DEFAULT '',
     return_url VARCHAR(2048) NOT NULL DEFAULT '',
     session_data TEXT NOT NULL,
     created_at BIGINT NOT NULL,

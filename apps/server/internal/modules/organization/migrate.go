@@ -2,11 +2,8 @@ package organization
 
 import (
 	"context"
-	"database/sql"
 	"embed"
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/goosex"
 	"github.com/uptrace/bun"
@@ -22,28 +19,7 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	if err := goosex.Run(ctx, db.DB, migrationsFS, db.Dialect().Name().String(), "goose_organization"); err != nil {
 		return err
 	}
-	return backfillLegacyTenants(ctx, db)
-}
-
-func backfillLegacyTenants(ctx context.Context, db *bun.DB) error {
-	ids := make([]string, 0)
-	if err := db.NewSelect().Table("iam_tenant_members").Column("tenant_id").Distinct().Scan(ctx, &ids); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || missingTable(err) {
-			return nil
-		}
-		return fmt.Errorf("list legacy tenant ids: %w", err)
-	}
-	for _, id := range ids {
-		if err := EnsureTenant(ctx, db, id); err != nil {
-			return fmt.Errorf("backfill legacy tenant %q: %w", id, err)
-		}
-	}
 	return nil
-}
-
-func missingTable(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such table") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "does not exist")
 }
 
 func MigrateDown(ctx context.Context, db *bun.DB) error {

@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type roleRow struct {
 	bun.BaseModel `bun:"table:iam_roles"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
 	Name          string
 	Description   string
 	CreatedAt     int64
@@ -25,24 +25,24 @@ type roleRow struct {
 
 type permissionRow struct {
 	bun.BaseModel  `bun:"table:iam_role_permissions"`
-	TenantID       string `bun:"tenant_id,pk"`
-	RoleID         string `bun:"role_id,pk"`
-	PermissionCode string `bun:"permission_code,pk"`
-	ConditionJSON  string `bun:"condition_json"`
+	TenantID       guid.ID `bun:"tenant_id,pk"`
+	RoleID         guid.ID `bun:"role_id,pk"`
+	PermissionCode string  `bun:"permission_code,pk"`
+	ConditionJSON  string  `bun:"condition_json"`
 	CreatedAt      int64
 }
 
 type memberRow struct {
 	bun.BaseModel `bun:"table:iam_role_members"`
-	TenantID      string `bun:"tenant_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
-	UserSubject   string `bun:"user_subject,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	CreatedAt     int64
 }
 
 type platformAdministratorRow struct {
 	bun.BaseModel `bun:"table:iam_platform_administrators"`
-	PrincipalID   string `bun:"principal_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	CreatedAt     int64
 }
 
@@ -82,7 +82,7 @@ func (r *Repository) runInTx(ctx context.Context, fn func(context.Context, bun.I
 	})
 }
 
-func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description string) (Role, error) {
+func (r *Repository) CreateRole(ctx context.Context, tenantID guid.ID, name, description string) (Role, error) {
 	id, err := r.nextID()
 	if err != nil {
 		return Role{}, fmt.Errorf("generate role id: %w", err)
@@ -100,9 +100,8 @@ func (r *Repository) CreateRole(ctx context.Context, tenantID, name, description
 
 // GrantPlatformAdministrator idempotently grants the built-in platform role.
 // Platform permissions are deliberately not stored in tenant role tables.
-func (r *Repository) GrantPlatformAdministrator(ctx context.Context, principalID string) (bool, error) {
-	principalID = strings.TrimSpace(principalID)
-	if principalID == "" || len(principalID) > 64 {
+func (r *Repository) GrantPlatformAdministrator(ctx context.Context, principalID guid.ID) (bool, error) {
+	if principalID.Zero() {
 		return false, fmt.Errorf("invalid platform administrator principal")
 	}
 	row := platformAdministratorRow{PrincipalID: principalID, CreatedAt: r.now().UTC().UnixMilli()}
@@ -114,7 +113,7 @@ func (r *Repository) GrantPlatformAdministrator(ctx context.Context, principalID
 	return affected > 0, nil
 }
 
-func (r *Repository) ListRoles(ctx context.Context, tenantID string) ([]Role, error) {
+func (r *Repository) ListRoles(ctx context.Context, tenantID guid.ID) ([]Role, error) {
 	var rows []roleRow
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("name ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list roles: %w", err)
@@ -126,7 +125,7 @@ func (r *Repository) ListRoles(ctx context.Context, tenantID string) ([]Role, er
 	return roles, nil
 }
 
-func (r *Repository) GetRole(ctx context.Context, tenantID, roleID string) (Role, error) {
+func (r *Repository) GetRole(ctx context.Context, tenantID, roleID guid.ID) (Role, error) {
 	row, err := getRoleRow(ctx, r.executor, tenantID, roleID)
 	if err != nil {
 		return Role{}, err
@@ -134,7 +133,7 @@ func (r *Repository) GetRole(ctx context.Context, tenantID, roleID string) (Role
 	return roleFromRow(row), nil
 }
 
-func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID, name, description string) (Role, error) {
+func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID guid.ID, name, description string) (Role, error) {
 	now := r.now().UTC().UnixMilli()
 	result, err := r.executor.NewUpdate().Model((*roleRow)(nil)).
 		Set("name = ?", name).
@@ -154,7 +153,7 @@ func (r *Repository) UpdateRole(ctx context.Context, tenantID, roleID, name, des
 	return r.GetRole(ctx, tenantID, roleID)
 }
 
-func (r *Repository) DeleteRole(ctx context.Context, tenantID, roleID string) error {
+func (r *Repository) DeleteRole(ctx context.Context, tenantID, roleID guid.ID) error {
 	return r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
 			return err
@@ -178,15 +177,15 @@ func (r *Repository) DeleteRole(ctx context.Context, tenantID, roleID string) er
 	})
 }
 
-func (r *Repository) GrantPermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
+func (r *Repository) GrantPermission(ctx context.Context, tenantID, roleID guid.ID, code string) (bool, error) {
 	return r.changePermission(ctx, tenantID, roleID, code, true)
 }
 
-func (r *Repository) RevokePermission(ctx context.Context, tenantID, roleID, code string) (bool, error) {
+func (r *Repository) RevokePermission(ctx context.Context, tenantID, roleID guid.ID, code string) (bool, error) {
 	return r.changePermission(ctx, tenantID, roleID, code, false)
 }
 
-func (r *Repository) changePermission(ctx context.Context, tenantID, roleID, code string, grant bool) (bool, error) {
+func (r *Repository) changePermission(ctx context.Context, tenantID, roleID guid.ID, code string, grant bool) (bool, error) {
 	var changed bool
 	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
@@ -216,7 +215,7 @@ func (r *Repository) changePermission(ctx context.Context, tenantID, roleID, cod
 	return changed, err
 }
 
-func (r *Repository) ListPermissions(ctx context.Context, tenantID, roleID string) ([]string, error) {
+func (r *Repository) ListPermissions(ctx context.Context, tenantID, roleID guid.ID) ([]string, error) {
 	grants, err := r.ListPermissionGrants(ctx, tenantID, roleID)
 	if err != nil {
 		return nil, err
@@ -228,7 +227,7 @@ func (r *Repository) ListPermissions(ctx context.Context, tenantID, roleID strin
 	return codes, nil
 }
 
-func (r *Repository) ListPermissionGrants(ctx context.Context, tenantID, roleID string) ([]RolePermissionGrant, error) {
+func (r *Repository) ListPermissionGrants(ctx context.Context, tenantID, roleID guid.ID) ([]RolePermissionGrant, error) {
 	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
 		return nil, err
 	}
@@ -243,7 +242,7 @@ func (r *Repository) ListPermissionGrants(ctx context.Context, tenantID, roleID 
 	return grants, nil
 }
 
-func (r *Repository) SetPermissionCondition(ctx context.Context, tenantID, roleID, code string, condition json.RawMessage) (RolePermissionGrant, bool, error) {
+func (r *Repository) SetPermissionCondition(ctx context.Context, tenantID, roleID guid.ID, code string, condition json.RawMessage) (RolePermissionGrant, bool, error) {
 	var grant RolePermissionGrant
 	var changed bool
 	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
@@ -280,15 +279,15 @@ func rolePermissionGrantFromRow(row permissionRow) RolePermissionGrant {
 	return RolePermissionGrant{PermissionCode: row.PermissionCode, Condition: condition, CreatedAt: time.UnixMilli(row.CreatedAt).UTC()}
 }
 
-func (r *Repository) AddMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return r.changeMember(ctx, tenantID, roleID, subject, true)
+func (r *Repository) AddMember(ctx context.Context, tenantID, roleID, principalID guid.ID) (bool, error) {
+	return r.changeMember(ctx, tenantID, roleID, principalID, true)
 }
 
-func (r *Repository) RemoveMember(ctx context.Context, tenantID, roleID, subject string) (bool, error) {
-	return r.changeMember(ctx, tenantID, roleID, subject, false)
+func (r *Repository) RemoveMember(ctx context.Context, tenantID, roleID, principalID guid.ID) (bool, error) {
+	return r.changeMember(ctx, tenantID, roleID, principalID, false)
 }
 
-func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject string, add bool) (bool, error) {
+func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, principalID guid.ID, add bool) (bool, error) {
 	var changed bool
 	err := r.runInTx(ctx, func(ctx context.Context, tx bun.IDB) error {
 		if err := ensureRole(ctx, tx, tenantID, roleID); err != nil {
@@ -296,7 +295,7 @@ func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject
 		}
 		now := r.now().UTC().UnixMilli()
 		if add {
-			row := memberRow{TenantID: tenantID, RoleID: roleID, UserSubject: subject, CreatedAt: now}
+			row := memberRow{TenantID: tenantID, RoleID: roleID, PrincipalID: principalID, CreatedAt: now}
 			result, err := tx.NewInsert().Model(&row).Ignore().Exec(ctx)
 			if err != nil {
 				return fmt.Errorf("insert role member: %w", err)
@@ -305,7 +304,7 @@ func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject
 				changed = true
 			}
 		} else {
-			result, err := tx.NewDelete().Model((*memberRow)(nil)).Where("tenant_id = ? AND role_id = ? AND user_subject = ?", tenantID, roleID, subject).Exec(ctx)
+			result, err := tx.NewDelete().Model((*memberRow)(nil)).Where("tenant_id = ? AND role_id = ? AND principal_id = ?", tenantID, roleID, principalID).Exec(ctx)
 			if err != nil {
 				return fmt.Errorf("delete role member: %w", err)
 			}
@@ -318,18 +317,18 @@ func (r *Repository) changeMember(ctx context.Context, tenantID, roleID, subject
 	return changed, err
 }
 
-func (r *Repository) ListMembers(ctx context.Context, tenantID, roleID string) ([]string, error) {
+func (r *Repository) ListMembers(ctx context.Context, tenantID, roleID guid.ID) ([]guid.ID, error) {
 	if err := ensureRole(ctx, r.executor, tenantID, roleID); err != nil {
 		return nil, err
 	}
-	subjects := make([]string, 0)
-	if err := r.executor.NewSelect().Model((*memberRow)(nil)).Column("user_subject").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("user_subject ASC").Scan(ctx, &subjects); err != nil {
+	subjects := make([]guid.ID, 0)
+	if err := r.executor.NewSelect().Model((*memberRow)(nil)).Column("principal_id").Where("tenant_id = ? AND role_id = ?", tenantID, roleID).Order("principal_id ASC").Scan(ctx, &subjects); err != nil {
 		return nil, fmt.Errorf("list role members: %w", err)
 	}
 	return subjects, nil
 }
 
-func getRoleRow(ctx context.Context, db bun.IDB, tenantID, roleID string) (roleRow, error) {
+func getRoleRow(ctx context.Context, db bun.IDB, tenantID, roleID guid.ID) (roleRow, error) {
 	var row roleRow
 	if err := db.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, roleID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -340,7 +339,7 @@ func getRoleRow(ctx context.Context, db bun.IDB, tenantID, roleID string) (roleR
 	return row, nil
 }
 
-func ensureRole(ctx context.Context, db bun.IDB, tenantID, roleID string) error {
+func ensureRole(ctx context.Context, db bun.IDB, tenantID, roleID guid.ID) error {
 	_, err := getRoleRow(ctx, db, tenantID, roleID)
 	return err
 }

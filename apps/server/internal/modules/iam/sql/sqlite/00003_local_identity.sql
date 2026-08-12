@@ -1,8 +1,7 @@
 -- +goose Up
-DROP TABLE IF EXISTS authz_outbox;
 
 CREATE TABLE iam_principals (
-    id TEXT NOT NULL PRIMARY KEY,
+    id BIGINT NOT NULL PRIMARY KEY,
     login_name TEXT NOT NULL UNIQUE,
     email TEXT NOT NULL DEFAULT '',
     display_name TEXT NOT NULL,
@@ -14,7 +13,7 @@ CREATE TABLE iam_principals (
 CREATE INDEX idx_iam_principals_email ON iam_principals (email);
 
 CREATE TABLE iam_credentials (
-    principal_id TEXT NOT NULL PRIMARY KEY,
+    principal_id BIGINT NOT NULL PRIMARY KEY,
     password_hash TEXT NOT NULL,
     totp_secret TEXT NOT NULL DEFAULT '',
     mfa_required INTEGER NOT NULL DEFAULT 0,
@@ -27,7 +26,7 @@ CREATE TABLE iam_credentials (
 
 CREATE TABLE iam_sessions (
     id_hash TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     last_seen_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
@@ -42,8 +41,8 @@ CREATE INDEX idx_iam_sessions_principal ON iam_sessions (principal_id, revoked_a
 CREATE TABLE iam_refresh_tokens (
     id_hash TEXT NOT NULL PRIMARY KEY,
     family_id TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    client_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
+    client_id BIGINT NOT NULL,
     scope TEXT NOT NULL DEFAULT '',
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
@@ -54,8 +53,8 @@ CREATE TABLE iam_refresh_tokens (
 CREATE INDEX idx_iam_refresh_family ON iam_refresh_tokens (family_id, revoked_at);
 
 CREATE TABLE iam_oauth_clients (
-    id TEXT NOT NULL PRIMARY KEY,
-	tenant_id TEXT NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+	tenant_id BIGINT NOT NULL,
     secret_hash TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     redirect_uris TEXT NOT NULL DEFAULT '[]',
@@ -70,8 +69,8 @@ CREATE INDEX idx_iam_oauth_clients_tenant ON iam_oauth_clients (tenant_id, statu
 
 CREATE TABLE iam_oauth_codes (
     code_hash TEXT NOT NULL PRIMARY KEY,
-    client_id TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
+    client_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
     redirect_uri TEXT NOT NULL,
     scope TEXT NOT NULL,
     code_challenge TEXT NOT NULL,
@@ -83,10 +82,23 @@ CREATE TABLE iam_oauth_codes (
     FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE
 );
 
+CREATE TABLE iam_oauth_consents (
+    principal_id INTEGER NOT NULL,
+    client_id    INTEGER NOT NULL,
+    tenant_id    INTEGER NOT NULL,
+    scope        TEXT NOT NULL DEFAULT '',
+    created_at   BIGINT NOT NULL,
+    last_used_at BIGINT NOT NULL,
+    PRIMARY KEY (principal_id, client_id),
+    FOREIGN KEY (principal_id) REFERENCES iam_principals (id) ON DELETE CASCADE,
+    FOREIGN KEY (client_id) REFERENCES iam_oauth_clients (id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id) REFERENCES iam_tenants (id) ON DELETE CASCADE
+);
+
 CREATE TABLE iam_entities (
-    tenant_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    parent_id TEXT NULL,
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
+    parent_id BIGINT NULL,
     type TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
@@ -100,11 +112,11 @@ CREATE TABLE iam_entities (
 CREATE INDEX idx_iam_entities_tree ON iam_entities (tenant_id, parent_id, type, status);
 
 CREATE TABLE iam_role_bindings (
-    tenant_id TEXT NOT NULL,
-    role_id TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
     scope_type TEXT NOT NULL DEFAULT 'tenant',
-    scope_id TEXT NOT NULL,
+    scope_id BIGINT NOT NULL,
     effect TEXT NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow', 'deny')),
     expires_at BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL,
@@ -114,12 +126,12 @@ CREATE TABLE iam_role_bindings (
 CREATE INDEX idx_iam_role_bindings_subject ON iam_role_bindings (tenant_id, principal_id, scope_type, scope_id, expires_at);
 
 CREATE TABLE iam_audit_events (
-    id TEXT NOT NULL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT '',
-    principal_id TEXT NOT NULL DEFAULT '',
+    id BIGINT NOT NULL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL DEFAULT '',
+    principal_id BIGINT NOT NULL DEFAULT '',
     event_type TEXT NOT NULL,
     target_type TEXT NOT NULL DEFAULT '',
-    target_id TEXT NOT NULL DEFAULT '',
+    target_id BIGINT NOT NULL DEFAULT '',
     outcome TEXT NOT NULL,
     ip_address TEXT NOT NULL DEFAULT '',
     user_agent TEXT NOT NULL DEFAULT '',
@@ -133,6 +145,7 @@ CREATE INDEX idx_iam_audit_principal_time ON iam_audit_events (principal_id, cre
 DROP TABLE iam_audit_events;
 DROP TABLE iam_role_bindings;
 DROP TABLE iam_entities;
+DROP TABLE iam_oauth_consents;
 DROP TABLE iam_oauth_codes;
 DROP TABLE iam_oauth_clients;
 DROP TABLE iam_refresh_tokens;

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
@@ -75,10 +76,10 @@ func TestSCIMInputNormalizationAndETags(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidSCIM)
 	}
 
-	group, members, err := normalizeGroupInput(GroupInput{Schemas: []string{GroupSchema}, DisplayName: " Team ", Members: []SCIMGroupMember{{Value: "one"}, {Value: "one"}, {Value: "two"}}})
+	group, members, err := normalizeGroupInput(GroupInput{Schemas: []string{GroupSchema}, DisplayName: " Team ", Members: []SCIMGroupMember{{Value: wireID("one")}, {Value: wireID("one")}, {Value: wireID("two")}}})
 	require.NoError(t, err)
 	assert.Equal(t, "Team", group.DisplayName)
-	assert.Equal(t, []string{"one", "two"}, members)
+	assert.Equal(t, []guid.ID{testID("one"), testID("two")}, members)
 	assert.Len(t, group.Members, 2)
 	_, _, err = normalizeGroupInput(GroupInput{Schemas: []string{GroupSchema}, DisplayName: ""})
 	assert.ErrorIs(t, err, ErrInvalidSCIM)

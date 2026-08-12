@@ -36,9 +36,9 @@ func TestFederationDomainConstantsAndErrors(t *testing.T) {
 
 func TestProviderJSONRoundTrip(t *testing.T) {
 	provider := Provider{
-		ID: "p1", TenantID: "tenant-a", Name: "GitLab", ProviderType: ProviderOIDC,
+		ID: testID("p1"), TenantID: testID("tenant-a"), Name: "GitLab", ProviderType: ProviderOIDC,
 		Issuer: "https://gitlab.example", ClientID: "app", ClientSecretSet: true,
-		Scopes: defaultScopes, AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		Scopes: defaultScopes, AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 		CreatedAt: time.UnixMilli(1700000000000).UTC(), UpdatedAt: time.UnixMilli(1700000001000).UTC(),
 	}
 	encoded, err := json.Marshal(provider)

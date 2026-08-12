@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_identity_providers (
-    id TEXT NOT NULL PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     provider_type TEXT NOT NULL DEFAULT 'oidc',
     issuer TEXT NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE iam_identity_providers (
     client_secret_ciphertext TEXT NOT NULL DEFAULT '',
     scopes TEXT NOT NULL DEFAULT 'openid profile email',
     auto_provision INTEGER NOT NULL DEFAULT 1,
-    default_role_id TEXT NOT NULL DEFAULT '',
+    default_role_id BIGINT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
@@ -18,9 +18,9 @@ CREATE TABLE iam_identity_providers (
 CREATE INDEX idx_iam_identity_providers_tenant ON iam_identity_providers (tenant_id, status, name);
 
 CREATE TABLE iam_identity_links (
-    provider_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
+    provider_id BIGINT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
     external_subject TEXT NOT NULL,
     email TEXT NOT NULL DEFAULT '',
     display_name TEXT NOT NULL DEFAULT '',

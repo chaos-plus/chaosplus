@@ -1,28 +1,29 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { DragEvent } from "react";
+import { Bot, CircleDot, FileText, GitBranch, Globe, Package, Play, Repeat, Users, Workflow, Zap, type LucideIcon } from "lucide-react";
 
 export interface NodeTemplate {
   type: string;
   label: string;
-  icon: string;
+  icon: LucideIcon;
   defaults: Record<string, unknown>;
 }
 
 export const DEV_NODES: NodeTemplate[] = [
-  { type: "agent",           label: "Agent",         icon: "\u{1F9E0}", defaults: { agent: { id: "", role: "", executor: "claude", systemPrompt: "" } } },
-  { type: "group",           label: "Group/Subgraph",icon: "\u{1F4E6}", defaults: { group: { entry: "", nodes: [], edges: [] } } },
-  { type: "condition",       label: "Condition",     icon: "\u{1F500}", defaults: { condition: { expr: {} } } },
-  { type: "transform",       label: "Transform",     icon: "⚡",     defaults: { transform: { expr: {}, output: "" } } },
-  { type: "loop",            label: "Loop",          icon: "\u{1F504}", defaults: { loop: { bodyEntry: "", condition: {}, maxIterations: 10 } } },
-  { type: "parallel_fork",   label: "Parallel Fork", icon: "⑃",     defaults: { fanOut: { itemsExpr: {}, templateNodeId: "" } } },
-  { type: "join",            label: "Join",          icon: "⏺",     defaults: {} },
-  { type: "human_approval",  label: "Approval",      icon: "\u{1F465}", defaults: { humanApproval: { approvers: "any_human", timeoutMs: 600000, onTimeout: "pause", onReject: "pause" } } },
+  { type: "agent",           label: "Agent",         icon: Bot,       defaults: { agent: { id: "", role: "", executor: "claude", systemPrompt: "" } } },
+  { type: "group",           label: "Group/Subgraph",icon: Package,   defaults: { group: { entry: "", nodes: [], edges: [] } } },
+  { type: "condition",       label: "Condition",     icon: GitBranch, defaults: { condition: { expr: {} } } },
+  { type: "transform",       label: "Transform",     icon: Zap,       defaults: { transform: { expr: {}, output: "" } } },
+  { type: "loop",            label: "Loop",          icon: Repeat,    defaults: { loop: { bodyEntry: "", condition: {}, maxIterations: 10 } } },
+  { type: "parallel_fork",   label: "Parallel Fork", icon: Workflow,  defaults: { fanOut: { itemsExpr: {}, templateNodeId: "" } } },
+  { type: "join",            label: "Join",          icon: CircleDot, defaults: {} },
+  { type: "human_approval",  label: "Approval",      icon: Users,     defaults: { humanApproval: { approvers: "any_human", timeoutMs: 600000, onTimeout: "pause", onReject: "pause" } } },
 ];
 
 export const AUTO_NODES: NodeTemplate[] = [
-  { type: "script",          label: "Script",        icon: "\u{1F4DC}", defaults: { agent: { id: "", role: "", executor: "script", systemPrompt: "" } } },
-  { type: "http",            label: "HTTP Request",  icon: "\u{1F310}", defaults: { agent: { id: "", role: "", executor: "http", systemPrompt: "" } } },
-  { type: "trigger",         label: "Trigger",       icon: "▶️", defaults: { trigger: { source: "manual" } } },
+  { type: "script",          label: "Script",        icon: FileText, defaults: { agent: { id: "", role: "", executor: "script", systemPrompt: "" } } },
+  { type: "http",            label: "HTTP Request",  icon: Globe,    defaults: { agent: { id: "", role: "", executor: "http", systemPrompt: "" } } },
+  { type: "trigger",         label: "Trigger",       icon: Play,     defaults: { trigger: { source: "manual" } } },
 ];
 
 const ALL_NODES = [...DEV_NODES, ...AUTO_NODES];
@@ -44,7 +45,7 @@ export function NodeLibrary() {
           onDragStart={(e) => onDragStart(e, n)}
           className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm cursor-grab hover:bg-accent active:cursor-grabbing"
         >
-          <span className="text-base">{n.icon}</span>
+          <n.icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span>{n.label}</span>
         </div>
       ))}
@@ -56,7 +57,7 @@ export function NodeLibrary() {
           onDragStart={(e) => onDragStart(e, n)}
           className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm cursor-grab hover:bg-accent active:cursor-grabbing"
         >
-          <span className="text-base">{n.icon}</span>
+          <n.icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span>{n.label}</span>
         </div>
       ))}

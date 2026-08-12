@@ -42,9 +42,9 @@ func newFederationEnvironment(t *testing.T) *federationEnvironment {
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	require.NoError(t, organization.Migrate(t.Context(), db))
 	require.NoError(t, Migrate(t.Context(), db))
-	require.NoError(t, organization.EnsureTenant(t.Context(), db, "tenant-a"))
+	require.NoError(t, organization.EnsureTenant(t.Context(), db, testID("tenant-a")))
 
-	auditService := auditmod.NewService(db)
+	auditService := auditmod.NewService(db, newTestIDGenerator())
 	appendAudit := func(ctx context.Context, executor bun.IDB, event auditx.Event) error {
 		_, err := auditService.AppendTo(ctx, executor, auditmod.EventInput{
 			TenantID: event.TenantID, PrincipalID: event.PrincipalID, EventType: event.EventType,
@@ -52,7 +52,7 @@ func newFederationEnvironment(t *testing.T) *federationEnvironment {
 		})
 		return err
 	}
-	identities := identitymod.NewService(db, appendAudit, iam.NewAdministratorGuard())
+	identities := identitymod.NewService(db, appendAudit, iam.NewAdministratorGuard(), newTestIDGenerator())
 	seed := make([]byte, 32)
 	_, err = rand.Read(seed)
 	require.NoError(t, err)
@@ -62,12 +62,12 @@ func newFederationEnvironment(t *testing.T) *federationEnvironment {
 		MFA:     authnext.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
 		Passkey: authnext.PasskeyConfig{Enabled: true, RPID: "app.example", DisplayName: "Chaosplus", Origins: []string{"https://app.example"}},
 		Web:     authnext.WebConfig{Enabled: true, CookieName: "cp_session", SessionTTL: time.Hour, IdleTTL: 10 * time.Minute, PostLoginURL: "https://app.example/", PostLogoutURL: "https://app.example/login", AllowedReturnURLs: []string{"https://app.example/"}, AllowedOrigins: []string{"https://app.example"}, CookieSecure: true},
-	}, db)
+	}, db, authnmod.WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
 	key := make([]byte, 32)
 	_, err = rand.Read(key)
 	require.NoError(t, err)
-	service := NewService(db, appendAudit, identities, web, Config{HTTPTimeout: 5 * time.Second, ClockSkew: 30 * time.Second, StateTTL: 10 * time.Minute}, key)
+	service := NewService(db, appendAudit, identities, web, Config{HTTPTimeout: 5 * time.Second, ClockSkew: 30 * time.Second, StateTTL: 10 * time.Minute}, key, newTestIDGenerator())
 	return &federationEnvironment{db: db, service: service, web: web, audit: appendAudit, identities: identities, key: key, idp: newTestIDP(t)}
 }
 
@@ -83,20 +83,20 @@ func TestFederationServicePropagatesDatabaseFailures(t *testing.T) {
 	_, err := env.db.ExecContext(t.Context(), "DROP TABLE iam_identity_providers")
 	require.NoError(t, err)
 
-	_, listErr := env.service.ListProviders(t.Context(), "tenant-a")
+	_, listErr := env.service.ListProviders(t.Context(), testID("tenant-a"))
 	assert.Error(t, listErr)
-	_, createErr := env.service.CreateProvider(t.Context(), "tenant-a", input)
+	_, createErr := env.service.CreateProvider(t.Context(), testID("tenant-a"), input)
 	assert.Error(t, createErr)
-	_, updateErr := env.service.UpdateProvider(t.Context(), "tenant-a", "missing", input)
+	_, updateErr := env.service.UpdateProvider(t.Context(), testID("tenant-a"), testID("missing"), input)
 	assert.Error(t, updateErr)
-	assert.Error(t, env.service.DeleteProvider(t.Context(), "tenant-a", "missing"))
-	_, startErr := env.service.StartLogin(t.Context(), "missing", "https://app.example/", "https://app.example/cb")
+	assert.Error(t, env.service.DeleteProvider(t.Context(), testID("tenant-a"), testID("missing")))
+	_, startErr := env.service.StartLogin(t.Context(), testID("missing"), "https://app.example/", "https://app.example/cb")
 	assert.Error(t, startErr)
 }
 
 func (env *federationEnvironment) createProvider(t *testing.T, input ProviderInput) Provider {
 	t.Helper()
-	provider, err := env.service.CreateProvider(t.Context(), "tenant-a", input)
+	provider, err := env.service.CreateProvider(t.Context(), testID("tenant-a"), input)
 	require.NoError(t, err)
 	return provider
 }
@@ -128,7 +128,7 @@ func (env *federationEnvironment) providerInput(name, issuer string) ProviderInp
 func insertRole(t *testing.T, db *bun.DB, tenantID, roleID string) {
 	t.Helper()
 	now := time.Now().UTC().UnixMilli()
-	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)`, tenantID, roleID, roleID, "", now, now)
+	_, err := db.ExecContext(t.Context(), `INSERT INTO iam_roles (tenant_id,id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)`, testID(tenantID), testID(roleID), roleID, "", now, now)
 	require.NoError(t, err)
 }
 
@@ -136,33 +136,33 @@ func TestProviderManagement(t *testing.T) {
 	env := newFederationEnvironment(t)
 	ctx := t.Context()
 
-	_, err := env.service.CreateProvider(ctx, "", env.providerInput("X", "https://issuer.example"))
+	_, err := env.service.CreateProvider(ctx, 0, env.providerInput("X", "https://issuer.example"))
 	assert.ErrorIs(t, err, ErrInvalidProvider)
-	_, err = env.service.CreateProvider(ctx, "tenant-a", env.providerInput("X", "not a url"))
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), env.providerInput("X", "not a url"))
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 	longName := make([]byte, 129)
 	for i := range longName {
 		longName[i] = 'a'
 	}
-	_, err = env.service.CreateProvider(ctx, "tenant-a", env.providerInput(string(longName), "https://issuer.example"))
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), env.providerInput(string(longName), "https://issuer.example"))
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 	input := env.providerInput("X", "https://issuer.example")
 	input.Status = "pending"
-	_, err = env.service.CreateProvider(ctx, "tenant-a", input)
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), input)
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 	input = env.providerInput("X", "https://issuer.example")
 	input.Scopes = "openid " + string(make([]byte, 65))
-	_, err = env.service.CreateProvider(ctx, "tenant-a", input)
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), input)
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
 	missingRole := env.providerInput("X", "https://issuer.example/")
-	missingRole.DefaultRoleID = "role-a"
-	_, err = env.service.CreateProvider(ctx, "tenant-a", missingRole)
+	missingRole.DefaultRoleID = testID("role-a")
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), missingRole)
 	assert.ErrorIs(t, err, ErrProviderRoleMissing)
 	insertRole(t, env.db, "tenant-a", "role-a")
 	provider := env.createProvider(t, ProviderInput{
 		Name: "IdP", ProviderType: ProviderOIDC, Issuer: "https://issuer.example/", ClientID: env.idp.clientID,
-		ClientSecret: "s3cret", Scopes: "", AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		ClientSecret: "s3cret", Scopes: "", AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 	})
 	assert.Equal(t, "https://issuer.example", provider.Issuer)
 	assert.Equal(t, defaultScopes, provider.Scopes)
@@ -174,21 +174,21 @@ func TestProviderManagement(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", plain)
 
-	_, err = env.service.CreateProvider(ctx, "tenant-a", env.providerInput("Other", "https://issuer.example"))
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), env.providerInput("Other", "https://issuer.example"))
 	assert.ErrorIs(t, err, ErrProviderIssuerExists)
 
-	items, err := env.service.ListProviders(ctx, "tenant-a")
+	items, err := env.service.ListProviders(ctx, testID("tenant-a"))
 	require.NoError(t, err)
 	assert.Len(t, items, 1)
-	other, err := env.service.ListProviders(ctx, "tenant-b")
+	other, err := env.service.ListProviders(ctx, testID("tenant-b"))
 	require.NoError(t, err)
 	assert.Empty(t, other)
-	_, err = env.service.ListProviders(ctx, "")
+	_, err = env.service.ListProviders(ctx, 0)
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
-	updated, err := env.service.UpdateProvider(ctx, "tenant-a", provider.ID, ProviderInput{
+	updated, err := env.service.UpdateProvider(ctx, testID("tenant-a"), provider.ID, ProviderInput{
 		Name: "Renamed", ProviderType: ProviderOIDC, Issuer: "https://issuer.example", ClientID: env.idp.clientID,
-		AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Renamed", updated.Name)
@@ -197,9 +197,9 @@ func TestProviderManagement(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", plain)
 
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", provider.ID, ProviderInput{
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), provider.ID, ProviderInput{
 		Name: "Rotated", ProviderType: ProviderOIDC, Issuer: "https://issuer.example", ClientID: env.idp.clientID,
-		ClientSecret: "new-secret", AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		ClientSecret: "new-secret", AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 	})
 	require.NoError(t, err)
 	require.NoError(t, env.db.NewSelect().Model(&row).Where("id = ?", provider.ID).Scan(ctx))
@@ -207,13 +207,13 @@ func TestProviderManagement(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new-secret", plain)
 
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", "missing", env.providerInput("X", "https://other.example"))
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), testID("missing"), env.providerInput("X", "https://other.example"))
 	assert.ErrorIs(t, err, ErrProviderNotFound)
 
-	require.NoError(t, env.service.DeleteProvider(ctx, "tenant-a", provider.ID))
-	assert.ErrorIs(t, env.service.DeleteProvider(ctx, "tenant-a", provider.ID), ErrProviderNotFound)
+	require.NoError(t, env.service.DeleteProvider(ctx, testID("tenant-a"), provider.ID))
+	assert.ErrorIs(t, env.service.DeleteProvider(ctx, testID("tenant-a"), provider.ID), ErrProviderNotFound)
 	second := env.createProvider(t, env.providerInput("Second", "https://second.example"))
-	assert.ErrorIs(t, env.service.DeleteProvider(ctx, "tenant-b", second.ID), ErrProviderNotFound)
+	assert.ErrorIs(t, env.service.DeleteProvider(ctx, testID("tenant-b"), second.ID), ErrProviderNotFound)
 }
 
 func TestParseAndResolveEncryptionKey(t *testing.T) {
@@ -280,7 +280,7 @@ func TestFederationLoginJITProvisioning(t *testing.T) {
 
 	var link identityLinkRow
 	require.NoError(t, env.db.NewSelect().Model(&link).Where("provider_id = ?", provider.ID).Scan(ctx))
-	assert.Equal(t, claims.Subject, link.PrincipalID)
+	assert.Equal(t, parseGUID(claims.Subject), link.PrincipalID)
 	assert.Equal(t, "external-user-1", link.ExternalSubject)
 	assert.Equal(t, "user@example.com", link.Email)
 
@@ -321,7 +321,7 @@ func TestFederationLoginPublicClientAndDenials(t *testing.T) {
 	env.idp.setClaim("email_verified", true)
 
 	disabled := env.createProvider(t, env.providerInput("Disabled", env.idp.issuer+"/disabled"))
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", disabled.ID, ProviderInput{
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), disabled.ID, ProviderInput{
 		Name: "Disabled", ProviderType: ProviderOIDC, Issuer: env.idp.issuer + "/disabled", ClientID: env.idp.clientID,
 		AutoProvision: true, Status: ProviderDisabled,
 	})
@@ -342,7 +342,7 @@ func TestFederationLoginPublicClientAndDenials(t *testing.T) {
 	_, err = env.service.CompleteLogin(ctx, stateProvider.ID, "code", "wrong-state", "cp_federation_state="+stateValue, callback)
 	assert.ErrorIs(t, err, ErrOIDCState)
 
-	_, err = env.service.StartLogin(ctx, stateProvider.ID, "https://app.example/", "/federation/"+stateProvider.ID+"/callback")
+	_, err = env.service.StartLogin(ctx, stateProvider.ID, "https://app.example/", "/federation/" + stateProvider.ID.String()+"/callback")
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
 	corrupted := env.createProvider(t, env.providerInput("Corrupted", env.idp.issuer+"/corrupted"))
@@ -358,17 +358,17 @@ func TestFederationDefaultRoleAndMemberStatus(t *testing.T) {
 	insertRole(t, env.db, "tenant-a", "role-a")
 	provider := env.createProvider(t, ProviderInput{
 		Name: "RoleGrant", ProviderType: ProviderOIDC, Issuer: env.idp.issuer + "/role-grant", ClientID: env.idp.clientID,
-		AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 	})
 	result, err := env.login(t, provider, "https://app.example/")
 	require.NoError(t, err)
 	claims, err := env.web.Authenticate(ctx, "", env.web.SessionCookie(result.SessionToken))
 	require.NoError(t, err)
-	count, err := env.db.NewSelect().Table("iam_role_members").Where("tenant_id = ? AND role_id = ? AND user_subject = ?", "tenant-a", "role-a", claims.Subject).Count(ctx)
+	count, err := env.db.NewSelect().Table("iam_role_members").Where("tenant_id = ? AND role_id = ? AND principal_id = ?", testID("tenant-a"), testID("role-a"), parseGUID(claims.Subject)).Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
-	_, err = env.db.NewUpdate().Table("iam_tenant_members").Set("status = ?", "disabled").Where("tenant_id = ? AND user_subject = ?", "tenant-a", claims.Subject).Exec(ctx)
+	_, err = env.db.NewUpdate().Table("iam_tenant_members").Set("status = ?", "disabled").Where("tenant_id = ? AND principal_id = ?", testID("tenant-a"), parseGUID(claims.Subject)).Exec(ctx)
 	require.NoError(t, err)
 	_, err = env.login(t, provider, "https://app.example/")
 	assert.ErrorIs(t, err, ErrPrincipalInactive)
@@ -379,7 +379,7 @@ func TestFederationMissingDefaultRoleAtProvisioning(t *testing.T) {
 	insertRole(t, env.db, "tenant-a", "role-a")
 	provider := env.createProvider(t, ProviderInput{
 		Name: "RoleGone", ProviderType: ProviderOIDC, Issuer: env.idp.issuer + "/role-gone", ClientID: env.idp.clientID,
-		AutoProvision: true, DefaultRoleID: "role-a", Status: ProviderActive,
+		AutoProvision: true, DefaultRoleID: testID("role-a"), Status: ProviderActive,
 	})
 	_, err := env.db.NewDelete().Table("iam_roles").Where("tenant_id = ? AND id = ?", "tenant-a", "role-a").Exec(t.Context())
 	require.NoError(t, err)
@@ -392,9 +392,9 @@ func TestFederationLoginStateAndProviderDenials(t *testing.T) {
 	env := newFederationEnvironment(t)
 	ctx := t.Context()
 
-	_, err := env.service.StartLogin(ctx, "missing", "https://app.example/", env.idp.issuer+callbackURL("missing"))
+	_, err := env.service.StartLogin(ctx, testID("missing"), "https://app.example/", env.idp.issuer+callbackURL(testID("missing")))
 	assert.ErrorIs(t, err, ErrProviderNotFound)
-	_, err = env.service.StartLogin(ctx, "", "https://app.example/", env.idp.issuer+callbackURL("missing"))
+	_, err = env.service.StartLogin(ctx, 0, "https://app.example/", env.idp.issuer+callbackURL(testID("missing")))
 	assert.ErrorIs(t, err, ErrProviderNotFound)
 
 	provider := env.createProvider(t, env.providerInput("Denied", env.idp.issuer+"/denied"))
@@ -402,7 +402,7 @@ func TestFederationLoginStateAndProviderDenials(t *testing.T) {
 	assert.Error(t, err)
 
 	disabled := env.createProvider(t, env.providerInput("DisabledCallback", env.idp.issuer+"/disabled-callback"))
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", disabled.ID, ProviderInput{
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), disabled.ID, ProviderInput{
 		Name: "DisabledCallback", ProviderType: ProviderOIDC, Issuer: env.idp.issuer + "/disabled-callback", ClientID: env.idp.clientID,
 		AutoProvision: true, Status: ProviderDisabled,
 	})
@@ -439,11 +439,11 @@ func TestFederationHelpersAndSecretErrors(t *testing.T) {
 
 	env := newFederationEnvironment(t)
 	ctx := t.Context()
-	_, err := env.service.getProviderByID(ctx, "")
+	_, err := env.service.getProviderByID(ctx, 0)
 	assert.ErrorIs(t, err, ErrProviderNotFound)
-	_, err = env.service.getProviderByID(ctx, "missing")
+	_, err = env.service.getProviderByID(ctx, testID("missing"))
 	assert.ErrorIs(t, err, ErrProviderNotFound)
-	assert.ErrorIs(t, verifyPrincipalAndMember(ctx, env.db, "tenant-a", "no-such-principal"), ErrPrincipalInactive)
+	assert.ErrorIs(t, verifyPrincipalAndMember(ctx, env.db, testID("tenant-a"), testID("no-such-principal")), ErrPrincipalInactive)
 
 	provider := env.createProvider(t, env.providerInput("Secret", "https://secret.example"))
 	var row providerRow
@@ -459,7 +459,7 @@ func TestFederationHelpersAndSecretErrors(t *testing.T) {
 	assert.Error(t, err)
 
 	other := env.createProvider(t, env.providerInput("Other", "https://other.example"))
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", other.ID, ProviderInput{
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), other.ID, ProviderInput{
 		Name: "Other", ProviderType: ProviderOIDC, Issuer: "https://secret.example", ClientID: env.idp.clientID,
 		AutoProvision: true, Status: ProviderActive,
 	})
@@ -468,25 +468,25 @@ func TestFederationHelpersAndSecretErrors(t *testing.T) {
 
 func TestFederationServicePanicsOnNilDependencies(t *testing.T) {
 	env := newFederationEnvironment(t)
-	assert.Panics(t, func() { NewService(nil, env.audit, env.identities, env.web, Config{}, env.key) })
-	assert.Panics(t, func() { NewService(env.db, nil, env.identities, env.web, Config{}, env.key) })
-	assert.Panics(t, func() { NewService(env.db, env.audit, nil, env.web, Config{}, env.key) })
-	assert.Panics(t, func() { NewService(env.db, env.audit, env.identities, nil, Config{}, env.key) })
+	assert.Panics(t, func() { NewService(nil, env.audit, env.identities, env.web, Config{}, env.key, newTestIDGenerator()) })
+	assert.Panics(t, func() { NewService(env.db, nil, env.identities, env.web, Config{}, env.key, newTestIDGenerator()) })
+	assert.Panics(t, func() { NewService(env.db, env.audit, nil, env.web, Config{}, env.key, newTestIDGenerator()) })
+	assert.Panics(t, func() { NewService(env.db, env.audit, env.identities, nil, Config{}, env.key, newTestIDGenerator()) })
 }
 
 func TestFederationServiceSurfacesDatabaseErrors(t *testing.T) {
 	env := newFederationEnvironment(t)
 	ctx := t.Context()
 	require.NoError(t, env.db.Close())
-	_, err := env.service.ListProviders(ctx, "tenant-a")
+	_, err := env.service.ListProviders(ctx, testID("tenant-a"))
 	assert.Error(t, err)
-	_, err = env.service.CreateProvider(ctx, "tenant-a", env.providerInput("X", "https://x.example"))
+	_, err = env.service.CreateProvider(ctx, testID("tenant-a"), env.providerInput("X", "https://x.example"))
 	assert.Error(t, err)
-	_, err = env.service.UpdateProvider(ctx, "tenant-a", "id", env.providerInput("X", "https://x.example"))
+	_, err = env.service.UpdateProvider(ctx, testID("tenant-a"), testID("id"), env.providerInput("X", "https://x.example"))
 	assert.Error(t, err)
-	_, err = env.service.StartLogin(ctx, "id", "https://app.example/", "https://app.example/federation/id/callback")
+	_, err = env.service.StartLogin(ctx, testID("id"), "https://app.example/", "https://app.example/federation/id/callback")
 	assert.Error(t, err)
-	_, err = env.service.CompleteLogin(ctx, "id", "code", "state", "cp_federation_state=x", "https://app.example/federation/id/callback")
+	_, err = env.service.CompleteLogin(ctx, testID("id"), "code", "state", "cp_federation_state=x", "https://app.example/federation/id/callback")
 	assert.Error(t, err)
-	assert.Error(t, env.service.DeleteProvider(ctx, "tenant-a", "id"))
+	assert.Error(t, env.service.DeleteProvider(ctx, testID("tenant-a"), testID("id")))
 }

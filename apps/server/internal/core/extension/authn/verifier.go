@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -160,17 +162,22 @@ type MFAConfig struct {
 
 // Claims contains the identity fields required by authentication and guards.
 type Claims struct {
-	Issuer            string         `json:"iss"`
-	Subject           string         `json:"sub"`
-	SubjectType       string         `json:"subject_type,omitempty"`
-	Audience          []string       `json:"aud"`
-	ExpiresAt         time.Time      `json:"exp"`
-	NotBefore         time.Time      `json:"nbf,omitempty"`
-	IssuedAt          time.Time      `json:"iat,omitempty"`
-	PreferredUsername string         `json:"preferred_username,omitempty"`
-	Email             string         `json:"email,omitempty"`
-	EmailVerified     bool           `json:"email_verified,omitempty"`
-	OrganizationID    string         `json:"organization_id,omitempty"`
+	Issuer            string    `json:"iss"`
+	Subject           string    `json:"sub"`
+	SubjectType       string    `json:"subject_type,omitempty"`
+	Audience          []string  `json:"aud"`
+	ExpiresAt         time.Time `json:"exp"`
+	NotBefore         time.Time `json:"nbf,omitempty"`
+	IssuedAt          time.Time `json:"iat,omitempty"`
+	PreferredUsername string    `json:"preferred_username,omitempty"`
+	Email             string    `json:"email,omitempty"`
+	EmailVerified     bool      `json:"email_verified,omitempty"`
+	// Subject is the OIDC protocol subject. Internal database identity and
+	// authorization scope use the snowflake fields below.
+	TenantID          guid.ID        `json:"tenant_id,omitempty"`
+	EntityID          guid.ID        `json:"entity_id,omitempty"`
+	PrincipalID       guid.ID        `json:"principal_id,omitempty"`
+	OrganizationID    string         `json:"organization_id,omitempty"` // external/federated organization claim
 	CredentialVersion int64          `json:"credential_version,omitempty"`
 	AuthTime          time.Time      `json:"auth_time,omitempty"`
 	ACR               int            `json:"acr,omitempty"`
@@ -450,6 +457,16 @@ func parseClaims(raw map[string]any) (*Claims, error) {
 	claims.Email, _ = raw["email"].(string)
 	claims.EmailVerified, _ = raw["email_verified"].(bool)
 	claims.OrganizationID, _ = raw["organization_id"].(string)
+	var err error
+	if claims.TenantID, err = guidClaim(raw["tenant_id"]); err != nil {
+		return nil, fmt.Errorf("%w: tenant_id", ErrInvalidToken)
+	}
+	if claims.EntityID, err = guidClaim(raw["entity_id"]); err != nil {
+		return nil, fmt.Errorf("%w: entity_id", ErrInvalidToken)
+	}
+	if claims.PrincipalID, err = guidClaim(raw["principal_id"]); err != nil {
+		return nil, fmt.Errorf("%w: principal_id", ErrInvalidToken)
+	}
 	claims.CredentialVersion = int64Claim(raw["credential_version"])
 	claims.AuthTime = unixClaim(raw["auth_time"])
 	claims.ACR = int(int64Claim(raw["acr"]))
@@ -464,6 +481,17 @@ func parseClaims(raw map[string]any) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 	return claims, nil
+}
+
+func guidClaim(value any) (guid.ID, error) {
+	if value == nil {
+		return 0, nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return 0, ErrInvalidToken
+	}
+	return guid.Parse(text)
 }
 
 func stringSliceClaim(v any) []string {

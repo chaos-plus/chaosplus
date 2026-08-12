@@ -11,6 +11,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -21,6 +22,9 @@ const (
 	publicMetadataKey        = "authz.public"
 	GuardExtensionKey        = "x-authz-permission"
 	TenantHeader             = "X-Tenant-Id"
+	EntityHeader             = "X-Entity-Id"
+	TenantQuery              = "tenant_id"
+	EntityQuery              = "entity_id"
 	BearerScheme             = "bearerAuth"
 	SessionScheme            = "sessionCookie"
 	ClientBasicScheme        = "clientBasic"
@@ -29,8 +33,14 @@ const (
 
 // PermissionChecker is the narrow local authorization capability needed on the request path.
 type PermissionChecker interface {
-	Check(ctx context.Context, tenantID, permission, subject string) (bool, error)
-	CheckPlatform(ctx context.Context, permission, subject string) (bool, error)
+	Check(ctx context.Context, tenantID guid.ID, permission string, subject guid.ID) (bool, error)
+	CheckPlatform(ctx context.Context, permission string, subject guid.ID) (bool, error)
+}
+
+// EntityPermissionChecker evaluates a permission at one tenant entity. It is
+// implemented by the IAM owner and consumed by entity-scoped business routes.
+type EntityPermissionChecker interface {
+	CheckEntity(ctx context.Context, tenantID, entityID guid.ID, permission string, subject guid.ID) (bool, error)
 }
 
 type TokenVerifier interface {
@@ -42,7 +52,7 @@ type csrfValidator interface {
 }
 
 type MembershipChecker interface {
-	IsMemberActive(context.Context, string, string) (bool, error)
+	IsMemberActive(context.Context, guid.ID, guid.ID) (bool, error)
 }
 
 type sessionCookieNamer interface {
@@ -93,6 +103,57 @@ func Register[I, O any](r *Registrar, api huma.API, op huma.Operation, guard Gua
 	}
 	r.prepare(api, &op, guard)
 	huma.Register(api, op, handler)
+}
+
+// RegisterEntity registers a guarded business operation whose selected entity
+// is verified by IAM before the handler receives trusted snowflake claims.
+func RegisterEntity[I, O any](r *Registrar, api huma.API, op huma.Operation, guard Guard, handler func(context.Context, *I) (*O, error)) {
+	if r == nil {
+		panic("authz registrar is nil")
+	}
+	if r.checker != nil {
+		if _, ok := r.checker.(EntityPermissionChecker); !ok {
+			panic("entity operation requires entity permission checker")
+		}
+	}
+	r.prepare(api, &op, guard)
+	op.Parameters = append(op.Parameters, &huma.Param{
+		Name: EntityHeader, In: "header", Description: "Authorized entity resource boundary", Required: true,
+		Schema: &huma.Schema{Type: huma.TypeString, Pattern: `^[1-9][0-9]*$`},
+	})
+	if r.verifier != nil {
+		// Replace the tenant-only guard installed by prepare with the entity guard.
+		op.Middlewares[len(op.Middlewares)-1] = r.entityMiddleware(api, guard)
+	}
+	huma.Register(api, op, handler)
+}
+
+// RegisterEntityAdapter registers an entity-authorized operation that needs
+// direct access to the Huma transport context, such as WebSocket upgrades or
+// streaming protocols. It executes the same global and entity authorization
+// middleware chain as typed Huma handlers before invoking the raw handler.
+func RegisterEntityAdapter(r *Registrar, api huma.API, op huma.Operation, guard Guard, handler func(huma.Context)) {
+	if r == nil || api == nil || handler == nil {
+		panic("entity adapter operation requires registrar, api, and handler")
+	}
+	if r.checker != nil {
+		if _, ok := r.checker.(EntityPermissionChecker); !ok {
+			panic("entity operation requires entity permission checker")
+		}
+	}
+	r.prepare(api, &op, guard)
+	op.Parameters = removeOperationParameter(op.Parameters, TenantHeader, "header")
+	op.Parameters = append(op.Parameters,
+		&huma.Param{Name: TenantQuery, In: "query", Description: "Tenant authorization selector", Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: `^[1-9][0-9]*$`}},
+		&huma.Param{Name: EntityQuery, In: "query", Description: "Entity authorization selector", Required: true, Schema: &huma.Schema{Type: huma.TypeString, Pattern: `^[1-9][0-9]*$`}},
+	)
+	if r.verifier != nil {
+		op.Middlewares[len(op.Middlewares)-1] = r.entityMiddlewareFor(api, guard, func(ctx huma.Context) (string, string) {
+			return ctx.Query(TenantQuery), ctx.Query(EntityQuery)
+		})
+	}
+	api.OpenAPI().AddOperation(&op)
+	api.Adapter().Handle(&op, api.Middlewares().Handler(op.Middlewares.Handler(handler)))
 }
 
 // RegisterTenantMember registers a self-service operation available to every
@@ -282,12 +343,13 @@ func (r *Registrar) middleware(api huma.API, guard *Guard) func(huma.Context, fu
 			ACR: claims.ACR, AMR: claims.AMR, ClientID: claims.ClientID, NetworkZone: claims.NetworkZone,
 		}
 		requestContext := policyx.WithTrustedContext(ctx.Context(), trusted)
-		tenantID := ctx.Header(TenantHeader)
-		if tenantID == "" {
+		tenantText := ctx.Header(TenantHeader)
+		tenantID, tenantErr := guid.Parse(tenantText)
+		if tenantErr != nil || tenantID.Zero() || claims.PrincipalID.Zero() {
 			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
 			return
 		}
-		active, err := r.members.IsMemberActive(requestContext, tenantID, claims.Subject)
+		active, err := r.members.IsMemberActive(requestContext, tenantID, claims.PrincipalID)
 		if err != nil {
 			slog.Error("tenant membership check failed", "operation", ctx.Operation().OperationID, "err", err)
 			_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")
@@ -298,7 +360,7 @@ func (r *Registrar) middleware(api huma.API, guard *Guard) func(huma.Context, fu
 			return
 		}
 		if guard != nil {
-			allowed, err := r.checker.Check(requestContext, tenantID, guard.Code(), claims.Subject)
+			allowed, err := r.checker.Check(requestContext, tenantID, guard.Code(), claims.PrincipalID)
 			if err != nil {
 				slog.Error("authz check failed", "operation", ctx.Operation().OperationID, "permission", guard.Code(), "err", err)
 				_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")
@@ -311,6 +373,81 @@ func (r *Registrar) middleware(api huma.API, guard *Guard) func(huma.Context, fu
 		}
 		next(huma.WithContext(ctx, authn.WithClaims(requestContext, claims)))
 	}
+}
+
+func (r *Registrar) entityMiddleware(api huma.API, guard Guard) func(huma.Context, func(huma.Context)) {
+	return r.entityMiddlewareFor(api, guard, func(ctx huma.Context) (string, string) {
+		return ctx.Header(TenantHeader), ctx.Header(EntityHeader)
+	})
+}
+
+func (r *Registrar) entityMiddlewareFor(api huma.API, guard Guard, selectors func(huma.Context) (string, string)) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		if validator, ok := r.verifier.(csrfValidator); ok {
+			if err := validator.ValidateCSRF(ctx.Method(), ctx.Header("Origin"), ctx.Header("Cookie"), ctx.Header("Authorization")); err != nil {
+				_ = huma.WriteErr(api, ctx, http.StatusForbidden, "csrf_rejected")
+				return
+			}
+		}
+		claims, err := r.verifier.Authenticate(ctx.Context(), ctx.Header("Authorization"), ctx.Header("Cookie"))
+		if err != nil {
+			if errors.Is(err, authn.ErrUnavailable) {
+				_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authentication_unavailable")
+				return
+			}
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		tenantText, entityText := selectors(ctx)
+		tenantID, tenantErr := guid.Parse(tenantText)
+		entityID, entityErr := guid.Parse(entityText)
+		principalID := claims.PrincipalID
+		if principalID.Zero() {
+			principalID, err = guid.Parse(claims.Subject)
+		}
+		if tenantErr != nil || entityErr != nil || err != nil || tenantID.Zero() || entityID.Zero() || principalID.Zero() {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
+			return
+		}
+		requestContext := policyx.WithTrustedContext(ctx.Context(), policyx.TrustedContext{
+			ACR: claims.ACR, AMR: claims.AMR, ClientID: claims.ClientID, NetworkZone: claims.NetworkZone,
+		})
+		active, err := r.members.IsMemberActive(requestContext, tenantID, principalID)
+		if err != nil {
+			_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")
+			return
+		}
+		if !active {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "inactive_tenant_membership")
+			return
+		}
+		checker := r.checker.(EntityPermissionChecker)
+		allowed, err := checker.CheckEntity(requestContext, tenantID, entityID, guard.Code(), principalID)
+		if err != nil {
+			_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")
+			return
+		}
+		if !allowed {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
+			return
+		}
+		trustedClaims := *claims
+		trustedClaims.TenantID = tenantID
+		trustedClaims.EntityID = entityID
+		trustedClaims.PrincipalID = principalID
+		next(huma.WithContext(ctx, authn.WithClaims(requestContext, &trustedClaims)))
+	}
+}
+
+func removeOperationParameter(parameters []*huma.Param, name, location string) []*huma.Param {
+	out := parameters[:0]
+	for _, parameter := range parameters {
+		if parameter != nil && parameter.Name == name && parameter.In == location {
+			continue
+		}
+		out = append(out, parameter)
+	}
+	return out
 }
 
 func (r *Registrar) platformMiddleware(api huma.API, guard Guard) func(huma.Context, func(huma.Context)) {
@@ -333,7 +470,7 @@ func (r *Registrar) platformMiddleware(api huma.API, guard Guard) func(huma.Cont
 		requestContext := policyx.WithTrustedContext(ctx.Context(), policyx.TrustedContext{
 			ACR: claims.ACR, AMR: claims.AMR, ClientID: claims.ClientID, NetworkZone: claims.NetworkZone,
 		})
-		allowed, err := r.checker.CheckPlatform(requestContext, guard.Code(), claims.Subject)
+		allowed, err := r.checker.CheckPlatform(requestContext, guard.Code(), claims.PrincipalID)
 		if err != nil {
 			slog.Error("platform authz check failed", "operation", ctx.Operation().OperationID, "permission", guard.Code(), "err", err)
 			_ = huma.WriteErr(api, ctx, http.StatusServiceUnavailable, "authorization_unavailable")

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bufio"
 	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -87,7 +89,10 @@ func (app *App) StartRestServer() error {
 
 	api := humachi.New(router, config)
 	app.registerREST(api)
-	registry := authz.DefaultRegistry()
+	registry := app.authzRegistry
+	if registry == nil {
+		registry = authz.DefaultRegistry()
+	}
 	if app.authzRegistrar != nil {
 		registry = app.authzRegistrar.Registry()
 	}
@@ -283,4 +288,34 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// Preserve optional response-writer capabilities needed by streaming and
+// protocol upgrades after metrics instrumentation wraps the shared server.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (w *statusWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *statusWriter) Push(target string, options *http.PushOptions) error {
+	if pusher, ok := w.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, options)
+	}
+	return http.ErrNotSupported
+}
+
+func (w *statusWriter) ReadFrom(reader io.Reader) (int64, error) {
+	if readerFrom, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return readerFrom.ReadFrom(reader)
+	}
+	return io.Copy(struct{ io.Writer }{w.ResponseWriter}, reader)
 }

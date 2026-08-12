@@ -18,6 +18,7 @@ import (
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/uptrace/bun"
@@ -25,10 +26,14 @@ import (
 
 var ErrInvalidRequest = errors.New("invalid OAuth request")
 
+// errServiceAccountCredentialMissing routes client_credentials attempts that
+// are not service-account credentials back to the ordinary OAuth client flow.
+var errServiceAccountCredentialMissing = errors.New("service account credential not found")
+
 type clientRow struct {
 	bun.BaseModel `bun:"table:iam_oauth_clients"`
-	ID            string `bun:"id,pk"`
-	TenantID      string `bun:"tenant_id"`
+	ID            guid.ID `bun:"id,pk"`
+	TenantID      guid.ID `bun:"tenant_id"`
 	SecretHash    string
 	Name          string
 	RedirectURIs  string `bun:"redirect_uris"`
@@ -42,10 +47,10 @@ type clientRow struct {
 
 type codeRow struct {
 	bun.BaseModel `bun:"table:iam_oauth_codes"`
-	CodeHash      string `bun:"code_hash,pk"`
-	ClientID      string `bun:"client_id"`
-	PrincipalID   string `bun:"principal_id"`
-	RedirectURI   string `bun:"redirect_uri"`
+	CodeHash      string  `bun:"code_hash,pk"`
+	ClientID      guid.ID `bun:"client_id"`
+	PrincipalID   guid.ID `bun:"principal_id"`
+	RedirectURI   string  `bun:"redirect_uri"`
 	Scope         string
 	CodeChallenge string `bun:"code_challenge"`
 	Nonce         string
@@ -59,10 +64,10 @@ type codeRow struct {
 
 type refreshRow struct {
 	bun.BaseModel `bun:"table:iam_refresh_tokens"`
-	IDHash        string `bun:"id_hash,pk"`
-	FamilyID      string `bun:"family_id"`
-	PrincipalID   string `bun:"principal_id"`
-	ClientID      string `bun:"client_id"`
+	IDHash        string  `bun:"id_hash,pk"`
+	FamilyID      string  `bun:"family_id"`
+	PrincipalID   guid.ID `bun:"principal_id"`
+	ClientID      guid.ID `bun:"client_id"`
 	Scope         string
 	AuthTime      int64
 	ACR           int
@@ -74,27 +79,28 @@ type refreshRow struct {
 }
 
 type serviceAccountClient struct {
-	CredentialID        string `bun:"credential_id"`
-	PrincipalID         string `bun:"principal_id"`
-	TenantID            string `bun:"tenant_id"`
-	LoginName           string `bun:"login_name"`
-	SecretHash          string `bun:"secret_hash"`
-	Scopes              string `bun:"scopes"`
-	CredentialExpiresAt int64  `bun:"credential_expires_at"`
-	CredentialRevokedAt int64  `bun:"credential_revoked_at"`
-	AccountExpiresAt    int64  `bun:"account_expires_at"`
-	TokenVersion        int64  `bun:"token_version"`
-	AccountStatus       string `bun:"account_status"`
-	PrincipalStatus     string `bun:"principal_status"`
-	MemberStatus        string `bun:"member_status"`
-	TenantStatus        string `bun:"tenant_status"`
+	CredentialID        guid.ID `bun:"credential_id"`
+	PrincipalID         guid.ID `bun:"principal_id"`
+	TenantID            guid.ID `bun:"tenant_id"`
+	LoginName           string  `bun:"login_name"`
+	SecretHash          string  `bun:"secret_hash"`
+	Scopes              string  `bun:"scopes"`
+	CredentialExpiresAt int64   `bun:"credential_expires_at"`
+	CredentialRevokedAt int64   `bun:"credential_revoked_at"`
+	AccountExpiresAt    int64   `bun:"account_expires_at"`
+	TokenVersion        int64   `bun:"token_version"`
+	AccountStatus       string  `bun:"account_status"`
+	PrincipalStatus     string  `bun:"principal_status"`
+	MemberStatus        string  `bun:"member_status"`
+	TenantStatus        string  `bun:"tenant_status"`
 }
 
 type Service struct {
-	db    *bun.DB
-	authn *authnmod.WebService
-	audit *auditmod.Service
-	now   func() time.Time
+	db     *bun.DB
+	authn  *authnmod.WebService
+	audit  *auditmod.Service
+	nextID func() (guid.ID, error)
+	now    func() time.Time
 }
 
 type TokenResponse struct {
@@ -117,13 +123,16 @@ type Client struct {
 	Status       string   `json:"status"`
 }
 
-func (s *Service) CreateClient(ctx context.Context, tenantID, name string, redirects, grants, scopes []string, public bool) (Client, string, error) {
+func (s *Service) CreateClient(ctx context.Context, tenantID guid.ID, name string, redirects, grants, scopes []string, public bool) (Client, string, error) {
 	if err := validateClient(tenantID, name, redirects, grants, scopes, public); err != nil {
 		return Client{}, "", err
 	}
-	id, err := secureToken(18)
+	id, err := s.nextID()
 	if err != nil {
 		return Client{}, "", err
+	}
+	if id.Zero() {
+		return Client{}, "", ErrInvalidRequest
 	}
 	secret, hash := "", ""
 	if !public {
@@ -152,8 +161,8 @@ func (s *Service) CreateClient(ctx context.Context, tenantID, name string, redir
 	return clientFromRow(row), secret, nil
 }
 
-func (s *Service) ListClients(ctx context.Context, tenantID string) ([]Client, error) {
-	if strings.TrimSpace(tenantID) == "" {
+func (s *Service) ListClients(ctx context.Context, tenantID guid.ID) ([]Client, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidRequest
 	}
 	var rows []clientRow
@@ -167,7 +176,7 @@ func (s *Service) ListClients(ctx context.Context, tenantID string) ([]Client, e
 	return result, nil
 }
 
-func (s *Service) UpdateClient(ctx context.Context, tenantID, id, name string, redirects, grants, scopes []string, public bool, status string) (Client, error) {
+func (s *Service) UpdateClient(ctx context.Context, tenantID, id guid.ID, name string, redirects, grants, scopes []string, public bool, status string) (Client, error) {
 	if status != "active" && status != "disabled" {
 		return Client{}, ErrInvalidRequest
 	}
@@ -194,7 +203,7 @@ func (s *Service) UpdateClient(ctx context.Context, tenantID, id, name string, r
 	return clientFromRow(row), err
 }
 
-func (s *Service) RotateClientSecret(ctx context.Context, tenantID, id string) (string, error) {
+func (s *Service) RotateClientSecret(ctx context.Context, tenantID, id guid.ID) (string, error) {
 	secret, err := secureToken(32)
 	if err != nil {
 		return "", err
@@ -220,7 +229,7 @@ func (s *Service) RotateClientSecret(ctx context.Context, tenantID, id string) (
 	return secret, nil
 }
 
-func (s *Service) DeleteClient(ctx context.Context, tenantID, id string) error {
+func (s *Service) DeleteClient(ctx context.Context, tenantID, id guid.ID) error {
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		_, _ = tx.NewUpdate().Model((*refreshRow)(nil)).Set("revoked_at = ?", s.now().UTC().UnixMilli()).Where("client_id = ? AND revoked_at = 0", id).Exec(ctx)
 		result, err := tx.NewDelete().Model((*clientRow)(nil)).Where("tenant_id = ? AND id = ?", tenantID, id).Exec(ctx)
@@ -235,17 +244,17 @@ func (s *Service) DeleteClient(ctx context.Context, tenantID, id string) error {
 	})
 }
 
-func NewService(db *bun.DB, authn *authnmod.WebService) *Service {
-	if db == nil || authn == nil {
-		panic("oauth service requires database and local authentication")
+func NewService(db *bun.DB, authn *authnmod.WebService, nextID func() (guid.ID, error)) *Service {
+	if db == nil || authn == nil || nextID == nil {
+		panic("oauth service requires database, local authentication, and id generator")
 	}
-	return &Service{db: db, authn: authn, audit: auditmod.NewService(db), now: time.Now}
+	return &Service{db: db, authn: authn, audit: auditmod.NewService(db, nextID), nextID: nextID, now: time.Now}
 }
 
-func (s *Service) clientAudit(ctx context.Context, tenantID, clientID, eventType string, detail map[string]any) auditmod.EventInput {
-	principalID := ""
+func (s *Service) clientAudit(ctx context.Context, tenantID, clientID guid.ID, eventType string, detail map[string]any) auditmod.EventInput {
+	var principalID guid.ID
 	if claims, ok := authnext.FromContext(ctx); ok {
-		principalID = claims.Subject
+		principalID = claims.PrincipalID
 	}
 	return auditmod.EventInput{TenantID: tenantID, PrincipalID: principalID, EventType: eventType, TargetType: "oauth_client", TargetID: clientID, Outcome: "success", Detail: detail}
 }
@@ -269,7 +278,7 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 	if err != nil || !containsWord(client.GrantTypes, "authorization_code") || !allowedRedirect(client.RedirectURIs, redirectURI) || !allowedScopes(client.Scopes, scope) {
 		return "", ErrInvalidRequest
 	}
-	if active, err := s.activeMember(ctx, client.TenantID, claims.Subject); err != nil || !active {
+	if active, err := s.activeMember(ctx, client.TenantID, claims.PrincipalID); err != nil || !active {
 		return "", ErrInvalidRequest
 	}
 	// Interactive consent: authorize records a consent grant for the
@@ -278,7 +287,7 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 	// /oauth/consent); prompt=none fails when no prior consent exists (per the
 	// OIDC prompt contract). With no prompt the first authorization
 	// auto-consents and records the grant for audit and future prompt=none.
-	consented, err := s.hasConsent(ctx, client.ID, claims.Subject, scope)
+	consented, err := s.hasConsent(ctx, client.ID, claims.PrincipalID, scope)
 	if err != nil {
 		return "", fmt.Errorf("check oauth consent: %w", err)
 	}
@@ -292,7 +301,7 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 			// Auto-consent on first authorization.
 		}
 	}
-	if err := s.recordConsent(ctx, client, claims.Subject, scope); err != nil {
+	if err := s.recordConsent(ctx, client, claims.PrincipalID, scope); err != nil {
 		return "", fmt.Errorf("record oauth consent: %w", err)
 	}
 	code, err := secureToken(32)
@@ -301,7 +310,7 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 	}
 	now := s.now().UTC()
 	row := codeRow{
-		CodeHash: hashToken(code), ClientID: client.ID, PrincipalID: claims.Subject, RedirectURI: redirectURI,
+		CodeHash: hashToken(code), ClientID: client.ID, PrincipalID: claims.PrincipalID, RedirectURI: redirectURI,
 		Scope: normalizeWords(scope), CodeChallenge: challenge, Nonce: nonce,
 		AuthTime: claims.AuthTime.UTC().UnixMilli(), ACR: claims.ACR, AMR: strings.Join(claims.AMR, " "),
 		CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(5 * time.Minute).UnixMilli(),
@@ -325,8 +334,14 @@ func (s *Service) Authorize(ctx context.Context, cookieHeader, clientID, redirec
 func (s *Service) Token(ctx context.Context, form url.Values, authorization string) (TokenResponse, error) {
 	if form.Get("grant_type") == "client_credentials" {
 		id, secret, err := clientCredentials(form.Get("client_id"), form.Get("client_secret"), authorization)
-		if err == nil && strings.HasPrefix(id, "sac_") {
-			return s.serviceAccountToken(ctx, id, secret, form.Get("scope"))
+		if err == nil {
+			token, tokenErr := s.serviceAccountToken(ctx, id, secret, form.Get("scope"))
+			if tokenErr == nil {
+				return token, nil
+			}
+			if !errors.Is(tokenErr, errServiceAccountCredentialMissing) {
+				return TokenResponse{}, ErrInvalidRequest
+			}
 		}
 	}
 	client, err := s.authenticateClient(ctx, form.Get("client_id"), form.Get("client_secret"), authorization)
@@ -343,7 +358,7 @@ func (s *Service) Token(ctx context.Context, form url.Values, authorization stri
 			return TokenResponse{}, ErrInvalidRequest
 		}
 		scope := normalizeWords(form.Get("scope"))
-		token, expires, err := s.authn.IssueTenantOAuthClientToken(ctx, client.ID, client.TenantID, "", scope, client.Name)
+		token, expires, err := s.authn.IssueTenantOAuthClientToken(ctx, client.ID.String(), client.TenantID.String(), "", scope, client.Name)
 		return TokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: expires, Scope: scope}, err
 	default:
 		return TokenResponse{}, ErrInvalidRequest
@@ -359,10 +374,13 @@ func (s *Service) serviceAccountToken(ctx context.Context, id, secret, requested
 		ColumnExpr("principal.login_name AS login_name, principal.status AS principal_status, member.status AS member_status, tenant.status AS tenant_status").
 		Join("JOIN iam_service_accounts AS account ON account.principal_id = credential.principal_id").
 		Join("JOIN iam_principals AS principal ON principal.id = account.principal_id").
-		Join("JOIN iam_tenant_members AS member ON member.tenant_id = account.owner_tenant_id AND member.user_subject = account.principal_id").
+		Join("JOIN iam_tenant_members AS member ON member.tenant_id = account.owner_tenant_id AND member.principal_id = account.principal_id").
 		Join("JOIN iam_tenants AS tenant ON tenant.id = account.owner_tenant_id").
 		Where("credential.id = ?", id).Scan(ctx, &account)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TokenResponse{}, errServiceAccountCredentialMissing
+		}
 		return TokenResponse{}, ErrInvalidRequest
 	}
 	now := s.now().UTC().UnixMilli()
@@ -379,7 +397,7 @@ func (s *Service) serviceAccountToken(ctx context.Context, id, secret, requested
 	if !allowedScopes(account.Scopes, scope) {
 		return TokenResponse{}, ErrInvalidRequest
 	}
-	token, expires, err := s.authn.IssueTenantServiceAccountToken(ctx, account.PrincipalID, account.TenantID, "", scope, account.LoginName, account.TokenVersion)
+	token, expires, err := s.authn.IssueTenantServiceAccountToken(ctx, account.PrincipalID.String(), account.TenantID.String(), "", scope, account.LoginName, account.TokenVersion)
 	if err != nil {
 		return TokenResponse{}, err
 	}
@@ -407,8 +425,8 @@ func (s *Service) authorizationCode(ctx context.Context, client clientRow, form 
 	if active, err := s.activeMember(ctx, client.TenantID, row.PrincipalID); err != nil || !active {
 		return TokenResponse{}, ErrInvalidRequest
 	}
-	assurance := oauthAssurance(row.AuthTime, row.ACR, row.AMR, client.ID)
-	access, expires, err := s.authn.IssueTenantAccessTokenWithAssurance(ctx, row.PrincipalID, client.TenantID, "", row.Scope, assurance)
+	assurance := oauthAssurance(row.AuthTime, row.ACR, row.AMR, client.ID.String())
+	access, expires, err := s.authn.IssueTenantAccessTokenWithAssurance(ctx, row.PrincipalID, client.TenantID.String(), "", row.Scope, assurance)
 	if err != nil {
 		return TokenResponse{}, err
 	}
@@ -421,7 +439,7 @@ func (s *Service) authorizationCode(ctx context.Context, client clientRow, form 
 		}
 	}
 	if containsWord(row.Scope, "openid") {
-		response.IDToken, err = s.authn.IssueTenantIDTokenWithAssurance(ctx, row.PrincipalID, client.TenantID, client.ID, row.Nonce, assurance)
+		response.IDToken, err = s.authn.IssueTenantIDTokenWithAssurance(ctx, row.PrincipalID, client.TenantID.String(), client.ID.String(), row.Nonce, assurance)
 		if err != nil {
 			return TokenResponse{}, err
 		}
@@ -464,12 +482,12 @@ func (s *Service) refresh(ctx context.Context, client clientRow, token string) (
 	if active, err := s.activeMember(ctx, client.TenantID, row.PrincipalID); err != nil || !active {
 		return TokenResponse{}, ErrInvalidRequest
 	}
-	assurance := oauthAssurance(row.AuthTime, row.ACR, row.AMR, client.ID)
+	assurance := oauthAssurance(row.AuthTime, row.ACR, row.AMR, client.ID.String())
 	next, nextRow, err := s.makeRefresh(row.PrincipalID, client.ID, row.Scope, row.FamilyID, assurance)
 	if err != nil {
 		return TokenResponse{}, err
 	}
-	access, expires, err := s.authn.IssueTenantAccessTokenWithAssurance(ctx, row.PrincipalID, client.TenantID, "", row.Scope, assurance)
+	access, expires, err := s.authn.IssueTenantAccessTokenWithAssurance(ctx, row.PrincipalID, client.TenantID.String(), "", row.Scope, assurance)
 	if err != nil {
 		return TokenResponse{}, err
 	}
@@ -489,7 +507,7 @@ func (s *Service) refresh(ctx context.Context, client clientRow, token string) (
 	return TokenResponse{AccessToken: access, TokenType: "Bearer", ExpiresIn: expires, RefreshToken: next, Scope: row.Scope}, err
 }
 
-func (s *Service) makeRefresh(principalID, clientID, scope, familyID string, assurance authnext.Assurance) (string, refreshRow, error) {
+func (s *Service) makeRefresh(principalID, clientID guid.ID, scope, familyID string, assurance authnext.Assurance) (string, refreshRow, error) {
 	token, err := secureToken(32)
 	if err != nil {
 		return "", refreshRow{}, err
@@ -545,7 +563,7 @@ func (s *Service) Introspect(ctx context.Context, form url.Values, authorization
 		// not as an error, so introspection responses stay stable for clients.
 		return map[string]any{"active": false}, nil //nolint:nilerr // RFC 7662: invalid token => active:false, nil error
 	}
-	return map[string]any{"active": true, "sub": claims.Subject, "iss": claims.Issuer, "aud": claims.Audience, "exp": claims.ExpiresAt.Unix()}, nil
+	return map[string]any{"active": true, "sub": claims.PrincipalID, "iss": claims.Issuer, "aud": claims.Audience, "exp": claims.ExpiresAt.Unix()}, nil
 }
 
 func (s *Service) client(ctx context.Context, id string) (clientRow, error) {
@@ -560,8 +578,8 @@ func (s *Service) client(ctx context.Context, id string) (clientRow, error) {
 	return row, err
 }
 
-func (s *Service) activeMember(ctx context.Context, tenantID, principalID string) (bool, error) {
-	count, err := s.db.NewSelect().Table("iam_tenant_members").Where("tenant_id = ? AND user_subject = ? AND status = 'active'", tenantID, principalID).Count(ctx)
+func (s *Service) activeMember(ctx context.Context, tenantID, principalID guid.ID) (bool, error) {
+	count, err := s.db.NewSelect().Table("iam_tenant_members").Where("tenant_id = ? AND principal_id = ? AND status = 'active'", tenantID, principalID).Count(ctx)
 	return count == 1, err
 }
 
@@ -618,8 +636,8 @@ func allowedRedirect(encoded, redirectURI string) bool {
 	return json.Unmarshal([]byte(encoded), &values) == nil && slices.Contains(values, redirectURI)
 }
 
-func validateClient(tenantID, name string, redirects, grants, scopes []string, public bool) error {
-	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(name) == "" || len(name) > 128 || len(grants) == 0 || len(scopes) == 0 {
+func validateClient(tenantID guid.ID, name string, redirects, grants, scopes []string, public bool) error {
+	if tenantID.Zero() || strings.TrimSpace(name) == "" || len(name) > 128 || len(grants) == 0 || len(scopes) == 0 {
 		return ErrInvalidRequest
 	}
 	allowedGrants := []string{"authorization_code", "refresh_token", "client_credentials"}
@@ -648,7 +666,7 @@ func validateClient(tenantID, name string, redirects, grants, scopes []string, p
 func clientFromRow(row clientRow) Client {
 	var redirects []string
 	_ = json.Unmarshal([]byte(row.RedirectURIs), &redirects)
-	return Client{ID: row.ID, TenantID: row.TenantID, Name: row.Name, RedirectURIs: redirects, GrantTypes: strings.Fields(strings.ReplaceAll(row.GrantTypes, ",", " ")), Scopes: strings.Fields(row.Scopes), PublicClient: row.PublicClient, Status: row.Status}
+	return Client{ID: row.ID.String(), TenantID: row.TenantID.String(), Name: row.Name, RedirectURIs: redirects, GrantTypes: strings.Fields(strings.ReplaceAll(row.GrantTypes, ",", " ")), Scopes: strings.Fields(row.Scopes), PublicClient: row.PublicClient, Status: row.Status}
 }
 
 func allowedScopes(allowed, requested string) bool {
@@ -703,7 +721,7 @@ func hashToken(token string) string {
 // hasConsent reports whether the principal has previously granted the client
 // the requested scopes. Public (third-party) clients require this record
 // before the flow can issue a code without an interactive screen.
-func (s *Service) hasConsent(ctx context.Context, clientID, principalID, scope string) (bool, error) {
+func (s *Service) hasConsent(ctx context.Context, clientID, principalID guid.ID, scope string) (bool, error) {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS iam_oauth_consents (
 		principal_id VARCHAR(64) NOT NULL,
 		client_id    VARCHAR(128) NOT NULL,
@@ -728,20 +746,7 @@ func (s *Service) hasConsent(ctx context.Context, clientID, principalID, scope s
 // recordConsent writes an OAuth consent grant so the authorization flow
 // leaves a compliance trail. A future interactive consent screen can gate
 // on this record's absence for third-party clients.
-func (s *Service) recordConsent(ctx context.Context, client clientRow, principalID, scope string) error {
-	// ponytail: CREATE IF NOT EXISTS avoids a migration dependency.
-	// Move to a proper goose migration when the consent table stabilizes.
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS iam_oauth_consents (
-		principal_id VARCHAR(64) NOT NULL,
-		client_id    VARCHAR(128) NOT NULL,
-		tenant_id    VARCHAR(128) NOT NULL,
-		scope        TEXT NOT NULL DEFAULT '',
-		created_at   BIGINT NOT NULL,
-		last_used_at BIGINT NOT NULL,
-		PRIMARY KEY (principal_id, client_id)
-	)`); err != nil {
-		return err
-	}
+func (s *Service) recordConsent(ctx context.Context, client clientRow, principalID guid.ID, scope string) error {
 	now := s.now().UTC().UnixMilli()
 	row := &consentRow{
 		PrincipalID: principalID, ClientID: client.ID, TenantID: client.TenantID,
@@ -764,9 +769,9 @@ func (s *Service) recordConsent(ctx context.Context, client clientRow, principal
 
 type consentRow struct {
 	bun.BaseModel `bun:"table:iam_oauth_consents"`
-	PrincipalID   string `bun:"principal_id,pk"`
-	ClientID      string `bun:"client_id,pk"`
-	TenantID      string
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
+	ClientID      guid.ID `bun:"client_id,pk"`
+	TenantID      guid.ID
 	Scope         string
 	CreatedAt     int64
 	LastUsedAt    int64

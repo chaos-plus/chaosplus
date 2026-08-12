@@ -12,7 +12,7 @@ Evidence-backed reusable frontend lessons are appended here by `skill-runtime.py
 
 ## L-b94712b1c400
 
-- Symptom: A copied admin application sent browser API traffic to the source project localhost port instead of the Chaosplus /api proxy.
+- Symptom: A copied admin application sent browser API traffic to the source project localhost port instead of the repository `/api` proxy.
 - Root cause: A copied .env.development retained the source project VITE_API_URL and overrode the repository proxy contract.
 - Prevention: Audit copied environment files and require browser API traffic to use the single relative /api client path before accepting a copied frontend.
 - Evidence: After removing the stale environment file, the real Chromium login and dashboard flow used /api and completed without 500 or 503 responses.

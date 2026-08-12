@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 // requireGrantablePermissions refuses a write that would hand out a permission
@@ -16,9 +17,9 @@ import (
 // Requests without verified claims are system flows (deployment bootstrap,
 // migrations) that run before any principal exists, so they are exempt. Every
 // HTTP path authenticates before reaching a service method.
-func (s *Service) requireGrantablePermissions(ctx context.Context, tenantID string, codes ...string) error {
+func (s *Service) requireGrantablePermissions(ctx context.Context, tenantID guid.ID, codes ...string) error {
 	claims, ok := authnext.FromContext(ctx)
-	if !ok || claims == nil || claims.Subject == "" {
+	if !ok || claims == nil || claims.PrincipalID.Zero() {
 		return nil
 	}
 	wanted := make([]string, 0, len(codes))
@@ -33,7 +34,7 @@ func (s *Service) requireGrantablePermissions(ctx context.Context, tenantID stri
 	if len(wanted) == 0 {
 		return nil
 	}
-	allowed, err := s.checker.CheckBulk(ctx, tenantID, wanted, claims.Subject)
+	allowed, err := s.checker.CheckBulk(ctx, tenantID, wanted, claims.PrincipalID)
 	if err != nil {
 		return err
 	}
@@ -48,8 +49,8 @@ func (s *Service) requireGrantablePermissions(ctx context.Context, tenantID stri
 // requireGrantableRole applies requireGrantablePermissions to every permission
 // a role currently carries. Assigning a principal to a role, or binding a group
 // or position to it, confers exactly that permission set.
-func (s *Service) requireGrantableRole(ctx context.Context, tenantID, roleID string) error {
-	if claims, ok := authnext.FromContext(ctx); !ok || claims == nil || claims.Subject == "" {
+func (s *Service) requireGrantableRole(ctx context.Context, tenantID, roleID guid.ID) error {
+	if claims, ok := authnext.FromContext(ctx); !ok || claims == nil || claims.PrincipalID.Zero() {
 		return nil
 	}
 	codes, err := s.repo.ListPermissions(ctx, tenantID, roleID)

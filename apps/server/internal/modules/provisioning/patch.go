@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	scimfilter "github.com/scim2/filter-parser/v2"
 )
 
@@ -26,7 +27,7 @@ type groupPatchValue struct {
 	Members     *[]SCIMGroupMember `json:"members,omitempty"`
 }
 
-func (s *Service) PatchUser(ctx context.Context, auth AuthContext, id string, patch PatchRequest, expectedVersion int64) (UserResource, error) {
+func (s *Service) PatchUser(ctx context.Context, auth AuthContext, id guid.ID, patch PatchRequest, expectedVersion int64) (UserResource, error) {
 	current, err := s.GetUser(ctx, auth, id)
 	if err != nil {
 		return UserResource{}, err
@@ -44,7 +45,7 @@ func (s *Service) PatchUser(ctx context.Context, auth AuthContext, id string, pa
 	return s.ReplaceUser(ctx, auth, id, input, expectedVersion)
 }
 
-func (s *Service) PatchGroup(ctx context.Context, auth AuthContext, id string, patch PatchRequest, expectedVersion int64) (GroupResource, error) {
+func (s *Service) PatchGroup(ctx context.Context, auth AuthContext, id guid.ID, patch PatchRequest, expectedVersion int64) (GroupResource, error) {
 	current, err := s.GetGroup(ctx, auth, id)
 	if err != nil {
 		return GroupResource{}, err
@@ -183,7 +184,11 @@ func applyGroupPatch(input *GroupInput, operation PatchOperation) error {
 			if !ok {
 				return ErrInvalidPath
 			}
-			input.Members = removeMember(input.Members, id)
+			memberID, err := guid.Parse(id)
+			if err != nil {
+				return ErrInvalidPath
+			}
+			input.Members = removeMember(input.Members, memberID)
 			return nil
 		}
 		if op == "remove" {
@@ -297,10 +302,10 @@ func decodeMembers(data json.RawMessage) ([]SCIMGroupMember, error) {
 	return []SCIMGroupMember{value}, nil
 }
 
-func removeMember(values []SCIMGroupMember, id string) []SCIMGroupMember {
+func removeMember(values []SCIMGroupMember, id guid.ID) []SCIMGroupMember {
 	result := values[:0]
 	for _, value := range values {
-		if value.Value != id {
+		if value.Value != id.String() {
 			result = append(result, value)
 		}
 	}

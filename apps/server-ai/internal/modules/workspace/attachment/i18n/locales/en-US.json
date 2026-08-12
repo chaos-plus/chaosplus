@@ -1,0 +1,6 @@
+{
+  "workspace.attachment.invalid": "The attachment is invalid.",
+  "workspace.attachment.not_found": "The attachment was not found.",
+  "workspace.attachment.version_conflict": "The attachment was changed by another request. Reload it and try again.",
+  "workspace.attachment.unavailable": "The attachment service is unavailable."
+}

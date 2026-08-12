@@ -32,7 +32,7 @@ func TestPasswordRecoveryLifecycleAndNotificationDelivery(t *testing.T) {
 		require.NotEmpty(t, r.Header.Get("Idempotency-Key"))
 		var payload notificationPayload
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		require.Equal(t, r.Header.Get("Idempotency-Key"), payload.ID)
+		require.Equal(t, r.Header.Get("Idempotency-Key"), guidString(payload.ID))
 		deliveries <- payload
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -49,7 +49,7 @@ func TestPasswordRecoveryLifecycleAndNotificationDelivery(t *testing.T) {
 	assert.Zero(t, count)
 	_, err = EnsureBootstrapPrincipal(t.Context(), service.db, BootstrapPrincipal{
 		LoginName: "admin", Password: "correct horse battery staple", DisplayName: "Administrator", Email: "admin@example.com",
-	})
+	}, newTestIDGenerator())
 	require.NoError(t, err)
 	var credentialVersionBeforeRecovery int64
 	require.NoError(t, service.db.NewSelect().Model((*credentialRow)(nil)).Column("credential_version").Where("principal_id = ?", principalID).Scan(t.Context(), &credentialVersionBeforeRecovery))
@@ -60,7 +60,7 @@ func TestPasswordRecoveryLifecycleAndNotificationDelivery(t *testing.T) {
 	session, _, err := service.Login(t.Context(), "admin", "correct horse battery staple", "")
 	require.NoError(t, err)
 	oldCookie := service.SessionCookie(session)
-	oldAccess, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "openid")
+	oldAccess, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "openid")
 	require.NoError(t, err)
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO iam_refresh_tokens
  (id_hash, family_id, principal_id, client_id, scope, created_at, expires_at, used_at, revoked_at)
@@ -120,11 +120,11 @@ func TestPasswordRecoveryLifecycleAndNotificationDelivery(t *testing.T) {
 
 	second := receiveNotification(t, deliveries)
 	assert.Equal(t, passwordChangedNotification, second.Type)
-	auditService := auditmod.NewService(service.db)
+	auditService := auditmod.NewService(service.db, newTestIDGenerator())
 	events, total, err := auditService.List(t.Context(), auditmod.Filter{TenantID: authnAuditTenant, EventType: "password_recovery_completed", Offset: 0, Limit: 50})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
-	assert.Equal(t, principalID, events[0].PrincipalID)
+	assert.Equal(t, parseGUID(principalID), events[0].PrincipalID)
 	integrity, err := auditService.Verify(t.Context(), authnAuditTenant)
 	require.NoError(t, err)
 	assert.True(t, integrity.Valid)
@@ -144,7 +144,7 @@ func TestPasswordRecoveryExpiryStorageAndDeliveryFailures(t *testing.T) {
 	recoveryToken := recoveryTokenFromOutbox(t, service)
 	var notification notificationOutboxRow
 	require.NoError(t, service.db.NewSelect().Model(&notification).Scan(t.Context()))
-	err := service.deliverNotification(t.Context(), notification.ID)
+	err := service.deliverNotification(t.Context(), guidString(notification.ID))
 	require.ErrorContains(t, err, "status 503")
 	require.NoError(t, service.db.NewSelect().Model(&notification).Where("id = ?", notification.ID).Scan(t.Context()))
 	assert.Equal(t, "pending", notification.Status)
@@ -204,13 +204,13 @@ func TestPasswordRecoveryFailsClosedOnCredentialStorageCorruption(t *testing.T) 
 func TestPasswordRecoveryHistoryRetentionAndInvalidURL(t *testing.T) {
 	service, principalID := newLocalService(t)
 	for index, id := range []string{"history-1", "history-2", "history-3", "history-4", "history-5", "history-6"} {
-		row := passwordHistoryRow{ID: id, PrincipalID: principalID, PasswordHash: "hash", CreatedAt: int64(index + 1)}
+		row := passwordHistoryRow{ID: testID(id), PrincipalID: parseGUID(principalID), PasswordHash: "hash", CreatedAt: int64(index + 1)}
 		_, err := service.db.NewInsert().Model(&row).Exec(t.Context())
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, trimPasswordHistory(t.Context(), service.db, principalID))
-	count, err := service.db.NewSelect().Model((*passwordHistoryRow)(nil)).Where("principal_id = ?", principalID).Count(t.Context())
+	require.NoError(t, trimPasswordHistory(t.Context(), service.db, parseGUID(principalID)))
+	count, err := service.db.NewSelect().Model((*passwordHistoryRow)(nil)).Where("principal_id = ?", parseGUID(principalID)).Count(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 5, count)
 
@@ -297,10 +297,10 @@ func TestRecoveryNotificationRetriesCorruptionAndStaleLocks(t *testing.T) {
 		require.NoError(t, service.BeginPasswordRecovery(t.Context(), "admin@example.com"))
 		var row notificationOutboxRow
 		require.NoError(t, service.db.NewSelect().Model(&row).Where("kind = ?", passwordRecoveryNotification).Scan(t.Context()))
-		assert.ErrorContains(t, service.deliverNotification(t.Context(), row.ID), "status 503")
+		assert.ErrorContains(t, service.deliverNotification(t.Context(), guidString(row.ID)), "status 503")
 		_, err := service.db.NewUpdate().Model((*notificationOutboxRow)(nil)).Set("available_at = 0").Where("id = ?", row.ID).Exec(t.Context())
 		require.NoError(t, err)
-		assert.ErrorContains(t, service.deliverNotification(t.Context(), row.ID), "status 503")
+		assert.ErrorContains(t, service.deliverNotification(t.Context(), guidString(row.ID)), "status 503")
 		require.NoError(t, service.db.NewSelect().Model(&row).Where("id = ?", row.ID).Scan(t.Context()))
 		assert.Equal(t, "failed", row.Status)
 		assert.Equal(t, 2, row.Attempts)
@@ -314,7 +314,7 @@ func TestRecoveryNotificationRetriesCorruptionAndStaleLocks(t *testing.T) {
 		require.NoError(t, service.db.NewSelect().Model(&row).Where("kind = ?", passwordRecoveryNotification).Scan(t.Context()))
 		_, err := service.db.NewUpdate().Model((*notificationOutboxRow)(nil)).Set("payload_ciphertext = ?", "v1.%").Where("id = ?", row.ID).Exec(t.Context())
 		require.NoError(t, err)
-		assert.ErrorIs(t, service.deliverNotification(t.Context(), row.ID), errInvalidAuthnCiphertext)
+		assert.ErrorIs(t, service.deliverNotification(t.Context(), guidString(row.ID)), errInvalidAuthnCiphertext)
 		require.NoError(t, service.db.NewSelect().Model(&row).Where("id = ?", row.ID).Scan(t.Context()))
 		assert.Equal(t, "failed", row.Status)
 		assert.Equal(t, 1, row.Attempts)
@@ -410,7 +410,7 @@ func TestNotificationRealSMTPDelivery(t *testing.T) {
 		message := []byte("To: " + payload.Recipient + "\r\n" +
 			"From: chaosplus-no-reply@localhost\r\n" +
 			"Subject: " + subject + "\r\n" +
-			"Message-ID: <" + payload.ID + "@chaosplus>\r\n" +
+			"Message-ID: <" + payload.ID.String() + "@chaosplus>\r\n" +
 			"Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n" +
 			"\r\n" + body)
 		require.NoError(t, smtp.SendMail(smtpHost, nil, "chaosplus-no-reply@localhost", []string{payload.Recipient}, message))
@@ -509,7 +509,7 @@ func recoveryTokenFromOutbox(t *testing.T, service *WebService) string {
 	t.Helper()
 	var row notificationOutboxRow
 	require.NoError(t, service.db.NewSelect().Model(&row).Where("kind = ?", passwordRecoveryNotification).Order("created_at DESC", "id DESC").Limit(1).Scan(t.Context()))
-	plain, err := service.decryptAuthnData("notification:v1", row.ID, row.PayloadCiphertext)
+	plain, err := service.decryptAuthnData("notification:v1", guidString(row.ID), row.PayloadCiphertext)
 	require.NoError(t, err)
 	var payload notificationPayload
 	require.NoError(t, json.Unmarshal(plain, &payload))

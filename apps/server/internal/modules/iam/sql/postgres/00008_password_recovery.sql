@@ -5,7 +5,7 @@ ALTER TABLE iam_principals ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FA
 
 CREATE TABLE iam_password_recovery_tokens (
     token_hmac CHAR(64) PRIMARY KEY,
-    principal_id TEXT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
+    principal_id BIGINT NOT NULL REFERENCES iam_principals (id) ON DELETE CASCADE,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NOT NULL DEFAULT 0
@@ -13,7 +13,7 @@ CREATE TABLE iam_password_recovery_tokens (
 CREATE INDEX idx_iam_password_recovery_principal ON iam_password_recovery_tokens (principal_id, consumed_at, expires_at);
 
 CREATE TABLE iam_notification_outbox (
-    id TEXT PRIMARY KEY,
+    id BIGINT PRIMARY KEY,
     kind TEXT NOT NULL,
     recipient TEXT NOT NULL,
     payload_ciphertext TEXT NOT NULL,

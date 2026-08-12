@@ -10,6 +10,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -48,10 +49,10 @@ var (
 )
 
 type AccessReview struct {
-	ID          string             `json:"id"`
-	TenantID    string             `json:"tenant_id"`
+	ID          guid.ID            `json:"id"`
+	TenantID    guid.ID            `json:"tenant_id"`
 	Name        string             `json:"name"`
-	OwnerID     string             `json:"owner_id"`
+	OwnerID     guid.ID            `json:"owner_id"`
 	Status      string             `json:"status"`
 	DueAt       time.Time          `json:"due_at"`
 	CompletedAt *time.Time         `json:"completed_at,omitempty"`
@@ -65,18 +66,18 @@ type AccessReview struct {
 }
 
 type AccessReviewItem struct {
-	ID             string     `json:"id"`
-	ReviewID       string     `json:"review_id"`
-	PrincipalID    string     `json:"principal_id"`
+	ID             guid.ID    `json:"id"`
+	ReviewID       guid.ID    `json:"review_id"`
+	PrincipalID    guid.ID    `json:"principal_id"`
 	PrincipalName  string     `json:"principal_name"`
-	RoleID         string     `json:"role_id"`
+	RoleID         guid.ID    `json:"role_id"`
 	RoleName       string     `json:"role_name"`
 	GrantType      string     `json:"grant_type"`
-	GrantID        string     `json:"grant_id,omitempty"`
+	GrantID        guid.ID    `json:"grant_id,omitempty"`
 	GrantCreatedAt time.Time  `json:"grant_created_at"`
 	GrantExpiresAt *time.Time `json:"grant_expires_at,omitempty"`
 	Decision       string     `json:"decision"`
-	DecidedBy      string     `json:"decided_by,omitempty"`
+	DecidedBy      guid.ID    `json:"decided_by,omitempty"`
 	DecisionNote   string     `json:"decision_note,omitempty"`
 	DecidedAt      *time.Time `json:"decided_at,omitempty"`
 }
@@ -88,64 +89,64 @@ type CreateAccessReview struct {
 
 type accessReviewRow struct {
 	bun.BaseModel `bun:"table:iam_access_reviews"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
-	Name          string `bun:"name"`
-	OwnerID       string `bun:"owner_id"`
-	Status        string `bun:"status"`
-	DueAt         int64  `bun:"due_at"`
-	CompletedAt   int64  `bun:"completed_at"`
-	CreatedAt     int64  `bun:"created_at"`
-	UpdatedAt     int64  `bun:"updated_at"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
+	Name          string  `bun:"name"`
+	OwnerID       guid.ID `bun:"owner_id"`
+	Status        string  `bun:"status"`
+	DueAt         int64   `bun:"due_at"`
+	CompletedAt   int64   `bun:"completed_at"`
+	CreatedAt     int64   `bun:"created_at"`
+	UpdatedAt     int64   `bun:"updated_at"`
 }
 
 type accessReviewItemRow struct {
 	bun.BaseModel  `bun:"table:iam_access_review_items"`
-	TenantID       string `bun:"tenant_id,pk"`
-	ReviewID       string `bun:"review_id,pk"`
-	ID             string `bun:"id,pk"`
-	PrincipalID    string `bun:"principal_id"`
-	PrincipalName  string `bun:"principal_name"`
-	RoleID         string `bun:"role_id"`
-	RoleName       string `bun:"role_name"`
-	GrantType      string `bun:"grant_type"`
-	GrantID        string `bun:"grant_id"`
-	GrantCreatedAt int64  `bun:"grant_created_at"`
-	GrantExpiresAt int64  `bun:"grant_expires_at"`
-	Decision       string `bun:"decision"`
-	DecidedBy      string `bun:"decided_by"`
-	DecisionNote   string `bun:"decision_note"`
-	DecidedAt      int64  `bun:"decided_at"`
+	TenantID       guid.ID `bun:"tenant_id,pk"`
+	ReviewID       guid.ID `bun:"review_id,pk"`
+	ID             guid.ID `bun:"id,pk"`
+	PrincipalID    guid.ID `bun:"principal_id"`
+	PrincipalName  string  `bun:"principal_name"`
+	RoleID         guid.ID `bun:"role_id"`
+	RoleName       string  `bun:"role_name"`
+	GrantType      string  `bun:"grant_type"`
+	GrantID        guid.ID `bun:"grant_id"`
+	GrantCreatedAt int64   `bun:"grant_created_at"`
+	GrantExpiresAt int64   `bun:"grant_expires_at"`
+	Decision       string  `bun:"decision"`
+	DecidedBy      guid.ID `bun:"decided_by"`
+	DecisionNote   string  `bun:"decision_note"`
+	DecidedAt      int64   `bun:"decided_at"`
 }
 
 type reviewableGrantRow struct {
-	PrincipalID    string `bun:"principal_id"`
-	PrincipalName  string `bun:"principal_name"`
-	RoleID         string `bun:"role_id"`
-	RoleName       string `bun:"role_name"`
-	GrantType      string `bun:"grant_type"`
-	GrantID        string `bun:"grant_id"`
-	GrantCreatedAt int64  `bun:"grant_created_at"`
-	GrantExpiresAt int64  `bun:"grant_expires_at"`
+	PrincipalID    guid.ID `bun:"principal_id"`
+	PrincipalName  string  `bun:"principal_name"`
+	RoleID         guid.ID `bun:"role_id"`
+	RoleName       string  `bun:"role_name"`
+	GrantType      string  `bun:"grant_type"`
+	GrantID        guid.ID `bun:"grant_id"`
+	GrantCreatedAt int64   `bun:"grant_created_at"`
+	GrantExpiresAt int64   `bun:"grant_expires_at"`
 }
 
 type accessReviewCountRow struct {
-	ReviewID string `bun:"review_id"`
-	Total    int    `bun:"total"`
-	Pending  int    `bun:"pending"`
-	Kept     int    `bun:"kept"`
-	Revoked  int    `bun:"revoked"`
+	ReviewID guid.ID `bun:"review_id"`
+	Total    int     `bun:"total"`
+	Pending  int     `bun:"pending"`
+	Kept     int     `bun:"kept"`
+	Revoked  int     `bun:"revoked"`
 }
 
-func (s *Service) CreateReview(ctx context.Context, tenantID, ownerID string, input CreateAccessReview) (AccessReview, error) {
-	tenantID, ownerID, input.Name = strings.TrimSpace(tenantID), strings.TrimSpace(ownerID), strings.TrimSpace(input.Name)
+func (s *Service) CreateReview(ctx context.Context, tenantID, ownerID guid.ID, input CreateAccessReview) (AccessReview, error) {
+	input.Name = strings.TrimSpace(input.Name)
 	now := s.now().UTC()
-	if !validID(tenantID, 128) || !validID(ownerID, 255) || len(input.Name) < 3 || len(input.Name) > 128 ||
+	if tenantID.Zero() || ownerID.Zero() || len(input.Name) < 3 || len(input.Name) > 128 ||
 		!input.DueAt.After(now) || input.DueAt.After(now.Add(maxReviewDuration)) {
 		return AccessReview{}, ErrInvalidReview
 	}
 	reviewID, err := s.nextID()
-	if err != nil || !validID(reviewID, 64) {
+	if err != nil || reviewID.Zero() {
 		return AccessReview{}, fmt.Errorf("generate access review id: %w", errors.Join(err, ErrInvalidReview))
 	}
 	row := accessReviewRow{
@@ -173,7 +174,7 @@ func (s *Service) CreateReview(ctx context.Context, tenantID, ownerID string, in
 		}
 		for _, grant := range grants {
 			itemID, err := s.nextID()
-			if err != nil || !validID(itemID, 64) {
+			if err != nil || itemID.Zero() {
 				return fmt.Errorf("generate access review item id: %w", errors.Join(err, ErrInvalidReview))
 			}
 			items = append(items, accessReviewItemRow{
@@ -198,8 +199,8 @@ func (s *Service) CreateReview(ctx context.Context, tenantID, ownerID string, in
 	return reviewFromRows(row, items, now), nil
 }
 
-func (s *Service) ListReviews(ctx context.Context, tenantID string) ([]AccessReview, error) {
-	if !validID(tenantID, 128) {
+func (s *Service) ListReviews(ctx context.Context, tenantID guid.ID) ([]AccessReview, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidReview
 	}
 	rows := make([]accessReviewRow, 0)
@@ -222,8 +223,8 @@ func (s *Service) ListReviews(ctx context.Context, tenantID string) ([]AccessRev
 	return reviews, nil
 }
 
-func (s *Service) GetReview(ctx context.Context, tenantID, reviewID string) (AccessReview, error) {
-	if !validID(tenantID, 128) || !validID(reviewID, 64) {
+func (s *Service) GetReview(ctx context.Context, tenantID, reviewID guid.ID) (AccessReview, error) {
+	if tenantID.Zero() || reviewID.Zero() {
 		return AccessReview{}, ErrInvalidReview
 	}
 	row, err := getReviewRow(ctx, s.db, tenantID, reviewID)
@@ -238,10 +239,9 @@ func (s *Service) GetReview(ctx context.Context, tenantID, reviewID string) (Acc
 	return reviewFromRows(row, items, s.now().UTC()), nil
 }
 
-func (s *Service) DecideReviewItem(ctx context.Context, tenantID, reviewID, itemID, actorID, decision, note string) (AccessReviewItem, error) {
-	tenantID, reviewID, itemID, actorID = strings.TrimSpace(tenantID), strings.TrimSpace(reviewID), strings.TrimSpace(itemID), strings.TrimSpace(actorID)
+func (s *Service) DecideReviewItem(ctx context.Context, tenantID, reviewID, itemID, actorID guid.ID, decision, note string) (AccessReviewItem, error) {
 	note = strings.TrimSpace(note)
-	if !validID(tenantID, 128) || !validID(reviewID, 64) || !validID(itemID, 64) || !validID(actorID, 255) ||
+	if tenantID.Zero() || reviewID.Zero() || itemID.Zero() || actorID.Zero() ||
 		(decision != ReviewDecisionKeep && decision != ReviewDecisionRevoke) || len(note) > 500 {
 		return AccessReviewItem{}, ErrInvalidReview
 	}
@@ -352,17 +352,16 @@ func (s *Service) DecideReviewItem(ctx context.Context, tenantID, reviewID, item
 	return reviewItemFromRow(updated), nil
 }
 
-func (s *Service) CompleteReview(ctx context.Context, tenantID, reviewID, actorID string) (AccessReview, error) {
+func (s *Service) CompleteReview(ctx context.Context, tenantID, reviewID, actorID guid.ID) (AccessReview, error) {
 	return s.finishReview(ctx, tenantID, reviewID, actorID, ReviewStatusCompleted)
 }
 
-func (s *Service) CancelReview(ctx context.Context, tenantID, reviewID, actorID string) (AccessReview, error) {
+func (s *Service) CancelReview(ctx context.Context, tenantID, reviewID, actorID guid.ID) (AccessReview, error) {
 	return s.finishReview(ctx, tenantID, reviewID, actorID, ReviewStatusCancelled)
 }
 
-func (s *Service) finishReview(ctx context.Context, tenantID, reviewID, actorID, status string) (AccessReview, error) {
-	tenantID, reviewID, actorID = strings.TrimSpace(tenantID), strings.TrimSpace(reviewID), strings.TrimSpace(actorID)
-	if !validID(tenantID, 128) || !validID(reviewID, 64) || !validID(actorID, 255) ||
+func (s *Service) finishReview(ctx context.Context, tenantID, reviewID, actorID guid.ID, status string) (AccessReview, error) {
+	if tenantID.Zero() || reviewID.Zero() || actorID.Zero() ||
 		(status != ReviewStatusCompleted && status != ReviewStatusCancelled) {
 		return AccessReview{}, ErrInvalidReview
 	}
@@ -423,16 +422,16 @@ func (s *Service) finishReview(ctx context.Context, tenantID, reviewID, actorID,
 // position-derived, entity-scoped bindings, dynamic-group-derived access, and
 // ReBAC relationship edges (both iam_relationships graph edges and
 // iam_resource_relationships business-resource edges).
-func listReviewableGrants(ctx context.Context, db bun.IDB, tenantID string, now int64) ([]reviewableGrantRow, error) {
+func listReviewableGrants(ctx context.Context, db bun.IDB, tenantID guid.ID, now int64) ([]reviewableGrantRow, error) {
 	rows := make([]reviewableGrantRow, 0)
 	err := db.NewRaw(`
-SELECT members.user_subject AS principal_id, tenant_members.display_name AS principal_name,
-       roles.id AS role_id, roles.name AS role_name, 'permanent' AS grant_type, '' AS grant_id,
+SELECT members.principal_id, tenant_members.display_name AS principal_name,
+       roles.id AS role_id, roles.name AS role_name, 'permanent' AS grant_type, 0 AS grant_id,
        members.created_at AS grant_created_at, 0 AS grant_expires_at
 FROM iam_role_members AS members
 JOIN iam_roles AS roles ON roles.tenant_id = members.tenant_id AND roles.id = members.role_id
 JOIN iam_tenant_members AS tenant_members
-  ON tenant_members.tenant_id = members.tenant_id AND tenant_members.user_subject = members.user_subject AND tenant_members.status = 'active'
+  ON tenant_members.tenant_id = members.tenant_id AND tenant_members.principal_id = members.principal_id AND tenant_members.status = 'active'
 WHERE members.tenant_id = ?
 UNION ALL
 SELECT grants.principal_id, tenant_members.display_name, roles.id, roles.name, 'temporary', grants.id,
@@ -440,7 +439,7 @@ SELECT grants.principal_id, tenant_members.display_name, roles.id, roles.name, '
 FROM iam_temporary_role_grants AS grants
 JOIN iam_roles AS roles ON roles.tenant_id = grants.tenant_id AND roles.id = grants.role_id
 JOIN iam_tenant_members AS tenant_members
-  ON tenant_members.tenant_id = grants.tenant_id AND tenant_members.user_subject = grants.principal_id AND tenant_members.status = 'active'
+  ON tenant_members.tenant_id = grants.tenant_id AND tenant_members.principal_id = grants.principal_id AND tenant_members.status = 'active'
 WHERE grants.tenant_id = ? AND grants.starts_at <= ? AND grants.ends_at > ?
 UNION ALL
 SELECT gm.principal_id, tm.display_name, roles.id, roles.name, 'group', b.group_id,
@@ -449,7 +448,7 @@ FROM iam_group_role_bindings AS b
 JOIN iam_groups AS g ON g.tenant_id = b.tenant_id AND g.id = b.group_id AND g.status = 'active' AND g.group_type = 'static'
 JOIN iam_group_members AS gm ON gm.tenant_id = b.tenant_id AND gm.group_id = b.group_id
 JOIN iam_roles AS roles ON roles.tenant_id = b.tenant_id AND roles.id = b.role_id
-JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.user_subject = gm.principal_id AND tm.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = gm.tenant_id AND tm.principal_id = gm.principal_id AND tm.status = 'active'
 WHERE b.tenant_id = ? AND (gm.starts_at = 0 OR gm.starts_at <= ?) AND (gm.ends_at = 0 OR gm.ends_at > ?)
 UNION ALL
 SELECT pm.principal_id, tm.display_name, roles.id, roles.name, 'position', b.position_id,
@@ -458,7 +457,7 @@ FROM iam_position_role_bindings AS b
 JOIN iam_positions AS p ON p.tenant_id = b.tenant_id AND p.id = b.position_id AND p.status = 'active'
 JOIN iam_position_members AS pm ON pm.tenant_id = b.tenant_id AND pm.position_id = b.position_id
 JOIN iam_roles AS roles ON roles.tenant_id = b.tenant_id AND roles.id = b.role_id
-JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.user_subject = pm.principal_id AND tm.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.principal_id = pm.principal_id AND tm.status = 'active'
 WHERE b.tenant_id = ? AND (pm.starts_at = 0 OR pm.starts_at <= ?) AND (pm.ends_at = 0 OR pm.ends_at > ?)
 UNION ALL
 SELECT b.principal_id, tm.display_name, roles.id, roles.name, 'entity', b.scope_id,
@@ -466,25 +465,25 @@ SELECT b.principal_id, tm.display_name, roles.id, roles.name, 'entity', b.scope_
 FROM iam_role_bindings AS b
 JOIN iam_entities AS e ON e.tenant_id = b.tenant_id AND e.id = b.scope_id AND e.status = 'active'
 JOIN iam_roles AS roles ON roles.tenant_id = b.tenant_id AND roles.id = b.role_id
-JOIN iam_tenant_members AS tm ON tm.tenant_id = b.tenant_id AND tm.user_subject = b.principal_id AND tm.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = b.tenant_id AND tm.principal_id = b.principal_id AND tm.status = 'active'
 WHERE b.tenant_id = ? AND b.scope_type = 'entity' AND (b.expires_at = 0 OR b.expires_at > ?)
 UNION ALL
 SELECT r.subject_id AS principal_id, tm.display_name AS principal_name,
-       '' AS role_id, (r.relation || ' of ' || e.type || ' ' || e.name) AS role_name,
+       0 AS role_id, (r.relation || ' of ' || e.type || ' ' || e.name) AS role_name,
        'relationship' AS grant_type, r.resource_id AS grant_id,
        r.created_at AS grant_created_at, 0 AS grant_expires_at
 FROM iam_relationships AS r
 JOIN iam_entities AS e ON e.tenant_id = r.tenant_id AND e.id = r.resource_id AND e.status = 'active'
-JOIN iam_tenant_members AS tm ON tm.tenant_id = r.tenant_id AND tm.user_subject = r.subject_id AND tm.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = r.tenant_id AND tm.principal_id = r.subject_id AND tm.status = 'active'
 WHERE r.tenant_id = ? AND r.subject_type = 'principal'
 UNION ALL
 SELECT rr.subject_id AS principal_id, tm.display_name AS principal_name,
-       '' AS role_id, (rr.relation || ' of ' || rr.resource_type || ' ' || rr.resource_id) AS role_name,
+       0 AS role_id, (rr.relation || ' of ' || rr.resource_type || ' ' || rr.resource_id) AS role_name,
        'relationship' AS grant_type, rr.entity_id AS grant_id,
        rr.created_at AS grant_created_at, 0 AS grant_expires_at
 FROM iam_resource_relationships AS rr
 JOIN iam_entities AS e ON e.tenant_id = rr.tenant_id AND e.id = rr.entity_id AND e.status = 'active'
-JOIN iam_tenant_members AS tm ON tm.tenant_id = rr.tenant_id AND tm.user_subject = rr.subject_id AND tm.status = 'active'
+JOIN iam_tenant_members AS tm ON tm.tenant_id = rr.tenant_id AND tm.principal_id = rr.subject_id AND tm.status = 'active'
 WHERE rr.tenant_id = ? AND rr.subject_type = 'principal'
 ORDER BY principal_id, role_id, grant_type, grant_id`, tenantID, tenantID, now, now,
 		tenantID, now, now, tenantID, now, now, tenantID, now, tenantID, tenantID).Scan(ctx, &rows)
@@ -499,38 +498,38 @@ ORDER BY principal_id, role_id, grant_type, grant_id`, tenantID, tenantID, now, 
 }
 
 type dynamicGroupReviewRow struct {
-	GroupID      string `bun:"group_id"`
-	RuleJSON     string `bun:"rule_json"`
-	Subject      string `bun:"subject"`
+	GroupID      guid.ID `bun:"group_id"`
+	RuleJSON     string  `bun:"rule_json"`
+	Subject      guid.ID `bun:"subject"`
 	Email        string
-	DepartmentID string `bun:"department_id"`
+	DepartmentID guid.ID `bun:"department_id"`
 	Status       string
-	RoleID       string `bun:"role_id"`
-	RoleName     string `bun:"role_name"`
+	RoleID       guid.ID `bun:"role_id"`
+	RoleName     string  `bun:"role_name"`
 }
 
 // listDynamicGroupGrants derives reviewable access from dynamic group rules:
 // every active member whose attributes match a dynamic group rule inherits the
 // roles bound to that group, exactly as the authorizer grants them.
-func listDynamicGroupGrants(ctx context.Context, db bun.IDB, tenantID string) ([]reviewableGrantRow, error) {
+func listDynamicGroupGrants(ctx context.Context, db bun.IDB, tenantID guid.ID) ([]reviewableGrantRow, error) {
 	rows := make([]dynamicGroupReviewRow, 0)
 	err := db.NewRaw(`
-SELECT g.id AS group_id, g.rule_json, tm.user_subject AS subject, tm.email,
-       COALESCE(md.department_id, '') AS department_id, tm.status, b.role_id, roles.name AS role_name
+SELECT g.id AS group_id, g.rule_json, tm.principal_id AS subject, tm.email,
+       COALESCE(md.department_id, 0) AS department_id, tm.status, b.role_id, roles.name AS role_name
 FROM iam_groups AS g
 JOIN iam_group_role_bindings AS b ON b.tenant_id = g.tenant_id AND b.group_id = g.id
 JOIN iam_roles AS roles ON roles.tenant_id = b.tenant_id AND roles.id = b.role_id
 JOIN iam_tenant_members AS tm ON tm.tenant_id = g.tenant_id AND tm.status = 'active'
-LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.user_subject
+LEFT JOIN iam_member_departments AS md ON md.tenant_id = tm.tenant_id AND md.principal_id = tm.principal_id
 WHERE g.tenant_id = ? AND g.group_type = 'dynamic' AND g.status = 'active'
-ORDER BY g.id, tm.user_subject, b.role_id`, tenantID).Scan(ctx, &rows)
+ORDER BY g.id, tm.principal_id, b.role_id`, tenantID).Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("list dynamic group review candidates: %w", err)
 	}
 	grants := make([]reviewableGrantRow, 0, len(rows))
 	for _, row := range rows {
 		matched, err := policyx.EvaluateMemberRule([]byte(row.RuleJSON), policyx.MemberFacts{
-			Subject: row.Subject, Email: row.Email, DepartmentID: row.DepartmentID, Status: row.Status,
+			Subject: row.Subject.String(), Email: row.Email, DepartmentID: row.DepartmentID.String(), Status: row.Status,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("evaluate dynamic group %q rule: %w", row.GroupID, err)
@@ -539,7 +538,7 @@ ORDER BY g.id, tm.user_subject, b.role_id`, tenantID).Scan(ctx, &rows)
 			continue
 		}
 		grants = append(grants, reviewableGrantRow{
-			PrincipalID: row.Subject, PrincipalName: row.Subject,
+			PrincipalID: row.Subject, PrincipalName: row.Subject.String(),
 			RoleID: row.RoleID, RoleName: row.RoleName,
 			GrantType: ReviewGrantDynamicGroup, GrantID: row.GroupID,
 		})
@@ -547,7 +546,7 @@ ORDER BY g.id, tm.user_subject, b.role_id`, tenantID).Scan(ctx, &rows)
 	return grants, nil
 }
 
-func getReviewRow(ctx context.Context, db bun.IDB, tenantID, reviewID string) (accessReviewRow, error) {
+func getReviewRow(ctx context.Context, db bun.IDB, tenantID, reviewID guid.ID) (accessReviewRow, error) {
 	var row accessReviewRow
 	if err := db.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, reviewID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -558,7 +557,7 @@ func getReviewRow(ctx context.Context, db bun.IDB, tenantID, reviewID string) (a
 	return row, nil
 }
 
-func getReviewItemRow(ctx context.Context, db bun.IDB, tenantID, reviewID, itemID string) (accessReviewItemRow, error) {
+func getReviewItemRow(ctx context.Context, db bun.IDB, tenantID, reviewID, itemID guid.ID) (accessReviewItemRow, error) {
 	var row accessReviewItemRow
 	if err := db.NewSelect().Model(&row).Where("tenant_id = ? AND review_id = ? AND id = ?", tenantID, reviewID, itemID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -569,7 +568,7 @@ func getReviewItemRow(ctx context.Context, db bun.IDB, tenantID, reviewID, itemI
 	return row, nil
 }
 
-func reviewCounts(ctx context.Context, db bun.IDB, tenantID string) (map[string]accessReviewCountRow, error) {
+func reviewCounts(ctx context.Context, db bun.IDB, tenantID guid.ID) (map[guid.ID]accessReviewCountRow, error) {
 	rows := make([]accessReviewCountRow, 0)
 	if err := db.NewRaw(`SELECT review_id, COUNT(*) AS total,
         SUM(CASE WHEN decision = 'pending' THEN 1 ELSE 0 END) AS pending,
@@ -578,7 +577,7 @@ func reviewCounts(ctx context.Context, db bun.IDB, tenantID string) (map[string]
       FROM iam_access_review_items WHERE tenant_id = ? GROUP BY review_id`, tenantID).Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("count access review items: %w", err)
 	}
-	result := make(map[string]accessReviewCountRow, len(rows))
+	result := make(map[guid.ID]accessReviewCountRow, len(rows))
 	for _, row := range rows {
 		result[row.ReviewID] = row
 	}

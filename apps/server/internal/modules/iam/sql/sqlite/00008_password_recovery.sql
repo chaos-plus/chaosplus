@@ -5,7 +5,7 @@ ALTER TABLE iam_principals ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE iam_password_recovery_tokens (
     token_hmac TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NOT NULL DEFAULT 0,
@@ -14,7 +14,7 @@ CREATE TABLE iam_password_recovery_tokens (
 CREATE INDEX idx_iam_password_recovery_principal ON iam_password_recovery_tokens (principal_id, consumed_at, expires_at);
 
 CREATE TABLE iam_notification_outbox (
-    id TEXT NOT NULL PRIMARY KEY,
+    id BIGINT NOT NULL PRIMARY KEY,
     kind TEXT NOT NULL,
     recipient TEXT NOT NULL,
     payload_ciphertext TEXT NOT NULL,

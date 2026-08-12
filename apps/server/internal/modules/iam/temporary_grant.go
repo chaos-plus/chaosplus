@@ -3,29 +3,28 @@ package iam
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type temporaryRoleGrantRow struct {
 	bun.BaseModel `bun:"table:iam_temporary_role_grants"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
-	RoleID        string `bun:"role_id"`
-	PrincipalID   string `bun:"principal_id"`
-	SourceType    string `bun:"source_type"`
-	SourceID      string `bun:"source_id"`
-	StartsAt      int64  `bun:"starts_at"`
-	EndsAt        int64  `bun:"ends_at"`
-	CreatedBy     string `bun:"created_by"`
-	CreatedAt     int64  `bun:"created_at"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
+	RoleID        guid.ID `bun:"role_id"`
+	PrincipalID   guid.ID `bun:"principal_id"`
+	SourceType    string  `bun:"source_type"`
+	SourceID      guid.ID `bun:"source_id"`
+	StartsAt      int64   `bun:"starts_at"`
+	EndsAt        int64   `bun:"ends_at"`
+	CreatedBy     guid.ID `bun:"created_by"`
+	CreatedAt     int64   `bun:"created_at"`
 }
 
-func GrantTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID, roleID, principalID, actorID string, startsAt, endsAt time.Time) error {
-	if db == nil || !validTemporaryGrantID(tenantID, 128) || !validTemporaryGrantID(grantID, 64) || !validTemporaryGrantID(roleID, 32) ||
-		!validTemporaryGrantID(principalID, 255) || !validTemporaryGrantID(actorID, 255) || !endsAt.After(startsAt) {
+func GrantTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID, roleID, principalID, actorID guid.ID, startsAt, endsAt time.Time) error {
+	if db == nil || tenantID.Zero() || grantID.Zero() || roleID.Zero() || principalID.Zero() || actorID.Zero() || !endsAt.After(startsAt) {
 		return fmt.Errorf("invalid temporary role grant")
 	}
 	if err := ensureRole(ctx, db, tenantID, roleID); err != nil {
@@ -50,8 +49,8 @@ func GrantTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID, role
 	return nil
 }
 
-func RevokeTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID string) (bool, error) {
-	if db == nil || !validTemporaryGrantID(tenantID, 128) || !validTemporaryGrantID(grantID, 64) {
+func RevokeTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID guid.ID) (bool, error) {
+	if db == nil || tenantID.Zero() || grantID.Zero() {
 		return false, fmt.Errorf("invalid temporary role grant")
 	}
 	result, err := db.NewDelete().Model((*temporaryRoleGrantRow)(nil)).Where("tenant_id = ? AND id = ?", tenantID, grantID).Exec(ctx)
@@ -60,9 +59,4 @@ func RevokeTemporaryRole(ctx context.Context, db bun.IDB, tenantID, grantID stri
 	}
 	affected, _ := result.RowsAffected()
 	return affected > 0, nil
-}
-
-func validTemporaryGrantID(value string, limit int) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= limit
 }

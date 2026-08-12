@@ -17,6 +17,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
@@ -50,11 +51,11 @@ func TestSyncTargetPushesEveryMappedResource(t *testing.T) {
 	provider.echo = true
 	ctx := t.Context()
 
-	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", providerServer.URL, "bearer-secret")
+	created, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", providerServer.URL, "bearer-secret")
 	require.NoError(t, err)
 
 	// An empty target reconciles to zero without contacting the provider.
-	synced, err := env.service.SyncTarget(ctx, "tenant-a", created.Target.ID)
+	synced, err := env.service.SyncTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID))
 	require.NoError(t, err)
 	assert.Zero(t, synced)
 	assert.Zero(t, provider.count())
@@ -64,23 +65,23 @@ func TestSyncTargetPushesEveryMappedResource(t *testing.T) {
 	require.NoError(t, err)
 	bob, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-bob", "bob", "bob@example.test"))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, alice.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(alice.ID))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, bob.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(bob.ID))
 	require.NoError(t, err)
 	before := provider.count()
 
-	synced, err = env.service.SyncTarget(ctx, "tenant-a", created.Target.ID)
+	synced, err = env.service.SyncTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID))
 	require.NoError(t, err)
 	assert.Equal(t, 2, synced)
 	assert.Greater(t, provider.count(), before, "reconciliation must reach the provider")
 
 	// Invalid and unknown targets fail before any network call.
-	_, err = env.service.SyncTarget(ctx, "", created.Target.ID)
+	_, err = env.service.SyncTarget(ctx, 0, parseGUID(created.Target.ID))
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.SyncTarget(ctx, "tenant-a", "")
+	_, err = env.service.SyncTarget(ctx, testID("tenant-a"), 0)
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.SyncTarget(ctx, "tenant-a", "missing")
+	_, err = env.service.SyncTarget(ctx, testID("tenant-a"), testID("missing"))
 	assert.Error(t, err)
 }
 
@@ -129,7 +130,7 @@ func TestTargetCRUDLifecycle(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
 
-	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "bearer-secret")
+	created, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "bearer-secret")
 	require.NoError(t, err)
 	assert.Equal(t, TargetActive, created.Target.Status)
 	assert.Equal(t, int64(1), created.Target.Version)
@@ -141,15 +142,15 @@ func TestTargetCRUDLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bearer-secret", plain)
 
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "okta", "https://other.example.test/v2", "x")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "okta", "https://other.example.test/v2", "x")
 	assert.ErrorIs(t, err, ErrTargetName)
 
-	targets, err := env.service.ListTargets(ctx, "tenant-a")
+	targets, err := env.service.ListTargets(ctx, testID("tenant-a"))
 	require.NoError(t, err)
 	require.Len(t, targets, 1)
 	assert.Equal(t, created.Target.ID, targets[0].ID)
 
-	updated, err := env.service.ReplaceTarget(ctx, "tenant-a", created.Target.ID, "Okta Prod", "https://scim.example.test/v2", TargetActive, "rotated-secret", 1)
+	updated, err := env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID), "Okta Prod", "https://scim.example.test/v2", TargetActive, "rotated-secret", 1)
 	require.NoError(t, err)
 	assert.Equal(t, "Okta Prod", updated.Name)
 	assert.Equal(t, int64(2), updated.Version)
@@ -157,36 +158,36 @@ func TestTargetCRUDLifecycle(t *testing.T) {
 	require.NoError(t, env.db.NewSelect().Model(&rotated).Where("id = ?", created.Target.ID).Scan(ctx))
 	assert.NotEqual(t, stored.BearerTokenCiphertext, rotated.BearerTokenCiphertext)
 
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", created.Target.ID, "Okta Prod", "https://scim.example.test/v2", TargetActive, "", 1)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID), "Okta Prod", "https://scim.example.test/v2", TargetActive, "", 1)
 	assert.ErrorIs(t, err, ErrTargetVersion)
 
-	noop, err := env.service.ReplaceTarget(ctx, "tenant-a", created.Target.ID, "Okta Prod", "https://scim.example.test/v2", TargetActive, "", 2)
+	noop, err := env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID), "Okta Prod", "https://scim.example.test/v2", TargetActive, "", 2)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), noop.Version)
 
-	require.NoError(t, env.service.DeleteTarget(ctx, "tenant-a", created.Target.ID))
-	assert.ErrorIs(t, env.service.DeleteTarget(ctx, "tenant-a", created.Target.ID), ErrTargetMissing)
+	require.NoError(t, env.service.DeleteTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID)))
+	assert.ErrorIs(t, env.service.DeleteTarget(ctx, testID("tenant-a"), parseGUID(created.Target.ID)), ErrTargetMissing)
 }
 
 func TestTargetValidation(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
 
-	_, err := env.service.CreateTarget(ctx, "tenant-a", "bad", "not-a-url", "token")
+	_, err := env.service.CreateTarget(ctx, testID("tenant-a"), "bad", "not-a-url", "token")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "bad", "ftp://scim.example.test/v2", "token")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "bad", "ftp://scim.example.test/v2", "token")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "bad", "https://scim.example.test/v2", "")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "bad", "https://scim.example.test/v2", "")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "bad", "https://scim.example.test/v2", strings.Repeat("x", 4097))
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "bad", "https://scim.example.test/v2", strings.Repeat("x", 4097))
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "", "https://scim.example.test/v2", "token")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "", "https://scim.example.test/v2", "token")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.ListTargets(ctx, "")
+	_, err = env.service.ListTargets(ctx, 0)
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", "missing", "x", "https://scim.example.test/v2", TargetActive, "", 1)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), testID("missing"), "x", "https://scim.example.test/v2", TargetActive, "", 1)
 	assert.ErrorIs(t, err, ErrTargetMissing)
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", "missing", "x", "https://scim.example.test/v2", "weird", "", 1)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), testID("missing"), "x", "https://scim.example.test/v2", "weird", "", 1)
 	assert.ErrorIs(t, err, ErrInvalidTarget)
 }
 
@@ -197,21 +198,21 @@ func TestTargetRequiresEncryptionKey(t *testing.T) {
 	env := newProvisioningEnvironmentWithDB(t, db, nil)
 	ctx := t.Context()
 
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "token")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "token")
 	assert.ErrorIs(t, err, ErrTargetKeyMissing)
-	_, err = env.service.PushResource(ctx, "tenant-a", "missing", ResourceUser, "user-1")
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), testID("missing"), ResourceUser, testID("user-1"))
 	assert.ErrorIs(t, err, ErrTargetMissing)
 
 	// An existing target with a nil key fails on push with the key error.
 	now := env.service.now().UTC().UnixMilli()
-	row := targetRow{ID: "target-1", TenantID: "tenant-a", Name: "Okta", NameKey: "okta", BaseURL: "https://scim.example.test/v2", Status: TargetActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	row := targetRow{ID: testID("target-1"), TenantID: testID("tenant-a"), Name: "Okta", NameKey: "okta", BaseURL: "https://scim.example.test/v2", Status: TargetActive, Version: 1, CreatedAt: now, UpdatedAt: now}
 	_, err = env.db.NewInsert().Model(&row).Exec(ctx)
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", "target-1", ResourceUser, "user-1")
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), testID("target-1"), ResourceUser, testID("user-1"))
 	assert.ErrorIs(t, err, ErrTargetKeyMissing)
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", "target-1", "Okta", "https://scim.example.test/v2", TargetActive, "rotated", 1)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), testID("target-1"), "Okta", "https://scim.example.test/v2", TargetActive, "rotated", 1)
 	assert.ErrorIs(t, err, ErrTargetKeyMissing)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", "target-1", ResourceUser, "user-1"), ErrTargetKeyMissing)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), testID("target-1"), ResourceUser, testID("user-1")), ErrTargetKeyMissing)
 }
 
 func TestPushUserLifecycle(t *testing.T) {
@@ -220,12 +221,12 @@ func TestPushUserLifecycle(t *testing.T) {
 	provider.echo = true
 	ctx := t.Context()
 
-	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", providerServer.URL, "bearer-secret")
+	created, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", providerServer.URL, "bearer-secret")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-alice", "alice", "alice@example.test"))
 	require.NoError(t, err)
 
-	result, err := env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID)
+	result, err := env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, result.ExternalID)
 	assert.Equal(t, "remote-"+user.ID, result.RemoteID)
@@ -239,7 +240,7 @@ func TestPushUserLifecycle(t *testing.T) {
 	assert.Contains(t, request.Body, `"value":"alice@example.test"`)
 
 	// A later push reuses the remote mapping.
-	result2, err := env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID)
+	result2, err := env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 	assert.Equal(t, "remote-"+user.ID, result2.ExternalID)
 	assert.Equal(t, "/Users/remote-"+user.ID, provider.last(t).Path)
@@ -252,7 +253,7 @@ func TestPushGroupMapsOnlyPushedMembers(t *testing.T) {
 	provider.echo = true
 	ctx := t.Context()
 
-	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", providerServer.URL, "bearer-secret")
+	created, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", providerServer.URL, "bearer-secret")
 	require.NoError(t, err)
 	alice, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-alice", "alice", "alice@example.test"))
 	require.NoError(t, err)
@@ -260,9 +261,9 @@ func TestPushGroupMapsOnlyPushedMembers(t *testing.T) {
 	require.NoError(t, err)
 	carol, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-carol", "carol", "carol@example.test"))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, alice.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(alice.ID))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, bob.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(bob.ID))
 	require.NoError(t, err)
 
 	group, err := env.service.CreateGroup(ctx, env.auth, GroupInput{
@@ -273,7 +274,7 @@ func TestPushGroupMapsOnlyPushedMembers(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, err := env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceGroup, group.ID)
+	result, err := env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceGroup, parseGUID(group.ID))
 	require.NoError(t, err)
 	assert.Equal(t, "remote-"+group.ID, result.RemoteID)
 	request := provider.last(t)
@@ -289,22 +290,22 @@ func TestDeprovisionAndRepush(t *testing.T) {
 	provider.echo = true
 	ctx := t.Context()
 
-	created, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", providerServer.URL, "bearer-secret")
+	created, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", providerServer.URL, "bearer-secret")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-alice", "alice", "alice@example.test"))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 
-	require.NoError(t, env.service.DeprovisionResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID))
+	require.NoError(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID)))
 	request := provider.last(t)
 	assert.Equal(t, http.MethodDelete, request.Method)
 	assert.Equal(t, "/Users/remote-"+user.ID, request.Path)
 	assert.Equal(t, "Bearer bearer-secret", request.Headers.Get("Authorization"))
 
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID), ErrDeprovisionMissing)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID)), ErrDeprovisionMissing)
 
-	_, err = env.service.PushResource(ctx, "tenant-a", created.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(created.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPut, provider.last(t).Method)
 	assert.Equal(t, "/Users/remote-"+user.ID, provider.last(t).Path)
@@ -317,58 +318,58 @@ func TestPushRemoteFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	_, server500 := newFakeSCIMProvider(t, http.StatusInternalServerError, "remote exploded")
-	target500, err := env.service.CreateTarget(ctx, "tenant-a", "Failing", server500.URL, "token")
+	target500, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Failing", server500.URL, "token")
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target500.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target500.Target.ID), ResourceUser, parseGUID(user.ID))
 	assert.ErrorIs(t, err, ErrRemoteResponse)
 
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closedURL := closed.URL
 	closed.Close()
-	targetClosed, err := env.service.CreateTarget(ctx, "tenant-a", "Down", closedURL, "token")
+	targetClosed, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Down", closedURL, "token")
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", targetClosed.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(targetClosed.Target.ID), ResourceUser, parseGUID(user.ID))
 	assert.ErrorIs(t, err, ErrRemoteUnavailable)
 
 	providerOK, serverOK := newFakeSCIMProvider(t, http.StatusOK, "")
 	providerOK.echo = true
-	target, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", serverOK.URL, "token")
+	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", serverOK.URL, "token")
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceUser, "ghost-user")
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, testID("ghost-user"))
 	assert.ErrorIs(t, err, ErrResourceMissing)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, "Widget", user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), "Widget", parseGUID(user.ID))
 	assert.ErrorIs(t, err, ErrInvalidTarget)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", target.Target.ID, ResourceUser, "ghost-user"), ErrDeprovisionMissing)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, testID("ghost-user")), ErrDeprovisionMissing)
 
-	disabled, err := env.service.ReplaceTarget(ctx, "tenant-a", target.Target.ID, "Okta", serverOK.URL, TargetDisabled, "", target.Target.Version)
+	disabled, err := env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(target.Target.ID), "Okta", serverOK.URL, TargetDisabled, "", target.Target.Version)
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", disabled.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(disabled.ID), ResourceUser, parseGUID(user.ID))
 	assert.ErrorIs(t, err, ErrTargetDisabled)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", disabled.ID, ResourceUser, user.ID), ErrTargetDisabled)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(disabled.ID), ResourceUser, parseGUID(user.ID)), ErrTargetDisabled)
 
 	// Deprovision a mapped resource when the remote answers 404 still succeeds.
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", disabled.ID, "Okta", serverOK.URL, TargetActive, "", disabled.Version)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(disabled.ID), "Okta", serverOK.URL, TargetActive, "", disabled.Version)
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 	providerOK.status = http.StatusNotFound
 	providerOK.body = `{"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],"detail":"gone"}`
 	providerOK.echo = false
-	require.NoError(t, env.service.DeprovisionResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID))
+	require.NoError(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)))
 	assert.Equal(t, http.MethodDelete, providerOK.last(t).Method)
 }
 
 func TestDecryptTokenErrors(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 
-	_, err := env.service.decryptToken("target", "v9.garbage")
+	_, err := env.service.decryptToken(testID("target"), "v9.garbage")
 	assert.Error(t, err)
-	_, err = env.service.decryptToken("target", "v1.!!not-base64!!")
+	_, err = env.service.decryptToken(testID("target"), "v1.!!not-base64!!")
 	assert.Error(t, err)
-	_, err = env.service.decryptToken("target", "v1.AA")
+	_, err = env.service.decryptToken(testID("target"), "v1.AA")
 	assert.Error(t, err)
 
-	created, err := env.service.CreateTarget(t.Context(), "tenant-a", "Okta", "https://scim.example.test/v2", "secret")
+	created, err := env.service.CreateTarget(t.Context(), testID("tenant-a"), "Okta", "https://scim.example.test/v2", "secret")
 	require.NoError(t, err)
 	var stored targetRow
 	require.NoError(t, env.db.NewSelect().Model(&stored).Where("id = ?", created.Target.ID).Scan(t.Context()))
@@ -377,7 +378,7 @@ func TestDecryptTokenErrors(t *testing.T) {
 		tamper = 'B'
 	}
 	tampered := stored.BearerTokenCiphertext[:8] + string(tamper) + stored.BearerTokenCiphertext[9:]
-	_, err = env.service.decryptToken(created.Target.ID, tampered)
+	_, err = env.service.decryptToken(parseGUID(created.Target.ID), tampered)
 	assert.Error(t, err)
 }
 
@@ -413,41 +414,41 @@ func TestTargetErrorPaths(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
 
-	assert.ErrorIs(t, env.service.DeleteTarget(ctx, "", ""), ErrInvalidTarget)
-	assert.ErrorIs(t, env.service.DeleteTarget(ctx, "tenant-a", ""), ErrInvalidTarget)
+	assert.ErrorIs(t, env.service.DeleteTarget(ctx, 0, 0), ErrInvalidTarget)
+	assert.ErrorIs(t, env.service.DeleteTarget(ctx, testID("tenant-a"), 0), ErrInvalidTarget)
 
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", "missing-target", ResourceUser, "user-1"), ErrTargetMissing)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", "missing-target", "Widget", "user-1"), ErrInvalidTarget)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), testID("missing-target"), ResourceUser, testID("user-1")), ErrTargetMissing)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), testID("missing-target"), "Widget", testID("user-1")), ErrInvalidTarget)
 
-	_, err := env.service.CreateTarget(ctx, "tenant-a", "Too Long", "https://scim.example.test/"+strings.Repeat("a", 1025), "token")
+	_, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Too Long", "https://scim.example.test/"+strings.Repeat("a", 1025), "token")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
 
-	_, err = env.service.buildRemoteResource(ctx, "tenant-a", "target-missing", "Widget", "x")
+	_, err = env.service.buildRemoteResource(ctx, testID("tenant-a"), testID("target-missing"), "Widget", testID("x"))
 	assert.ErrorIs(t, err, ErrInvalidTarget)
 
-	target, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "token")
+	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "token")
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceGroup, "ghost-group")
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceGroup, testID("ghost-group"))
 	assert.ErrorIs(t, err, ErrResourceMissing)
 }
 
 func TestCreateTargetRejectsInactiveTenant(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
-	_, err := env.db.NewUpdate().Table("iam_tenants").Set("status = ?", "suspended").Where("id = ?", "tenant-a").Exec(ctx)
+	_, err := env.db.NewUpdate().Table("iam_tenants").Set("status = ?", "suspended").Where("id = ?", testID("tenant-a")).Exec(ctx)
 	require.NoError(t, err)
-	_, err = env.service.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "token")
+	_, err = env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "token")
 	assert.ErrorIs(t, err, ErrInvalidTarget)
 }
 
 func TestReplaceTargetNameConflict(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
-	_, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", "https://one.example.test/v2", "token")
+	_, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://one.example.test/v2", "token")
 	require.NoError(t, err)
-	second, err := env.service.CreateTarget(ctx, "tenant-a", "Azure", "https://two.example.test/v2", "token")
+	second, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Azure", "https://two.example.test/v2", "token")
 	require.NoError(t, err)
-	_, err = env.service.ReplaceTarget(ctx, "tenant-a", second.Target.ID, "okta", "https://two.example.test/v2", TargetActive, "", second.Target.Version)
+	_, err = env.service.ReplaceTarget(ctx, testID("tenant-a"), parseGUID(second.Target.ID), "okta", "https://two.example.test/v2", TargetActive, "", second.Target.Version)
 	assert.ErrorIs(t, err, ErrTargetName)
 }
 
@@ -455,11 +456,11 @@ func TestPushRemoteDetailTruncation(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
 	_, server := newFakeSCIMProvider(t, http.StatusBadGateway, strings.Repeat("x", 600))
-	target, err := env.service.CreateTarget(ctx, "tenant-a", "Verbose", server.URL, "token")
+	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Verbose", server.URL, "token")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-long", "long", "long@example.test"))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.ErrorIs(t, err, ErrRemoteResponse)
 	assert.Contains(t, err.Error(), "...")
 	assert.NotContains(t, err.Error(), strings.Repeat("x", 501))
@@ -470,11 +471,11 @@ func TestDeprovisionRemoteFailures(t *testing.T) {
 	provider, server := newFakeSCIMProvider(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
-	target, err := env.service.CreateTarget(ctx, "tenant-a", "Okta", server.URL, "token")
+	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", server.URL, "token")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-dp", "dp", "dp@example.test"))
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID))
 	require.NoError(t, err)
 
 	// A corrupted stored token fails both local decryption paths.
@@ -487,9 +488,9 @@ func TestDeprovisionRemoteFailures(t *testing.T) {
 	corrupt := stored.BearerTokenCiphertext[:8] + string(tamper) + stored.BearerTokenCiphertext[9:]
 	_, err = env.db.NewUpdate().Table("iam_scim_targets").Set("bearer_token_ciphertext = ?", corrupt).Where("id = ?", target.Target.ID).Exec(ctx)
 	require.NoError(t, err)
-	_, err = env.service.PushResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID)
+	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID))
 	assert.Error(t, err)
-	assert.Error(t, env.service.DeprovisionResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID))
+	assert.Error(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)))
 	_, err = env.db.NewUpdate().Table("iam_scim_targets").Set("bearer_token_ciphertext = ?", stored.BearerTokenCiphertext).Where("id = ?", target.Target.ID).Exec(ctx)
 	require.NoError(t, err)
 
@@ -499,13 +500,13 @@ func TestDeprovisionRemoteFailures(t *testing.T) {
 	closed.Close()
 	_, err = env.db.NewUpdate().Table("iam_scim_targets").Set("base_url = ?", closedURL).Where("id = ?", target.Target.ID).Exec(ctx)
 	require.NoError(t, err)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID), ErrRemoteUnavailable)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)), ErrRemoteUnavailable)
 
 	// Remote rejection on deprovision.
 	_, server500 := newFakeSCIMProvider(t, http.StatusInternalServerError, "rejected")
 	_, err = env.db.NewUpdate().Table("iam_scim_targets").Set("base_url = ?", server500.URL).Where("id = ?", target.Target.ID).Exec(ctx)
 	require.NoError(t, err)
-	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, "tenant-a", target.Target.ID, ResourceUser, user.ID), ErrRemoteResponse)
+	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)), ErrRemoteResponse)
 }
 
 func TestServiceConstructorGuards(t *testing.T) {
@@ -517,25 +518,25 @@ func TestDirectoryAndCredentialErrorPaths(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
 
-	_, err := env.service.CreateDirectory(ctx, "", "x")
+	_, err := env.service.CreateDirectory(ctx, 0, "x")
 	assert.ErrorIs(t, err, ErrInvalidDirectory)
 
-	_, err = env.service.ReplaceDirectory(ctx, "", "id", "x", DirectoryActive, 1)
+	_, err = env.service.ReplaceDirectory(ctx, 0, 0, "x", DirectoryActive, 1)
 	assert.ErrorIs(t, err, ErrInvalidDirectory)
 
-	_, err = env.service.ReplaceDirectory(ctx, "tenant-a", "missing", "x", DirectoryActive, 1)
+	_, err = env.service.ReplaceDirectory(ctx, testID("tenant-a"), testID("missing"), "x", DirectoryActive, 1)
 	assert.ErrorIs(t, err, ErrDirectoryMissing)
 
-	secondary, err := env.service.CreateDirectory(ctx, "tenant-a", "Secondary IdP")
+	secondary, err := env.service.CreateDirectory(ctx, testID("tenant-a"), "Secondary IdP")
 	require.NoError(t, err)
-	_, err = env.service.ReplaceDirectory(ctx, "tenant-a", secondary.ID, "primary idp", DirectoryActive, 1)
+	_, err = env.service.ReplaceDirectory(ctx, testID("tenant-a"), secondary.ID, "primary idp", DirectoryActive, 1)
 	assert.ErrorIs(t, err, ErrDirectoryName)
 
-	_, err = env.service.CreateCredential(ctx, "tenant-a", "missing-directory", "acceptance", nil)
+	_, err = env.service.CreateCredential(ctx, testID("tenant-a"), testID("missing-directory"), "acceptance", nil)
 	assert.ErrorIs(t, err, ErrDirectoryMissing)
 
-	assert.ErrorIs(t, env.service.RevokeCredential(ctx, "", "", ""), ErrInvalidDirectory)
-	assert.ErrorIs(t, env.service.RevokeCredential(ctx, "tenant-a", "missing-directory", "scim_x"), ErrDirectoryMissing)
+	assert.ErrorIs(t, env.service.RevokeCredential(ctx, 0, 0, 0), ErrInvalidDirectory)
+	assert.ErrorIs(t, env.service.RevokeCredential(ctx, testID("tenant-a"), testID("missing-directory"), testID("scim_x")), ErrDirectoryMissing)
 
 	_, err = env.service.Authenticate(ctx, "Bearer scim_missing.secret")
 	assert.ErrorIs(t, err, ErrUnauthorized)
@@ -549,8 +550,8 @@ func TestServiceIDGeneratorFailures(t *testing.T) {
 	require.NoError(t, iam.Migrate(ctx, db))
 	require.NoError(t, organization.Migrate(ctx, db))
 	require.NoError(t, Migrate(ctx, db))
-	require.NoError(t, organization.EnsureTenant(ctx, db, "tenant-a"))
-	auditService := audit.NewService(db)
+	require.NoError(t, organization.EnsureTenant(ctx, db, testID("tenant-a")))
+	auditService := audit.NewService(db, newTestIDGenerator())
 	appendAudit := func(ctx context.Context, executor bun.IDB, event auditx.Event) error {
 		_, err := auditService.AppendTo(ctx, executor, audit.EventInput{
 			TenantID: event.TenantID, PrincipalID: event.PrincipalID, EventType: event.EventType,
@@ -559,25 +560,25 @@ func TestServiceIDGeneratorFailures(t *testing.T) {
 		return err
 	}
 	guard := iam.NewAdministratorGuard()
-	identities := identity.NewService(db, appendAudit, guard)
+	identities := identity.NewService(db, appendAudit, guard, newTestIDGenerator())
 	groups := organization.NewGroupService(db, appendAudit, iam.NewMembershipChecker(db), guard, secureTestID)
 	build := func(nextID IDGenerator) *Service {
 		return NewService(db, appendAudit, nextID, identities, groups, Config{}, testProvisioningKey())
 	}
 
-	failing := build(IDGenerator(func() (string, error) { return "", errors.New("id generator unavailable") }))
-	_, err = failing.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "token")
+	failing := build(func() (guid.ID, error) { return 0, errors.New("id generator unavailable") })
+	_, err = failing.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "generate SCIM target id")
-	_, err = failing.CreateDirectory(ctx, "tenant-a", "Directory")
+	_, err = failing.CreateDirectory(ctx, testID("tenant-a"), "Directory")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "generate SCIM directory id")
-	_, err = failing.CreateCredential(ctx, "tenant-a", "directory", "credential", nil)
+	_, err = failing.CreateCredential(ctx, testID("tenant-a"), testID("directory"), "credential", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id generator unavailable")
 
-	empty := build(IDGenerator(func() (string, error) { return "", nil }))
-	_, err = empty.CreateTarget(ctx, "tenant-a", "Okta", "https://scim.example.test/v2", "token")
+	empty := build(func() (guid.ID, error) { return 0, nil })
+	_, err = empty.CreateTarget(ctx, testID("tenant-a"), "Okta", "https://scim.example.test/v2", "token")
 	require.ErrorIs(t, err, ErrInvalidTarget)
 	assert.Contains(t, err.Error(), "generate SCIM target id")
 }

@@ -1,287 +1,102 @@
-// command server-ai runs the chaos.plus server-ai: connects to NATS,
-// answers runner registrations, drives spawn/kill/switch-provider, and persists
-// the runner event stream to the event-log StateStore (PRD §15.1).
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
-	"syscall"
-	"time"
 
-	"github.com/nats-io/nats.go"
-	"gopkg.in/yaml.v3"
-
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/gateway"
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/machine"
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/server"
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/store"
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/workflow"
-	"github.com/chaos-plus/chaosplus/pkg/utils"
+	serverai "github.com/chaos-plus/chaosplus/apps/server-ai/internal/app"
+	sharedapp "github.com/chaos-plus/chaosplus/internal/app"
+	"github.com/chaos-plus/chaosplus/pkg/configurator"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
-// smtpLocalConfig mirrors the smtp: block in .local/config.yaml (local dev).
-// server-ai's mail bridge reads SMTP from env; when the local config provides
-// it, seed the env vars so delivery is driven from the yaml.
-type smtpLocalConfig struct {
-	Addr string `yaml:"addr"`
-	From string `yaml:"from"`
-}
-
-func loadSMTPFromLocalConfig() {
-	data, err := os.ReadFile(".local/config.yaml")
-	if err != nil {
-		return // no local config → rely on SMTP_HOST/SMTP_FROM env
-	}
-	var cfg struct {
-		SMTP *smtpLocalConfig `yaml:"smtp"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil || cfg.SMTP == nil || cfg.SMTP.Addr == "" {
-		return
-	}
-	if os.Getenv("SMTP_HOST") == "" {
-		if err := os.Setenv("SMTP_HOST", cfg.SMTP.Addr); err != nil {
-			slog.Warn("set SMTP_HOST from local config", "err", err)
-		}
-	}
-	if os.Getenv("SMTP_FROM") == "" && cfg.SMTP.From != "" {
-		if err := os.Setenv("SMTP_FROM", cfg.SMTP.From); err != nil {
-			slog.Warn("set SMTP_FROM from local config", "err", err)
-		}
-	}
-}
-
 func main() {
-	loadSMTPFromLocalConfig()
-	// Auth: read API token from env (NOT argv — /proc/<pid>/cmdline is world-readable).
-	// Empty = desktop/localhost mode with no auth gate.
-	server.AuthToken = os.Getenv("CONTROL_API_TOKEN")
-	httpAddr := envOr("CONTROL_HTTP_ADDR", "127.0.0.1:"+envOr("CONTROL_HTTP_PORT", "8081"))
-	if err := validateRuntimeConfig(httpAddr); err != nil {
-		log.Fatal(err)
+	if err := Execute(os.Args[1:]...); err != nil {
+		log.Print(err)
+		os.Exit(1)
 	}
-	// M4 (round-3 review): auth defaults to fail-open (desktop near no-op); on a
-	// shared/networked host that forgets CONTROL_API_TOKEN this silently exposes
-	// the API — warn loudly so it is not deployed open by accident.
-	if server.AuthToken == "" {
-		log.Println("WARNING: CONTROL_API_TOKEN is empty — state-changing API is unauthenticated (desktop near-no-op only)")
-	}
+}
 
-	url := envOr("CONTROL_NATS_URL", "nats://127.0.0.1:4222")
-	natsOpts := []nats.Option{nats.Timeout(5 * time.Second)}
-	if token := os.Getenv("CONTROL_NATS_TOKEN"); token != "" {
-		natsOpts = append(natsOpts, nats.Token(token))
-	}
-	if ca := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CA")); ca != "" {
-		natsOpts = append(natsOpts, nats.RootCAs(ca))
-	}
-	certFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CERT"))
-	keyFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_KEY"))
-	if certFile != "" && keyFile != "" {
-		natsOpts = append(natsOpts, nats.ClientCert(certFile, keyFile))
-	}
-	nc, err := nats.Connect(url, append(natsOpts,
-		nats.Name("chaosplus-server-ai"),
-		nats.NoEcho(), // prevent self-receive of published run events
-	)...)
+func Execute(args ...string) error {
+	root, err := newRootCommand(args)
 	if err != nil {
-		log.Fatalf("connect NATS %s: %v", url, err)
+		return err
 	}
-	defer nc.Close()
+	return root.Execute()
+}
 
-	// The machine hub gets its own connection WITHOUT NoEcho: it must publish
-	// register/event messages that the gateway (on the NoEcho conn) subscribes
-	// to — a NoEcho conn cannot receive messages it published itself, so sharing
-	// `nc` would silently make the gateway never see runner registrations.
-	ncBridge, err := nats.Connect(url, append(natsOpts, nats.Name("chaosplus-server-ai-bridge"))...)
-	if err != nil {
-		log.Fatalf("connect NATS bridge %s: %v", url, err)
+func newRootCommand(args []string) (*cobra.Command, error) {
+	config := new(serverai.Config)
+	root := &cobra.Command{
+		Use:          "server-ai",
+		Short:        "AI resource server",
+		SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runServer(*config)
+		},
 	}
-	defer ncBridge.Close()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	g := gateway.New(nc)
-
-	// Event-log persistence: optional (CONTROL_DB_DSN unset → in-memory only).
-	var st *store.Store
-	if dsn := os.Getenv("CONTROL_DB_DSN"); dsn != "" {
-		var err error
-		st, err = store.Open(ctx, dsn)
-		if err != nil {
-			log.Fatalf("open store: %v", err)
+	root.AddCommand(newConfigCommand())
+	if !isConfigCommand(args) {
+		flagger := configurator.New()
+		flagger.UseFlags(root.PersistentFlags())
+		flagger.UseConfigFileArgDefault()
+		parseArgs := args
+		if len(parseArgs) == 0 {
+			parseArgs = []string{"--"}
 		}
-		defer func() { _ = st.Close() }()
-		// Crash recovery: runs left mid-flight by a dead process are surfaced via
-		// LoadActiveRunDefinitions; no terminal flip here (merged base design).
-		g.OnEvent(func(ev gateway.RunnerEvent) {
-			payload, _ := json.Marshal(ev.Payload)
-			_ = st.Append(ctx, store.Event{
-				ID:             fmt.Sprintf("evt-%d-%s", ev.Seq, ev.RunnerID),
-				InstanceID:     "desktop",
-				Type:           ev.Type,
-				IdempotencyKey: fmt.Sprintf("%s:%s:%d", ev.RunnerID, ev.Type, ev.Seq),
-				PayloadJSON:    string(payload),
-			})
-		})
-		log.Printf("server-ai persisting events to %s", dsn)
-	}
-
-	go func() {
-		if err := g.Start(ctx); err != nil {
-			log.Printf("gateway stopped: %v", err)
+		if err := flagger.Parse(config, parseArgs...); err != nil && !errors.Is(err, pflag.ErrHelp) {
+			return nil, err
 		}
-	}()
-
-	// Machine hub = NATS↔WS bridge for daemons; engine reaches daemons via the
-	// NATS gateway (any instance), never through the bridge directly.
-	hub := machine.NewHub(ncBridge, machine.NewTokenStore(), st)
-	// 重启后回灌 DB 里的长期 token hash,daemon 才能用旧 token 重连。
-	if err := hub.LoadTokens(ctx); err != nil {
-		log.Fatalf("load machine tokens: %v", err)
 	}
-	link := &workflow.NatsRunnerLink{G: g}
-	rm := server.NewRunManager(nc, link, st, envOr("CONTROL_RUNNER_ID", ""))
-	// Per-node machine dispatch: match node executor to machine runtimes.
-	rm.SetMachinePicker(func(executorType string) string {
-		for _, id := range hub.RegisteredRunners() {
-			for _, rt := range hub.MachineRuntimes(id) {
-				if rt == executorType {
-					return id
-				}
+	root.SetArgs(args)
+	return root, nil
+}
+
+func isConfigCommand(args []string) bool {
+	return len(args) > 0 && args[0] == "config"
+}
+
+func newConfigCommand() *cobra.Command {
+	var output string
+	var input string
+	command := &cobra.Command{Use: "config", Short: "Configuration utilities"}
+	generate := &cobra.Command{
+		Use: "generate", Short: "Generate a configuration template",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			data, err := configurator.GenerateYAML(&serverai.Config{})
+			if err != nil {
+				return err
 			}
-		}
-		return "" // fall back to default runnerID
-	})
-	if err := rm.Start(ctx); err != nil {
-		log.Fatalf("run manager: %v", err)
+			if err := os.WriteFile(output, data, 0o600); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", output)
+			return err
+		},
 	}
-	if st != nil {
-		if n, err := st.ReconcileStaleRunning(ctx); err != nil {
-			slog.Warn("reconcile stale work items", "err", err)
-		} else if n > 0 {
-			slog.Info("reconciled work items stuck in_progress from a previous process", "count", n)
-		}
+	validate := &cobra.Command{
+		Use: "validate", Short: "Validate a configuration file",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := configurator.LoadStrict(input, &serverai.Config{}); err != nil {
+				return fmt.Errorf("%s is invalid: %w", input, err)
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is valid\n", input)
+			return err
+		},
 	}
-	// Rehydrate runs from store so UI shows history across restarts (§15.1).
-	if st != nil {
-		if err := st.RebuildCoreProjectionsIfEmpty(ctx); err != nil {
-			log.Fatalf("rebuild core projections: %v", err)
-		}
-		rm.LoadFromStore(ctx)
-	}
-
-	var chat *server.ChatService
-	var modules []server.RESTRegistrar
-	if st != nil {
-		workspaceRoot := envOr("CHAT_WORKSPACE_ROOT", defaultWorkspaceRoot())
-		runnerID := envOr("CONTROL_RUNNER_ID", "")
-		chat = server.NewChatService(st, link, g, workspaceRoot)
-		modules = append(modules, server.NewWorkspaceModule(st, rm, chat, runnerID, workspaceRoot))
-	}
-	hs := &http.Server{
-		Addr:              httpAddr,
-		Handler:           server.NewHandler(rm, hub, chat, modules...),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
-	go func() {
-		log.Printf("server-ai HTTP listening on %s", httpAddr)
-		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("http server: %v", err)
-		}
-	}()
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := hs.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP shutdown: %v", err)
-		}
-	}()
-
-	log.Printf("server-ai listening on NATS %s", url)
-	<-ctx.Done()
-	log.Printf("runners seen: %v", g.RegisteredRunners())
+	generate.Flags().StringVarP(&output, "output", "o", "config.yaml", "output file")
+	validate.Flags().StringVarP(&input, "config", "c", "config.yaml", "configuration file")
+	command.AddCommand(generate, validate)
+	return command
 }
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fmt.Sprint(def)
-}
-
-func validateRuntimeConfig(httpAddr string) error {
-	if server.AuthToken == "" && !isLoopbackListenAddr(httpAddr) {
-		return errors.New("CONTROL_API_TOKEN is required when CONTROL_HTTP_ADDR is not loopback")
-	}
-	if !strings.EqualFold(os.Getenv("CONTROL_ENV"), "production") {
-		return nil
-	}
-	missing := make([]string, 0, 8)
-	for _, key := range []string{"CONTROL_API_TOKEN", "CONTROL_DB_DSN", "CONTROL_EMAIL_WEBHOOK_SECRET", "CONTROL_AUTH_HARDENED",
-		"CONTROL_NATS_URL", "CONTROL_NATS_TOKEN", "CONTROL_NATS_TLS_CA", "CONTROL_NATS_DEPLOYMENT"} {
-		if strings.TrimSpace(os.Getenv(key)) == "" {
-			missing = append(missing, key)
-		}
-	}
-	if value := os.Getenv("CONTROL_AUTH_HARDENED"); value != "" && value != "1" {
-		return errors.New("production configuration requires CONTROL_AUTH_HARDENED=1")
-	}
-	if deployment := strings.TrimSpace(os.Getenv("CONTROL_NATS_DEPLOYMENT")); deployment != "" && deployment != "official-image" {
-		return errors.New("production configuration requires CONTROL_NATS_DEPLOYMENT=official-image")
-	}
-	if rawURL := strings.TrimSpace(os.Getenv("CONTROL_NATS_URL")); rawURL != "" {
-		parsed, err := url.Parse(rawURL)
-		if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return errors.New("production CONTROL_NATS_URL must be a valid tls://host:port URL without embedded credentials, query, or fragment")
-		}
-	}
-	certFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_CERT"))
-	keyFile := strings.TrimSpace(os.Getenv("CONTROL_NATS_TLS_KEY"))
-	if (certFile == "") != (keyFile == "") {
-		return errors.New("CONTROL_NATS_TLS_CERT and CONTROL_NATS_TLS_KEY must be set together")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("production configuration requires %s", strings.Join(missing, ", "))
+func runServer(config serverai.Config) error {
+	application := sharedapp.NewResourceApp(config.Server, serverai.Extension(config))
+	if err := application.Run(); err != nil {
+		return fmt.Errorf("run AI resource server: %w", err)
 	}
 	return nil
-}
-
-func isLoopbackListenAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
-}
-
-// defaultWorkspaceRoot returns the CHAT_WORKSPACE_ROOT default:
-// $XDG_CONFIG_HOME/<binary>/channels on Linux,
-// ~/Library/Application Support/<binary>/channels on macOS,
-// %AppData%/<binary>/channels on Windows.
-func defaultWorkspaceRoot() string {
-	d, err := os.UserConfigDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), utils.GetExecutableName(), "channels")
-	}
-	return filepath.Join(d, utils.GetExecutableName(), "channels")
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/uptrace/bun"
@@ -19,11 +20,11 @@ func (s *Service) CreateUser(ctx context.Context, auth AuthContext, input UserIn
 	if err != nil {
 		return UserResource{}, err
 	}
-	var resourceID string
+	var resourceID guid.ID
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		repo := s.repo.withExecutor(tx)
 		if input.ExternalID != "" {
-			mapping, err := repo.getResourceByExternalKey(ctx, auth.DirectoryID, ResourceUser, externalKey(input.ExternalID, ""))
+			mapping, err := repo.getResourceByExternalKey(ctx, auth.DirectoryID, ResourceUser, externalKey(input.ExternalID, 0))
 			switch {
 			case err == nil && mapping.DeletedAt == 0:
 				return ErrResourceConflict
@@ -69,8 +70,8 @@ func (s *Service) CreateUser(ctx context.Context, auth AuthContext, input UserIn
 	return s.GetUser(ctx, auth, resourceID)
 }
 
-func (s *Service) GetUser(ctx context.Context, auth AuthContext, id string) (UserResource, error) {
-	record, err := s.repo.user(ctx, auth.DirectoryID, strings.TrimSpace(id))
+func (s *Service) GetUser(ctx context.Context, auth AuthContext, id guid.ID) (UserResource, error) {
+	record, err := s.repo.user(ctx, auth.DirectoryID, id)
 	if err != nil {
 		return UserResource{}, err
 	}
@@ -89,10 +90,9 @@ func (s *Service) ListUsers(ctx context.Context, auth AuthContext, request ListR
 	return ListResponse[UserResource]{Schemas: []string{ListSchema}, TotalResults: total, StartIndex: request.StartIndex, ItemsPerPage: len(resources), Resources: resources}, nil
 }
 
-func (s *Service) ReplaceUser(ctx context.Context, auth AuthContext, id string, input UserInput, expectedVersion int64) (UserResource, error) {
+func (s *Service) ReplaceUser(ctx context.Context, auth AuthContext, id guid.ID, input UserInput, expectedVersion int64) (UserResource, error) {
 	input, active, err := normalizeUserInput(input)
-	id = strings.TrimSpace(id)
-	if err != nil || id == "" {
+	if err != nil || id.Zero() {
 		return UserResource{}, ErrInvalidSCIM
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -122,9 +122,8 @@ func (s *Service) ReplaceUser(ctx context.Context, auth AuthContext, id string, 
 	return s.GetUser(ctx, auth, id)
 }
 
-func (s *Service) DeleteUser(ctx context.Context, auth AuthContext, id string, expectedVersion int64) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
+func (s *Service) DeleteUser(ctx context.Context, auth AuthContext, id guid.ID, expectedVersion int64) error {
+	if id.Zero() {
 		return ErrInvalidSCIM
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -158,14 +157,14 @@ func (s *Service) CreateGroup(ctx context.Context, auth AuthContext, input Group
 	if err != nil {
 		return GroupResource{}, err
 	}
-	var resourceID string
+	var resourceID guid.ID
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		repo := s.repo.withExecutor(tx)
 		if err := requireSCIMUsers(ctx, repo, auth.DirectoryID, members); err != nil {
 			return err
 		}
 		if input.ExternalID != "" {
-			mapping, err := repo.getResourceByExternalKey(ctx, auth.DirectoryID, ResourceGroup, externalKey(input.ExternalID, ""))
+			mapping, err := repo.getResourceByExternalKey(ctx, auth.DirectoryID, ResourceGroup, externalKey(input.ExternalID, 0))
 			switch {
 			case err == nil && mapping.DeletedAt == 0:
 				return ErrResourceConflict
@@ -203,8 +202,8 @@ func (s *Service) CreateGroup(ctx context.Context, auth AuthContext, input Group
 	return s.GetGroup(ctx, auth, resourceID)
 }
 
-func (s *Service) GetGroup(ctx context.Context, auth AuthContext, id string) (GroupResource, error) {
-	record, err := s.repo.group(ctx, auth.DirectoryID, strings.TrimSpace(id))
+func (s *Service) GetGroup(ctx context.Context, auth AuthContext, id guid.ID) (GroupResource, error) {
+	record, err := s.repo.group(ctx, auth.DirectoryID, id)
 	if err != nil {
 		return GroupResource{}, err
 	}
@@ -231,10 +230,9 @@ func (s *Service) ListGroups(ctx context.Context, auth AuthContext, request List
 	return ListResponse[GroupResource]{Schemas: []string{ListSchema}, TotalResults: total, StartIndex: request.StartIndex, ItemsPerPage: len(resources), Resources: resources}, nil
 }
 
-func (s *Service) ReplaceGroup(ctx context.Context, auth AuthContext, id string, input GroupInput, expectedVersion int64) (GroupResource, error) {
+func (s *Service) ReplaceGroup(ctx context.Context, auth AuthContext, id guid.ID, input GroupInput, expectedVersion int64) (GroupResource, error) {
 	input, members, err := normalizeGroupInput(input)
-	id = strings.TrimSpace(id)
-	if err != nil || id == "" {
+	if err != nil || id.Zero() {
 		return GroupResource{}, ErrInvalidSCIM
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -266,9 +264,8 @@ func (s *Service) ReplaceGroup(ctx context.Context, auth AuthContext, id string,
 	return s.GetGroup(ctx, auth, id)
 }
 
-func (s *Service) DeleteGroup(ctx context.Context, auth AuthContext, id string, expectedVersion int64) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
+func (s *Service) DeleteGroup(ctx context.Context, auth AuthContext, id guid.ID, expectedVersion int64) error {
+	if id.Zero() {
 		return ErrInvalidSCIM
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -296,7 +293,7 @@ func (s *Service) DeleteGroup(ctx context.Context, auth AuthContext, id string, 
 	return nil
 }
 
-func (s *Service) appendResourceAudit(ctx context.Context, db bun.IDB, auth AuthContext, eventType, resourceType, resourceID string) error {
+func (s *Service) appendResourceAudit(ctx context.Context, db bun.IDB, auth AuthContext, eventType, resourceType string, resourceID guid.ID) error {
 	event := auditx.NewEvent(ctx, auth.TenantID, eventType, "scim_"+strings.ToLower(resourceType), resourceID)
 	event.Detail["directory_id"] = auth.DirectoryID
 	event.Detail["credential_id"] = auth.CredentialID
@@ -311,11 +308,11 @@ func provisionedUser(input UserInput, active bool, passwordHash string) identity
 	return identity.ProvisionedPrincipalInput{LoginName: input.UserName, DisplayName: input.DisplayName, Email: email, PasswordHash: passwordHash, Active: active}
 }
 
-func provisionedGroup(input GroupInput, members []string, active bool) organization.ProvisionedGroupInput {
+func provisionedGroup(input GroupInput, members []guid.ID, active bool) organization.ProvisionedGroupInput {
 	return organization.ProvisionedGroupInput{DisplayName: input.DisplayName, Active: active, MemberIDs: members}
 }
 
-func requireSCIMUsers(ctx context.Context, repo *Repository, directoryID string, ids []string) error {
+func requireSCIMUsers(ctx context.Context, repo *Repository, directoryID guid.ID, ids []guid.ID) error {
 	for _, id := range ids {
 		row, err := repo.user(ctx, directoryID, id)
 		if err != nil {
@@ -337,21 +334,21 @@ func userResource(record userRecord) UserResource {
 		emails = append(emails, UserEmail{Value: record.Email, Type: "work", Primary: true})
 	}
 	return UserResource{
-		Schemas: []string{UserSchema}, ID: record.ResourceID, ExternalID: record.ExternalID,
+		Schemas: []string{UserSchema}, ID: record.ResourceID.String(), ExternalID: record.ExternalID,
 		UserName: record.LoginName, Name: UserName{Formatted: record.DisplayName}, DisplayName: record.DisplayName,
 		Active: record.PrincipalStatus == "active" && record.MembershipStatus == "active", Emails: emails,
-		Meta: ResourceMeta{ResourceType: ResourceUser, Created: unixTime(record.CreatedAt), LastModified: unixTime(record.UpdatedAt), Location: "/scim/v2/Users/" + record.ResourceID, Version: weakETag(record.Version)},
+		Meta: ResourceMeta{ResourceType: ResourceUser, Created: unixTime(record.CreatedAt), LastModified: unixTime(record.UpdatedAt), Location: "/scim/v2/Users/" + record.ResourceID.String(), Version: weakETag(record.Version)},
 	}
 }
 
-func groupResource(record groupRecord, ids []string) GroupResource {
+func groupResource(record groupRecord, ids []guid.ID) GroupResource {
 	members := make([]SCIMGroupMember, 0, len(ids))
 	for _, id := range ids {
-		members = append(members, SCIMGroupMember{Value: id, Ref: "/scim/v2/Users/" + id})
+		members = append(members, SCIMGroupMember{Value: id.String(), Ref: "/scim/v2/Users/" + id.String()})
 	}
 	return GroupResource{
-		Schemas: []string{GroupSchema}, ID: record.ResourceID, ExternalID: record.ExternalID, DisplayName: record.Name, Members: members,
-		Meta: ResourceMeta{ResourceType: ResourceGroup, Created: unixTime(record.CreatedAt), LastModified: unixTime(record.UpdatedAt), Location: "/scim/v2/Groups/" + record.ResourceID, Version: weakETag(record.Version)},
+		Schemas: []string{GroupSchema}, ID: record.ResourceID.String(), ExternalID: record.ExternalID, DisplayName: record.Name, Members: members,
+		Meta: ResourceMeta{ResourceType: ResourceGroup, Created: unixTime(record.CreatedAt), LastModified: unixTime(record.UpdatedAt), Location: "/scim/v2/Groups/" + record.ResourceID.String(), Version: weakETag(record.Version)},
 	}
 }
 

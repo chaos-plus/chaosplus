@@ -97,7 +97,11 @@ func (MembershipRule) Schema(huma.Registry) *huma.Schema {
 
 func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-list-groups", Method: http.MethodGet, Path: "/iam/groups", Summary: "List tenant groups", Tags: []string{"organization"}, Errors: []int{http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "view"}, func(ctx context.Context, in *groupListInput) (*respx.Body[[]Group], error) {
-		items, err := service.List(ctx, in.TenantID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.List(ctx, tenantID)
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -105,7 +109,11 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-create-group", Method: http.MethodPost, Path: "/iam/groups", Summary: "Create a tenant group", Tags: []string{"organization"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "create"}, func(ctx context.Context, in *createGroupInput) (*respx.Body[Group], error) {
-		item, err := service.Create(ctx, in.TenantID, CreateGroup{Name: in.Body.Name, Type: in.Body.Type, Rule: in.Body.Rule, Description: in.Body.Description, Status: in.Body.Status, SortOrder: in.Body.SortOrder})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Create(ctx, tenantID, CreateGroup{Name: in.Body.Name, Type: in.Body.Type, Rule: in.Body.Rule, Description: in.Body.Description, Status: in.Body.Status, SortOrder: in.Body.SortOrder})
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -113,7 +121,15 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-get-group", Method: http.MethodGet, Path: "/iam/groups/{id}", Summary: "Get a tenant group", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "view"}, func(ctx context.Context, in *groupIDInput) (*respx.Body[Group], error) {
-		item, err := service.Get(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Get(ctx, tenantID, id)
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -121,7 +137,15 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-update-group", Method: http.MethodPatch, Path: "/iam/groups/{id}", Summary: "Update a tenant group", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "update"}, func(ctx context.Context, in *updateGroupInput) (*respx.Body[Group], error) {
-		item, err := service.Update(ctx, in.TenantID, in.ID, UpdateGroup{Name: in.Body.Name, Description: in.Body.Description, Status: in.Body.Status, SortOrder: in.Body.SortOrder, Rule: in.Body.Rule, Version: in.Body.Version})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Update(ctx, tenantID, id, UpdateGroup{Name: in.Body.Name, Description: in.Body.Description, Status: in.Body.Status, SortOrder: in.Body.SortOrder, Rule: in.Body.Rule, Version: in.Body.Version})
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -129,14 +153,30 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-delete-group", Method: http.MethodDelete, Path: "/iam/groups/{id}", Summary: "Delete an empty tenant group", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "delete"}, func(ctx context.Context, in *deleteGroupInput) (*respx.Body[deletedGroup], error) {
-		if err := service.Delete(ctx, in.TenantID, in.ID, in.Version); err != nil {
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.Delete(ctx, tenantID, id, in.Version); err != nil {
 			return nil, groupError(err)
 		}
 		return respx.OK(ctx, deletedGroup{Deleted: true}), nil
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-list-group-members", Method: http.MethodGet, Path: "/iam/groups/{id}/members", Summary: "List group members", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "view"}, func(ctx context.Context, in *groupIDInput) (*respx.Body[[]GroupMember], error) {
-		items, err := service.ListMembers(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListMembers(ctx, tenantID, id)
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -144,7 +184,19 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-put-group-member", Method: http.MethodPut, Path: "/iam/groups/{id}/members/{principal_id}", Summary: "Assign or update a group member", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "manage_member"}, func(ctx context.Context, in *putGroupMemberInput) (*respx.Body[GroupMember], error) {
-		item, err := service.PutMember(ctx, in.TenantID, in.ID, in.PrincipalID, GroupMemberWindow{StartsAt: in.Body.StartsAt, EndsAt: in.Body.EndsAt})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principalID, err := parseOrganizationID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.PutMember(ctx, tenantID, id, principalID, GroupMemberWindow{StartsAt: in.Body.StartsAt, EndsAt: in.Body.EndsAt})
 		if err != nil {
 			return nil, groupError(err)
 		}
@@ -152,7 +204,19 @@ func RegisterGroupREST(api huma.API, service *GroupService, registrar *authz.Reg
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-delete-group-member", Method: http.MethodDelete, Path: "/iam/groups/{id}/members/{principal_id}", Summary: "Remove a group member", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "group", Verb: "manage_member"}, func(ctx context.Context, in *groupMemberInput) (*respx.Body[deletedGroup], error) {
-		deleted, err := service.DeleteMember(ctx, in.TenantID, in.ID, in.PrincipalID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principalID, err := parseOrganizationID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := service.DeleteMember(ctx, tenantID, id, principalID)
 		if err != nil {
 			return nil, groupError(err)
 		}

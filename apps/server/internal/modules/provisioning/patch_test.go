@@ -49,8 +49,8 @@ func TestUserPatchValidationAndApplication(t *testing.T) {
 }
 
 func TestGroupPatchMemberOperations(t *testing.T) {
-	input := GroupInput{Schemas: []string{GroupSchema}, DisplayName: "Team", Members: []SCIMGroupMember{{Value: "one"}, {Value: "two"}}}
-	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "add", Value: json.RawMessage(`{"displayName":"Team Added","externalId":"external","members":[{"value":"zero"}]}`)}))
+	input := GroupInput{Schemas: []string{GroupSchema}, DisplayName: "Team", Members: []SCIMGroupMember{{Value: wireID("one")}, {Value: wireID("two")}}}
+	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "add", Value: json.RawMessage(`{"displayName":"Team Added","externalId":"external","members":[{"value":"` + wireID("zero") + `"}]}`)}))
 	assert.Equal(t, "Team Added", input.DisplayName)
 	assert.Equal(t, "external", input.ExternalID)
 	require.Len(t, input.Members, 3)
@@ -58,14 +58,14 @@ func TestGroupPatchMemberOperations(t *testing.T) {
 	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "replace", Path: "externalId", Value: json.RawMessage(`"external-2"`)}))
 	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "remove", Path: "externalId"}))
 	assert.Empty(t, input.ExternalID)
-	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "add", Path: "members", Value: json.RawMessage(`{"value":"three"}`)}))
+	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "add", Path: "members", Value: json.RawMessage(`{"value":"` + wireID("three") + `"}`)}))
 	require.Len(t, input.Members, 4)
-	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "remove", Path: `members[value eq "two"]`}))
+	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "remove", Path: `members[value eq "` + wireID("two") + `"]`}))
 	require.Len(t, input.Members, 3)
-	assert.Equal(t, "three", input.Members[2].Value)
-	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "replace", Path: "members", Value: json.RawMessage(`[{"value":"one"},{"value":"three"}]`)}))
+	assert.Equal(t, wireID("three"), input.Members[2].Value)
+	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "replace", Path: "members", Value: json.RawMessage(`[{"value":"` + wireID("one") + `"},{"value":"` + wireID("three") + `"}]`)}))
 	require.Len(t, input.Members, 2)
-	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "replace", Value: json.RawMessage(`{"displayName":"Renamed","members":[{"value":"one"}]}`)}))
+	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "replace", Value: json.RawMessage(`{"displayName":"Renamed","members":[{"value":"` + wireID("one") + `"}]}`)}))
 	assert.Equal(t, "Renamed", input.DisplayName)
 	require.Len(t, input.Members, 1)
 	require.NoError(t, applyGroupPatch(&input, PatchOperation{Op: "remove", Path: "members"}))
@@ -73,8 +73,8 @@ func TestGroupPatchMemberOperations(t *testing.T) {
 
 	for _, operation := range []PatchOperation{
 		{Op: "remove", Path: "displayName"},
-		{Op: "replace", Path: `members[value eq "one"]`, Value: json.RawMessage(`{"value":"two"}`)},
-		{Op: "remove", Path: `members[value co "one"]`},
+		{Op: "replace", Path: `members[value eq "` + wireID("one") + `"]`, Value: json.RawMessage(`{"value":"` + wireID("two") + `"}`)},
+		{Op: "remove", Path: `members[value co "` + wireID("one") + `"]`},
 		{Op: "remove", Path: `members[value eq 1]`},
 		{Op: "replace", Path: "members", Value: json.RawMessage(`true`)},
 		{Op: "replace", Path: "[", Value: json.RawMessage(`"x"`)},

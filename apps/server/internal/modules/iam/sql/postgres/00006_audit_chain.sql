@@ -5,7 +5,7 @@ ALTER TABLE iam_audit_events ADD COLUMN event_hash VARCHAR(64) NOT NULL DEFAULT 
 CREATE UNIQUE INDEX uq_iam_audit_chain_sequence ON iam_audit_events (tenant_id, sequence) WHERE sequence > 0;
 CREATE UNIQUE INDEX uq_iam_audit_chain_hash ON iam_audit_events (tenant_id, event_hash) WHERE event_hash <> '';
 CREATE TABLE iam_audit_heads (
-    tenant_id VARCHAR(128) PRIMARY KEY,
+    tenant_id BIGINT PRIMARY KEY,
     sequence BIGINT NOT NULL DEFAULT 0,
     event_hash VARCHAR(64) NOT NULL DEFAULT '',
     updated_at BIGINT NOT NULL

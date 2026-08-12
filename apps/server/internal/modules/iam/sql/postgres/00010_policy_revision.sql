@@ -1,6 +1,6 @@
 -- +goose Up
 CREATE TABLE iam_policy_revisions (
-    tenant_id VARCHAR(128) PRIMARY KEY,
+    tenant_id BIGINT PRIMARY KEY,
     revision BIGINT NOT NULL DEFAULT 0 CHECK (revision >= 0),
     updated_at BIGINT NOT NULL
 );

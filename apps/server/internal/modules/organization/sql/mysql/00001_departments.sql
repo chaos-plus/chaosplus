@@ -1,8 +1,8 @@
 -- +goose Up
 CREATE TABLE iam_departments (
-    tenant_id VARCHAR(128) NOT NULL,
-    id VARCHAR(128) NOT NULL,
-    parent_id VARCHAR(128) NOT NULL DEFAULT '',
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
+    parent_id BIGINT NOT NULL DEFAULT '',
     name VARCHAR(128) NOT NULL,
     name_key VARCHAR(128) NOT NULL,
     status VARCHAR(16) NOT NULL,
@@ -19,9 +19,9 @@ CREATE TABLE iam_departments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_department_closure (
-    tenant_id VARCHAR(128) NOT NULL,
-    ancestor_id VARCHAR(128) NOT NULL,
-    descendant_id VARCHAR(128) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    ancestor_id BIGINT NOT NULL,
+    descendant_id BIGINT NOT NULL,
     depth INT NOT NULL,
     PRIMARY KEY (tenant_id, ancestor_id, descendant_id),
     KEY idx_iam_department_closure_descendant (tenant_id, descendant_id, depth, ancestor_id),

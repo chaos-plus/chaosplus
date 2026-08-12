@@ -50,13 +50,13 @@ func TestFederationModuleDeclaresManagementAndBrowserOperations(t *testing.T) {
 func TestFederationRuntimeModuleUsesRealServices(t *testing.T) {
 	env := newFederationEnvironment(t)
 	registrar := authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry())
-	module := NewModule(env.db, registrar, env.audit, env.identities, env.web, Config{HTTPTimeout: 5 * time.Second, ClockSkew: 30 * time.Second, StateTTL: 10 * time.Minute}, env.key)
+	module := NewModule(env.db, registrar, env.audit, env.identities, env.web, Config{HTTPTimeout: 5 * time.Second, ClockSkew: 30 * time.Second, StateTTL: 10 * time.Minute}, env.key, newTestIDGenerator())
 	require.NoError(t, module.Migrate(t.Context()))
 	_, api := humatest.New(t)
 	module.RegisterREST(api)
 	assert.Contains(t, api.OpenAPI().Paths, "/iam/identity-providers")
 	assert.Panics(t, func() {
-		NewModule(nil, registrar, env.audit, env.identities, env.web, Config{}, env.key)
+		NewModule(nil, registrar, env.audit, env.identities, env.web, Config{}, env.key, newTestIDGenerator())
 	})
 	assert.Panics(t, func() { NewDeclarationOnlyModule(nil) })
 	assert.Panics(t, func() { NewDeclarationOnlyModule(authz.NewRegistrar(authz.DefaultRegistry(), nil, nil, nil)) })

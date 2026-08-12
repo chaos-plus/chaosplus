@@ -8,6 +8,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -27,9 +28,8 @@ func NewGroupService(db *bun.DB, audit auditx.Appender, members ActiveMemberChec
 	return &GroupService{repo: NewGroupRepository(db), audit: audit, members: members, administrators: administrators, nextID: nextID, now: time.Now}
 }
 
-func (s *GroupService) List(ctx context.Context, tenantID string) ([]Group, error) {
-	tenantID = normalizePositionTenant(tenantID)
-	if !validTenant(tenantID) {
+func (s *GroupService) List(ctx context.Context, tenantID guid.ID) ([]Group, error) {
+	if tenantID.Zero() {
 		return nil, ErrGroupInvalid
 	}
 	rows, err := s.repo.list(ctx, tenantID)
@@ -43,9 +43,8 @@ func (s *GroupService) List(ctx context.Context, tenantID string) ([]Group, erro
 	return result, nil
 }
 
-func (s *GroupService) Get(ctx context.Context, tenantID, id string) (Group, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) {
+func (s *GroupService) Get(ctx context.Context, tenantID, id guid.ID) (Group, error) {
+	if tenantID.Zero() || !validID(id) {
 		return Group{}, ErrGroupInvalid
 	}
 	row, err := s.repo.get(ctx, tenantID, id)
@@ -55,7 +54,7 @@ func (s *GroupService) Get(ctx context.Context, tenantID, id string) (Group, err
 	return groupFromRow(row), nil
 }
 
-func (s *GroupService) Create(ctx context.Context, tenantID string, input CreateGroup) (Group, error) {
+func (s *GroupService) Create(ctx context.Context, tenantID guid.ID, input CreateGroup) (Group, error) {
 	tenantID, input, err := normalizeGroupCreate(tenantID, input)
 	if err != nil {
 		return Group{}, err
@@ -87,7 +86,7 @@ func (s *GroupService) Create(ctx context.Context, tenantID string, input Create
 	return groupFromRow(row), nil
 }
 
-func (s *GroupService) Update(ctx context.Context, tenantID, id string, input UpdateGroup) (Group, error) {
+func (s *GroupService) Update(ctx context.Context, tenantID, id guid.ID, input UpdateGroup) (Group, error) {
 	tenantID, id, input, err := normalizeGroupUpdate(tenantID, id, input)
 	if err != nil {
 		return Group{}, err
@@ -159,9 +158,8 @@ func (s *GroupService) Update(ctx context.Context, tenantID, id string, input Up
 	return groupFromRow(updated), nil
 }
 
-func (s *GroupService) Delete(ctx context.Context, tenantID, id string, version int64) error {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) || version < 1 {
+func (s *GroupService) Delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
+	if tenantID.Zero() || !validID(id) || version < 1 {
 		return ErrGroupInvalid
 	}
 	now := s.now().UTC().UnixMilli()
@@ -189,9 +187,8 @@ func (s *GroupService) Delete(ctx context.Context, tenantID, id string, version 
 	return nil
 }
 
-func (s *GroupService) ListMembers(ctx context.Context, tenantID, groupID string) ([]GroupMember, error) {
-	tenantID, groupID = trimPair(tenantID, groupID)
-	if !validTenant(tenantID) || !validID(groupID) {
+func (s *GroupService) ListMembers(ctx context.Context, tenantID, groupID guid.ID) ([]GroupMember, error) {
+	if tenantID.Zero() || !validID(groupID) {
 		return nil, ErrGroupInvalid
 	}
 	group, err := s.repo.get(ctx, tenantID, groupID)
@@ -205,7 +202,7 @@ func (s *GroupService) ListMembers(ctx context.Context, tenantID, groupID string
 		}
 		result := make([]GroupMember, 0, len(rows))
 		for _, row := range rows {
-			matched, err := policyx.EvaluateMemberRule([]byte(group.RuleJSON), policyx.MemberFacts{Subject: row.PrincipalID, Email: row.Email, DepartmentID: row.DepartmentID, Status: row.Status})
+			matched, err := policyx.EvaluateMemberRule([]byte(group.RuleJSON), policyx.MemberFacts{Subject: row.PrincipalID.String(), Email: row.Email, DepartmentID: row.DepartmentID.String(), Status: row.Status})
 			if err != nil {
 				return nil, fmt.Errorf("evaluate persisted dynamic group rule: %w", err)
 			}
@@ -226,7 +223,7 @@ func (s *GroupService) ListMembers(ctx context.Context, tenantID, groupID string
 	return result, nil
 }
 
-func (s *GroupService) PutMember(ctx context.Context, tenantID, groupID, principalID string, input GroupMemberWindow) (GroupMember, error) {
+func (s *GroupService) PutMember(ctx context.Context, tenantID, groupID, principalID guid.ID, input GroupMemberWindow) (GroupMember, error) {
 	tenantID, groupID, principalID, input, err := normalizeGroupMember(tenantID, groupID, principalID, input)
 	if err != nil {
 		return GroupMember{}, err
@@ -290,7 +287,7 @@ func (s *GroupService) PutMember(ctx context.Context, tenantID, groupID, princip
 	return groupMemberFromRow(result), nil
 }
 
-func (s *GroupService) DeleteMember(ctx context.Context, tenantID, groupID, principalID string) (bool, error) {
+func (s *GroupService) DeleteMember(ctx context.Context, tenantID, groupID, principalID guid.ID) (bool, error) {
 	tenantID, groupID, principalID, _, err := normalizeGroupMember(tenantID, groupID, principalID, GroupMemberWindow{})
 	if err != nil {
 		return false, err

@@ -192,6 +192,10 @@ func TestBootstrapRejectsInvalidDependencyConfigurations(t *testing.T) {
 		application := NewApp(Config{Timezone: "UTC", Authz: Authz{Enabled: true}})
 		assert.ErrorContains(t, application.Bootstrap(), "requires authentication")
 	})
+	t.Run("resource application security", func(t *testing.T) {
+		application := NewResourceApp(Config{Timezone: "UTC"}, Extension{Name: "resource"})
+		assert.ErrorContains(t, application.Bootstrap(), "requires authentication and authorization")
+	})
 }
 
 func TestBootstrapRedisAndPluginConfiguration(t *testing.T) {

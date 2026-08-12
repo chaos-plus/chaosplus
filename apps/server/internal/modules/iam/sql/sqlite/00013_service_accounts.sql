@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_service_accounts (
-    principal_id TEXT NOT NULL PRIMARY KEY,
-    owner_tenant_id TEXT NOT NULL,
+    principal_id BIGINT NOT NULL PRIMARY KEY,
+    owner_tenant_id BIGINT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
     expires_at BIGINT NOT NULL DEFAULT 0,
@@ -15,8 +15,8 @@ CREATE TABLE iam_service_accounts (
 CREATE INDEX idx_iam_service_accounts_tenant ON iam_service_accounts (owner_tenant_id, status, principal_id);
 
 CREATE TABLE iam_service_account_credentials (
-    id TEXT NOT NULL PRIMARY KEY,
-    principal_id TEXT NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    principal_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     secret_hash TEXT NOT NULL,
     scopes TEXT NOT NULL DEFAULT '',

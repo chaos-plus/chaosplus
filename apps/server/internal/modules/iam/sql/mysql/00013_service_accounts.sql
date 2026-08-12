@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_service_accounts (
-    principal_id VARCHAR(64) PRIMARY KEY,
-    owner_tenant_id VARCHAR(128) NOT NULL,
+    principal_id BIGINT PRIMARY KEY,
+    owner_tenant_id BIGINT NOT NULL,
     description VARCHAR(1000) NOT NULL DEFAULT '',
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     expires_at BIGINT NOT NULL DEFAULT 0,
@@ -15,8 +15,8 @@ CREATE TABLE iam_service_accounts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_service_account_credentials (
-    id VARCHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL,
+    id BIGINT PRIMARY KEY,
+    principal_id BIGINT NOT NULL,
     name VARCHAR(128) NOT NULL,
     secret_hash TEXT NOT NULL,
     scopes TEXT NOT NULL,

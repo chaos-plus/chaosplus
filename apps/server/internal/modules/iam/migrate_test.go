@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
@@ -133,7 +134,7 @@ func TestEntityConstraintMigrationLifecycle(t *testing.T) {
 	insertRoot := func(id string) error {
 		_, err := db.ExecContext(t.Context(), `INSERT INTO iam_entities
 			(tenant_id, id, parent_id, type, name, status, metadata, created_at, updated_at)
-			VALUES ('tenant', ?, NULL, 'company', 'Acme', 'active', '{}', 1, 1)`, id)
+			VALUES (?, ?, NULL, 'company', 'Acme', 'active', '{}', 1, 1)`, testID("tenant"), id)
 		return err
 	}
 	require.NoError(t, insertRoot("root-1"))
@@ -145,7 +146,7 @@ func TestEntityConstraintMigrationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, count)
 	require.NoError(t, Migrate(t.Context(), db))
-	_, err = db.NewDelete().Table("iam_entities").Where("tenant_id = ?", "tenant").Exec(t.Context())
+	_, err = db.NewDelete().Table("iam_entities").Where("tenant_id = ?", testID("tenant")).Exec(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, insertRoot("root-3"))
 	assert.Error(t, insertRoot("root-4"))
@@ -296,36 +297,36 @@ func TestIAMConstraintBehaviorDialectLifecycle(t *testing.T) {
 	db := newLifecycleDatabase(t)
 	require.NoError(t, Migrate(t.Context(), db))
 
-	insertEntity := func(tenant, id string, parent any, kind, name string) error {
+	insertEntity := func(tenant, id guid.ID, parent any, kind, name string) error {
 		_, err := db.ExecContext(t.Context(), `INSERT INTO iam_entities
 			(tenant_id, id, parent_id, type, name, status, metadata, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, 'active', '{}', 1, 1)`, tenant, id, parent, kind, name)
 		return err
 	}
-	require.NoError(t, insertEntity("tenant-a", "root-1", nil, "company", "Acme"))
-	require.NoError(t, insertEntity("tenant-b", "root-2", nil, "company", "Acme"), "same sibling name in another tenant must coexist (tenant isolation)")
-	assert.Error(t, insertEntity("tenant-a", "root-3", nil, "company", "Acme"), "duplicate sibling name within a tenant must be rejected")
-	require.NoError(t, insertEntity("tenant-a", "child-1", "root-1", "department", "Engineering"))
-	_, fkErr := db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = 'tenant-a' AND id = 'root-1'`)
+	require.NoError(t, insertEntity(testID("tenant-a"), testID("root-1"), nil, "company", "Acme"))
+	require.NoError(t, insertEntity(testID("tenant-b"), testID("root-2"), nil, "company", "Acme"), "same sibling name in another tenant must coexist (tenant isolation)")
+	assert.Error(t, insertEntity(testID("tenant-a"), testID("root-3"), nil, "company", "Acme"), "duplicate sibling name within a tenant must be rejected")
+	require.NoError(t, insertEntity(testID("tenant-a"), testID("child-1"), testID("root-1"), "department", "Engineering"))
+	_, fkErr := db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = ? AND id = ?`, testID("tenant-a"), testID("root-1"))
 	assert.Error(t, fkErr, "parent FK must RESTRICT deletion while children exist")
-	_, err := db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = 'tenant-a' AND id = 'child-1'`)
+	_, err := db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = ? AND id = ?`, testID("tenant-a"), testID("child-1"))
 	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = 'tenant-a' AND id = 'root-1'`)
+	_, err = db.ExecContext(t.Context(), `DELETE FROM iam_entities WHERE tenant_id = ? AND id = ?`, testID("tenant-a"), testID("root-1"))
 	require.NoError(t, err)
 
-	insertRole := func(tenant, id string) error {
+	insertRole := func(tenant, id guid.ID) error {
 		_, err := db.ExecContext(t.Context(), `INSERT INTO iam_roles (tenant_id, id, name, description, created_at, updated_at)
 			VALUES (?, ?, ?, 'desc', 1, 1)`, tenant, id, id)
 		return err
 	}
-	require.NoError(t, insertRole("tenant-a", "admin-role"))
+	require.NoError(t, insertRole(testID("tenant-a"), testID("admin-role")))
 	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_role_permissions (tenant_id, role_id, permission_code, created_at)
-		VALUES ('tenant-a', 'admin-role', 'tenant_administer', 1)`)
+		VALUES (?, ?, 'tenant_administer', 1)`, testID("tenant-a"), testID("admin-role"))
 	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_role_members (tenant_id, role_id, user_subject, created_at)
-		VALUES ('tenant-a', 'admin-role', 'subject-1', 1)`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO iam_role_members (tenant_id, role_id, principal_id, created_at)
+		VALUES (?, ?, ?, 1)`, testID("tenant-a"), testID("admin-role"), testID("subject-1"))
 	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `DELETE FROM iam_roles WHERE tenant_id = 'tenant-a' AND id = 'admin-role'`)
+	_, err = db.ExecContext(t.Context(), `DELETE FROM iam_roles WHERE tenant_id = ? AND id = ?`)
 	require.NoError(t, err)
 	var remaining int
 	require.NoError(t, db.NewSelect().Table("iam_role_permissions").ColumnExpr("COUNT(*)").Where("tenant_id = 'tenant-a' AND role_id = 'admin-role'").Scan(t.Context(), &remaining))
@@ -333,15 +334,15 @@ func TestIAMConstraintBehaviorDialectLifecycle(t *testing.T) {
 	require.NoError(t, db.NewSelect().Table("iam_role_members").ColumnExpr("COUNT(*)").Where("tenant_id = 'tenant-a' AND role_id = 'admin-role'").Scan(t.Context(), &remaining))
 	assert.Zero(t, remaining)
 
-	insertAudit := func(id, tenant string, seq int64, hash string) error {
+	insertAudit := func(id, tenant guid.ID, seq int64, hash string) error {
 		_, err := db.ExecContext(t.Context(), `INSERT INTO iam_audit_events
 			(id, tenant_id, event_type, outcome, detail, created_at, sequence, previous_hash, event_hash)
 			VALUES (?, ?, 'created', 'success', '{}', 1, ?, '', ?)`, id, tenant, seq, hash)
 		return err
 	}
-	require.NoError(t, insertAudit("evt-1", "tenant-a", 1, "hash-1"))
-	require.NoError(t, insertAudit("evt-2", "tenant-b", 1, "hash-2"), "same sequence in another tenant must coexist")
-	assert.Error(t, insertAudit("evt-3", "tenant-a", 1, "hash-3"), "duplicate sequence within a tenant must be rejected")
+	require.NoError(t, insertAudit(testID("evt-1"), testID("tenant-a"), 1, "hash-1"))
+	require.NoError(t, insertAudit(testID("evt-2"), testID("tenant-b"), 1, "hash-2"), "same sequence in another tenant must coexist")
+	assert.Error(t, insertAudit(testID("evt-3"), testID("tenant-a"), 1, "hash-3"), "duplicate sequence within a tenant must be rejected")
 }
 
 func newLifecycleDatabase(t *testing.T) *bun.DB {

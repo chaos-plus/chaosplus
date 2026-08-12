@@ -3,6 +3,8 @@ package provisioning
 import (
 	"errors"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const (
@@ -39,8 +41,8 @@ var (
 )
 
 type Directory struct {
-	ID        string    `json:"id"`
-	TenantID  string    `json:"tenant_id"`
+	ID        guid.ID   `json:"id"`
+	TenantID  guid.ID   `json:"tenant_id"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
 	Version   int64     `json:"version"`
@@ -49,8 +51,8 @@ type Directory struct {
 }
 
 type Credential struct {
-	ID          string     `json:"id"`
-	DirectoryID string     `json:"directory_id"`
+	ID          guid.ID    `json:"id"`
+	DirectoryID guid.ID    `json:"directory_id"`
 	Name        string     `json:"name"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
@@ -64,15 +66,15 @@ type CredentialSecret struct {
 }
 
 type AuthContext struct {
-	TenantID     string
-	DirectoryID  string
-	CredentialID string
+	TenantID     guid.ID
+	DirectoryID  guid.ID
+	CredentialID guid.ID
 }
 
 type ResourceMapping struct {
-	DirectoryID  string
+	DirectoryID  guid.ID
 	ResourceType string
-	ResourceID   string
+	ResourceID   guid.ID
 	ExternalID   string
 	ExternalKey  string
 	Version      int64

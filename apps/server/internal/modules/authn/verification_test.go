@@ -65,12 +65,12 @@ func TestEmailVerificationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, claims.EmailVerified)
 	assert.Equal(t, "admin@example.com", claims.Email)
-	auditService := auditmod.NewService(service.db)
+	auditService := auditmod.NewService(service.db, newTestIDGenerator())
 	for _, eventType := range []string{"email_verification_requested", "email_verification_completed"} {
 		events, total, auditErr := auditService.List(t.Context(), auditmod.Filter{TenantID: authnAuditTenant, EventType: eventType, Offset: 0, Limit: 50})
 		require.NoError(t, auditErr)
 		require.Equal(t, int64(1), total)
-		assert.Equal(t, principalID, events[0].PrincipalID)
+		assert.Equal(t, parseGUID(principalID), events[0].PrincipalID)
 	}
 	integrity, err := auditService.Verify(t.Context(), authnAuditTenant)
 	require.NoError(t, err)
@@ -277,7 +277,7 @@ func emailVerificationTokenFromOutbox(t *testing.T, service *WebService) string 
 	t.Helper()
 	var row notificationOutboxRow
 	require.NoError(t, service.db.NewSelect().Model(&row).Where("kind = ?", emailVerificationNotification).Order("created_at DESC", "id DESC").Limit(1).Scan(t.Context()))
-	plain, err := service.decryptAuthnData("notification:v1", row.ID, row.PayloadCiphertext)
+	plain, err := service.decryptAuthnData("notification:v1", guidString(row.ID), row.PayloadCiphertext)
 	require.NoError(t, err)
 	var payload notificationPayload
 	require.NoError(t, json.Unmarshal(plain, &payload))

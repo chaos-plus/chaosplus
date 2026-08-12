@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_password_history (
-    id VARCHAR(64) PRIMARY KEY,
-    principal_id VARCHAR(64) NOT NULL,
+    id BIGINT PRIMARY KEY,
+    principal_id BIGINT NOT NULL,
     password_hash TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     KEY idx_iam_password_history_principal (principal_id, created_at DESC),

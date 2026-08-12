@@ -18,12 +18,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 const (
-	anchorSchema   = "chaosplus.audit-anchor.v1"
+	anchorSchema   = "audit-anchor.v1"
 	anchorPrefix   = "audit/anchors"
 	anchorLockMode = minio.Compliance
 )
@@ -43,7 +44,7 @@ var (
 // so the anchor objects form their own immutable chain.
 type Anchor struct {
 	Schema             string    `json:"schema"`
-	TenantID           string    `json:"tenant_id"`
+	TenantID           guid.ID   `json:"tenant_id"`
 	HeadSequence       int64     `json:"head_sequence"`
 	HeadHash           string    `json:"head_hash"`
 	AnchoredAt         time.Time `json:"anchored_at"`
@@ -162,8 +163,8 @@ func (s *AnchorStore) probeObjectLock(ctx context.Context) error {
 	return nil
 }
 
-func (s *AnchorStore) objectKey(tenantID string, sequence int64) string {
-	return s.prefix + "/" + tenantID + "/" + strconv.FormatInt(sequence, 10) + ".json"
+func (s *AnchorStore) objectKey(tenantID guid.ID, sequence int64) string {
+	return s.prefix + "/" + tenantID.String() + "/" + strconv.FormatInt(sequence, 10) + ".json"
 }
 
 // Put writes one anchor with compliance retention. Write-once is enforced by
@@ -195,12 +196,12 @@ func (s *AnchorStore) Put(ctx context.Context, anchor Anchor) error {
 }
 
 // List returns every anchor for a tenant, oldest first.
-func (s *AnchorStore) List(ctx context.Context, tenantID string) ([]Anchor, error) {
+func (s *AnchorStore) List(ctx context.Context, tenantID guid.ID) ([]Anchor, error) {
 	if err := s.ensureBucket(ctx); err != nil {
 		return nil, err
 	}
 	var anchors []Anchor
-	for object := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: s.prefix + "/" + tenantID + "/", Recursive: true}) {
+	for object := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: s.prefix + "/" + tenantID.String() + "/", Recursive: true}) {
 		if object.Err != nil {
 			return nil, fmt.Errorf("list anchor objects: %w", object.Err)
 		}
@@ -257,7 +258,7 @@ func computeAnchorHash(anchor Anchor) string {
 		Schema, TenantID, HeadHash, PreviousAnchorHash string
 		HeadSequence                                   int64
 		AnchoredAt                                     time.Time
-	}{anchor.Schema, anchor.TenantID, anchor.HeadHash, anchor.PreviousAnchorHash, anchor.HeadSequence, anchor.AnchoredAt.UTC()})
+	}{anchor.Schema, anchor.TenantID.String(), anchor.HeadHash, anchor.PreviousAnchorHash, anchor.HeadSequence, anchor.AnchoredAt.UTC()})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

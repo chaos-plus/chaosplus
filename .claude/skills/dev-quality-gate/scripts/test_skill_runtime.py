@@ -30,17 +30,25 @@ class SkillRuntimeTest(unittest.TestCase):
         (skill / "agents").mkdir(parents=True)
         (skill / "references").mkdir()
         (skill / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: Use this skill for repository work.\n---\n\n# Skill\n",
+            f"---\nname: {name}\ndescription: 用于仓库工程任务。\n---\n\n# Skill\n",
             encoding="utf-8",
         )
         (skill / "agents" / "openai.yaml").write_text(
             "interface:\n"
-            '  display_name: "Dev Backend"\n'
-            '  short_description: "Build and verify backend changes"\n'
-            f'  default_prompt: "Use ${name} to complete this change."\n',
+            '  display_name: "Dev 后端"\n'
+            '  short_description: "实现并验证后端变更"\n'
+            f'  default_prompt: "使用 ${name} 完成本次变更。"\n'
+            "policy:\n"
+            "  allow_implicit_invocation: true\n",
             encoding="utf-8",
         )
         (skill / "references" / "lessons.md").write_text("# Lessons\n", encoding="utf-8")
+        discovery = self.root / ".agents" / "skills"
+        discovery.mkdir(parents=True, exist_ok=True)
+        link = discovery / name
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(skill, target_is_directory=True)
         return skill
 
     def create_repository(self) -> None:
@@ -86,13 +94,49 @@ class SkillRuntimeTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("Validated 1", result.stdout)
+        self.assertIn("已校验 1", result.stdout)
 
         (skill / "SKILL.md").write_text(
             "---\nname: wrong-name\ndescription: valid description\n---\n",
             encoding="utf-8",
         )
         self.assertTrue(RUNTIME.validate_skills(self.skills))
+
+    def test_validation_requires_implicit_invocation(self) -> None:
+        skill = self.create_skill()
+        metadata = skill / "agents" / "openai.yaml"
+        metadata.write_text(
+            metadata.read_text(encoding="utf-8").replace(
+                "policy:\n  allow_implicit_invocation: true\n", ""
+            ),
+            encoding="utf-8",
+        )
+        errors = RUNTIME.validate_skills(self.skills)
+        self.assertTrue(any("allow_implicit_invocation" in error for error in errors))
+
+    def test_validation_requires_chinese_metadata_and_canonical_discovery_link(self) -> None:
+        skill = self.create_skill()
+        metadata = skill / "agents" / "openai.yaml"
+        metadata.write_text(
+            metadata.read_text(encoding="utf-8").replace("实现并验证后端变更", "Backend changes"),
+            encoding="utf-8",
+        )
+        errors = RUNTIME.validate_skills(self.skills)
+        self.assertTrue(any("short_description" in error and "Chinese" in error for error in errors))
+
+        metadata.write_text(
+            metadata.read_text(encoding="utf-8").replace("Backend changes", "实现并验证后端变更"),
+            encoding="utf-8",
+        )
+        (self.root / ".agents" / "skills" / skill.name).unlink()
+        errors = RUNTIME.validate_skills(self.skills)
+        self.assertTrue(any("symbolic link" in error for error in errors))
+
+    def test_validation_rejects_legacy_skill_root(self) -> None:
+        self.create_skill()
+        (self.root / ".codex" / "skills").mkdir(parents=True)
+        errors = RUNTIME.validate_skills(self.skills)
+        self.assertTrue(any("legacy repository skill root" in error for error in errors))
 
     def test_refresh_is_deterministic_and_idempotent(self) -> None:
         self.create_repository()
@@ -132,6 +176,38 @@ class SkillRuntimeTest(unittest.TestCase):
                 "Redact credentials",
                 "A safe test passed",
             )
+
+    def test_validation_requires_dev_prefix_and_rejects_derived_brand(self) -> None:
+        self.create_repository()
+        invalid = self.create_skill("backend")
+        errors = RUNTIME.validate_skills(self.skills, [invalid])
+        self.assertTrue(any("dev-" in error for error in errors))
+
+        branded = self.create_skill("dev-backend")
+        (branded / "SKILL.md").write_text(
+            f"---\nname: dev-backend\ndescription: {self.root.name} project backend\n---\n",
+            encoding="utf-8",
+        )
+        errors = RUNTIME.validate_skills(self.skills, [branded])
+        self.assertTrue(any("brand" in error for error in errors))
+
+    def test_validation_rejects_brand_in_lessons_and_rules(self) -> None:
+        self.create_repository()
+        skill = self.create_skill("dev-backend")
+        brand = self.root.name
+        (skill / "references" / "lessons.md").write_text(
+            f"# Lessons\n\nDo not copy {brand} defaults.\n", encoding="utf-8"
+        )
+        errors = RUNTIME.validate_skills(self.skills, [skill])
+        self.assertTrue(any("lessons.md" in error and "brand" in error for error in errors))
+
+        (skill / "references" / "lessons.md").write_text("# Lessons\n", encoding="utf-8")
+        (self.root / ".rules").mkdir()
+        (self.root / ".rules" / "engineering.md").write_text(
+            f"Use the {brand} convention.\n", encoding="utf-8"
+        )
+        errors = RUNTIME.validate_skills(self.skills, [skill])
+        self.assertTrue(any("engineering.md" in error and "brand" in error for error in errors))
 
 
 if __name__ == "__main__":

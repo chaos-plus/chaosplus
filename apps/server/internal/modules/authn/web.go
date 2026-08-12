@@ -23,6 +23,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/passwordx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/webauthnx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	auditmod "github.com/chaos-plus/chaosplus/internal/modules/audit"
 	"github.com/uptrace/bun"
 )
@@ -37,7 +38,7 @@ var (
 
 type principalRow struct {
 	bun.BaseModel      `bun:"table:iam_principals"`
-	ID                 string `bun:"id,pk"`
+	ID                 guid.ID `bun:"id,pk"`
 	LoginName          string
 	Email              string
 	EmailVerified      bool
@@ -51,7 +52,7 @@ type principalRow struct {
 
 type credentialRow struct {
 	bun.BaseModel         `bun:"table:iam_credentials"`
-	PrincipalID           string `bun:"principal_id,pk"`
+	PrincipalID           guid.ID `bun:"principal_id,pk"`
 	PasswordHash          string
 	TOTPSecret            string
 	MFARequired           bool
@@ -66,8 +67,8 @@ type credentialRow struct {
 
 type passwordHistoryRow struct {
 	bun.BaseModel `bun:"table:iam_password_history"`
-	ID            string `bun:"id,pk"`
-	PrincipalID   string
+	ID            guid.ID `bun:"id,pk"`
+	PrincipalID   guid.ID
 	PasswordHash  string
 	CreatedAt     int64
 }
@@ -75,7 +76,7 @@ type passwordHistoryRow struct {
 type sessionRow struct {
 	bun.BaseModel     `bun:"table:iam_sessions"`
 	IDHash            string `bun:"id_hash,pk"`
-	PrincipalID       string
+	PrincipalID       guid.ID
 	CreatedAt         int64
 	AuthTime          int64
 	ACR               int
@@ -98,11 +99,12 @@ type WebService struct {
 	kid                 string
 	mfaKey              []byte
 	passkeys            *webauthnx.Adapter
+	nextID              func() (guid.ID, error)
 	now                 func() time.Time
 	enricher            ClaimEnricher
 	registrationCreator RegistrationPrincipalCreator
 	// VerifiedHook 在邮箱验证成功时调用(注册用户自动建租户,PRD 模型)。
-	VerifiedHook              func(ctx context.Context, principalID, email string) error
+	VerifiedHook              func(ctx context.Context, principalID guid.ID, email string) error
 	notificationAuthorization string
 	notificationClient        *http.Client
 	notificationMu            sync.Mutex
@@ -131,8 +133,14 @@ func WithClaimEnricher(enricher ClaimEnricher) WebOption {
 }
 
 // WithVerifiedHook 注册邮箱验证成功后的钩子(如注册用户自动建租户)。
-func WithVerifiedHook(hook func(ctx context.Context, principalID, email string) error) WebOption {
+func WithVerifiedHook(hook func(ctx context.Context, principalID guid.ID, email string) error) WebOption {
 	return func(service *WebService) { service.VerifiedHook = hook }
+}
+
+// WithIDGenerator injects the shared snowflake generator used for internal
+// authn records (password history, notifications, sessions).
+func WithIDGenerator(nextID func() (guid.ID, error)) WebOption {
+	return func(service *WebService) { service.nextID = nextID }
 }
 
 func WithRegistrationPrincipalCreator(creator RegistrationPrincipalCreator) WebOption {
@@ -152,7 +160,10 @@ func NewWebService(cfg authnext.Config, db *bun.DB, options ...WebOption) (*WebS
 	if db == nil {
 		return nil, errors.New("local authentication requires a writable database")
 	}
-	s.auditTrail = auditmod.NewService(db)
+	if s.nextID == nil {
+		return nil, errors.New("local authentication requires an id generator")
+	}
+	s.auditTrail = auditmod.NewService(db, s.nextID)
 	if strings.TrimSpace(cfg.Issuer) == "" {
 		return nil, errors.New("local authentication issuer is required")
 	}
@@ -476,7 +487,7 @@ func (s *WebService) ListSessions(ctx context.Context, authorization, cookieHead
 	now := s.now().UTC().UnixMilli()
 	var rows []sessionRow
 	if err := s.db.NewSelect().Model(&rows).
-		Where("principal_id = ? AND revoked_at = 0 AND expires_at > ? AND absolute_expires_at > ?", claims.Subject, now, now).
+		Where("principal_id = ? AND revoked_at = 0 AND expires_at > ? AND absolute_expires_at > ?", claims.PrincipalID, now, now).
 		Order("last_seen_at DESC", "created_at DESC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list browser sessions: %w", err)
 	}
@@ -502,14 +513,14 @@ func (s *WebService) RevokeSession(ctx context.Context, authorization, cookieHea
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		result, err := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", s.now().UTC().UnixMilli()).
-			Where("id_hash = ? AND principal_id = ? AND revoked_at = 0", id, claims.Subject).Exec(ctx)
+			Where("id_hash = ? AND principal_id = ? AND revoked_at = 0", id, claims.PrincipalID).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return ErrSessionNotFound
 		}
-		_, err = s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.Subject, "session_revoke", "success"))
+		_, err = s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.PrincipalID, "session_revoke", "success"))
 		return err
 	})
 	if err != nil {
@@ -525,13 +536,13 @@ func (s *WebService) LogoutAll(ctx context.Context, authorization, cookieHeader 
 	}
 	now := s.now().UTC().UnixMilli()
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.Subject).Exec(ctx); err != nil {
+		if _, err := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
-		if _, err := tx.NewUpdate().Table("iam_refresh_tokens").Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.Subject).Exec(ctx); err != nil {
+		if _, err := tx.NewUpdate().Table("iam_refresh_tokens").Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
-		_, err := s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.Subject, "logout_all", "success"))
+		_, err := s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.PrincipalID, "logout_all", "success"))
 		return err
 	})
 	if err != nil {
@@ -549,7 +560,7 @@ func (s *WebService) ChangePassword(ctx context.Context, authorization, cookieHe
 		return err
 	}
 	var credential credentialRow
-	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ?", claims.Subject).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&credential).Where("principal_id = ?", claims.PrincipalID).Scan(ctx); err != nil {
 		return fmt.Errorf("load credential: %w", err)
 	}
 	valid, err := passwordx.Verify(credential.PasswordHash, currentPassword)
@@ -560,7 +571,7 @@ func (s *WebService) ChangePassword(ctx context.Context, authorization, cookieHe
 		return authnext.ErrInvalidCredentials
 	}
 	var history []passwordHistoryRow
-	if err := s.db.NewSelect().Model(&history).Where("principal_id = ?", claims.Subject).Order("created_at DESC").Limit(5).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&history).Where("principal_id = ?", claims.PrincipalID).Order("created_at DESC").Limit(5).Scan(ctx); err != nil {
 		return fmt.Errorf("load password history: %w", err)
 	}
 	for _, encoded := range append([]string{credential.PasswordHash}, passwordHashes(history)...) {
@@ -576,7 +587,7 @@ func (s *WebService) ChangePassword(ctx context.Context, authorization, cookieHe
 	if err != nil {
 		return err
 	}
-	historyID, err := randomToken(18)
+	historyID, err := s.nextID()
 	if err != nil {
 		return err
 	}
@@ -586,13 +597,13 @@ func (s *WebService) ChangePassword(ctx context.Context, authorization, cookieHe
 		currentSession = tokenHash(token)
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		row := passwordHistoryRow{ID: historyID, PrincipalID: claims.Subject, PasswordHash: credential.PasswordHash, CreatedAt: now}
+		row := passwordHistoryRow{ID: historyID, PrincipalID: claims.PrincipalID, PasswordHash: credential.PasswordHash, CreatedAt: now}
 		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
 			return err
 		}
-		var historyIDs []string
+		var historyIDs []guid.ID
 		if err := tx.NewSelect().Model((*passwordHistoryRow)(nil)).Column("id").
-			Where("principal_id = ?", claims.Subject).Order("created_at DESC", "id DESC").
+			Where("principal_id = ?", claims.PrincipalID).Order("created_at DESC", "id DESC").
 			Scan(ctx, &historyIDs); err != nil {
 			return err
 		}
@@ -604,24 +615,24 @@ func (s *WebService) ChangePassword(ctx context.Context, authorization, cookieHe
 		}
 		result, err := tx.NewUpdate().Model((*credentialRow)(nil)).Set("password_hash = ?", hash).
 			Set("password_changed_at = ?", now).Set("updated_at = ?", now).Set("failed_attempts = 0").Set("locked_until = 0").
-			Where("principal_id = ? AND password_hash = ?", claims.Subject, credential.PasswordHash).Exec(ctx)
+			Where("principal_id = ? AND password_hash = ?", claims.PrincipalID, credential.PasswordHash).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return ErrInvalidPassword
 		}
-		query := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.Subject)
+		query := tx.NewUpdate().Model((*sessionRow)(nil)).Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.PrincipalID)
 		if currentSession != "" {
 			query = query.Where("id_hash <> ?", currentSession)
 		}
 		if _, err := query.Exec(ctx); err != nil {
 			return err
 		}
-		if _, err = tx.NewUpdate().Table("iam_refresh_tokens").Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.Subject).Exec(ctx); err != nil {
+		if _, err = tx.NewUpdate().Table("iam_refresh_tokens").Set("revoked_at = ?", now).Where("principal_id = ? AND revoked_at = 0", claims.PrincipalID).Exec(ctx); err != nil {
 			return err
 		}
-		_, err = s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.Subject, "password_change", "success"))
+		_, err = s.auditTrail.AppendTo(ctx, tx, securityAudit(claims.PrincipalID, "password_change", "success"))
 		return err
 	})
 	if err != nil {
@@ -651,7 +662,7 @@ func (s *WebService) ClearCookie() string {
 // CreateSession issues a new opaque browser session for a principal after an
 // authentication event outside the password flow (for example federation). The
 // assurance record becomes the session's ACR/AMR and authentication time.
-func (s *WebService) CreateSession(ctx context.Context, principalID string, now time.Time, assurance authnext.Assurance) (string, error) {
+func (s *WebService) CreateSession(ctx context.Context, principalID guid.ID, now time.Time, assurance authnext.Assurance) (string, error) {
 	if !s.Enabled() || s.db == nil {
 		return "", authnext.ErrDisabled
 	}
@@ -680,20 +691,20 @@ func (s *WebService) CookieSecure() bool { return s.web.CookieSecure }
 
 func (s *WebService) PostLogoutURL() string { return s.web.PostLogoutURL }
 
-func (s *WebService) IssueAccessToken(ctx context.Context, principalID, audience, scope string) (string, int64, error) {
+func (s *WebService) IssueAccessToken(ctx context.Context, principalID guid.ID, audience, scope string) (string, int64, error) {
 	return s.IssueTenantAccessToken(ctx, principalID, "", audience, scope)
 }
 
-func (s *WebService) IssueTenantAccessToken(ctx context.Context, principalID, tenantID, audience, scope string) (string, int64, error) {
+func (s *WebService) IssueTenantAccessToken(ctx context.Context, principalID guid.ID, tenantID, audience, scope string) (string, int64, error) {
 	return s.IssueTenantAccessTokenWithAssurance(ctx, principalID, tenantID, audience, scope, authnext.Assurance{AuthTime: s.now().UTC(), Level: 1, Methods: []string{"pwd"}})
 }
 
-func (s *WebService) IssueTenantAccessTokenWithAssurance(ctx context.Context, principalID, tenantID, audience, scope string, assurance authnext.Assurance) (string, int64, error) {
+func (s *WebService) IssueTenantAccessTokenWithAssurance(ctx context.Context, principalID guid.ID, tenantID, audience, scope string, assurance authnext.Assurance) (string, int64, error) {
 	claims, err := s.claims(ctx, principalID)
 	if err != nil {
 		return "", 0, err
 	}
-	return s.issueSubjectToken(ctx, authnext.SubjectTypePrincipal, claims.Subject, tenantID, audience, scope, claims.CredentialVersion, claims.PreferredUsername, claims.Email, claims.EmailVerified, assurance)
+	return s.issueSubjectToken(ctx, authnext.SubjectTypePrincipal, claims.PrincipalID.String(), tenantID, audience, scope, claims.CredentialVersion, claims.PreferredUsername, claims.Email, claims.EmailVerified, assurance)
 }
 
 func (s *WebService) IssueSubjectToken(subject, audience, scope, username, email string) (string, int64, error) {
@@ -736,6 +747,11 @@ func (s *WebService) issueSubjectToken(ctx context.Context, subjectType, subject
 	if subjectType == authnext.SubjectTypePrincipal || subjectType == authnext.SubjectTypeServiceAccount {
 		payload["credential_version"] = credentialVersion
 	}
+	if subjectType == authnext.SubjectTypePrincipal || subjectType == authnext.SubjectTypeServiceAccount {
+		if principalID, err := guid.Parse(subject); err == nil {
+			payload["principal_id"] = principalID
+		}
+	}
 	if subjectType == authnext.SubjectTypePrincipal {
 		payload["email_verified"] = emailVerified
 	}
@@ -761,15 +777,15 @@ func (s *WebService) issueSubjectToken(ctx context.Context, subjectType, subject
 	return token, int64(s.cfg.AccessTokenTTL.Seconds()), err
 }
 
-func (s *WebService) IssueIDToken(ctx context.Context, principalID, clientID, nonce string) (string, error) {
+func (s *WebService) IssueIDToken(ctx context.Context, principalID guid.ID, clientID, nonce string) (string, error) {
 	return s.IssueTenantIDToken(ctx, principalID, "", clientID, nonce)
 }
 
-func (s *WebService) IssueTenantIDToken(ctx context.Context, principalID, tenantID, clientID, nonce string) (string, error) {
+func (s *WebService) IssueTenantIDToken(ctx context.Context, principalID guid.ID, tenantID, clientID, nonce string) (string, error) {
 	return s.IssueTenantIDTokenWithAssurance(ctx, principalID, tenantID, clientID, nonce, authnext.Assurance{AuthTime: s.now().UTC(), Level: 1, Methods: []string{"pwd"}, ClientID: clientID})
 }
 
-func (s *WebService) IssueTenantIDTokenWithAssurance(ctx context.Context, principalID, tenantID, clientID, nonce string, assurance authnext.Assurance) (string, error) {
+func (s *WebService) IssueTenantIDTokenWithAssurance(ctx context.Context, principalID guid.ID, tenantID, clientID, nonce string, assurance authnext.Assurance) (string, error) {
 	claims, err := s.claims(ctx, principalID)
 	if err != nil {
 		return "", err
@@ -780,12 +796,13 @@ func (s *WebService) IssueTenantIDTokenWithAssurance(ctx context.Context, princi
 		authTime = assurance.AuthTime.UTC().Unix()
 	}
 	payload := map[string]any{
-		"iss": s.cfg.Issuer, "sub": claims.Subject, "aud": []string{clientID},
+		"iss": s.cfg.Issuer, "sub": claims.PrincipalID.String(), "aud": []string{clientID},
 		"iat": now.Unix(), "exp": now.Add(s.cfg.AccessTokenTTL).Unix(), "jti": mustRandomToken(18),
 		"subject_type": authnext.SubjectTypePrincipal, "credential_version": claims.CredentialVersion,
 		"auth_time": authTime, "preferred_username": claims.PreferredUsername,
 		"email": claims.Email, "email_verified": claims.EmailVerified,
 	}
+	payload["principal_id"] = claims.PrincipalID
 	if nonce != "" {
 		payload["nonce"] = nonce
 	}
@@ -798,7 +815,7 @@ func (s *WebService) IssueTenantIDTokenWithAssurance(ctx context.Context, princi
 	if len(assurance.Methods) > 0 {
 		payload["amr"] = assurance.Methods
 	}
-	if err := s.enrich(ctx, payload, ClaimContext{TokenType: "id_token", Subject: claims.Subject, TenantID: tenantID, Audience: clientID}); err != nil {
+	if err := s.enrich(ctx, payload, ClaimContext{TokenType: "id_token", Subject: claims.PrincipalID.String(), TenantID: tenantID, Audience: clientID}); err != nil {
 		return "", err
 	}
 	return s.sign(payload)
@@ -880,6 +897,7 @@ func (s *WebService) verifyAccessToken(authorization string) (*authnext.Claims, 
 		Email             string   `json:"email"`
 		EmailVerified     bool     `json:"email_verified"`
 		OrganizationID    string   `json:"organization_id"`
+		PrincipalID       guid.ID  `json:"principal_id"`
 		CredentialVersion int64    `json:"credential_version"`
 		AuthTime          int64    `json:"auth_time"`
 		ACR               int      `json:"acr"`
@@ -897,7 +915,7 @@ func (s *WebService) verifyAccessToken(authorization string) (*authnext.Claims, 
 		Issuer: raw.Issuer, Subject: raw.Subject, SubjectType: raw.SubjectType, Audience: raw.Audience,
 		ExpiresAt: time.Unix(raw.ExpiresAt, 0).UTC(), IssuedAt: time.Unix(raw.IssuedAt, 0).UTC(), AuthTime: time.Unix(raw.AuthTime, 0).UTC(),
 		PreferredUsername: raw.PreferredUsername, Email: raw.Email, EmailVerified: raw.EmailVerified,
-		OrganizationID: raw.OrganizationID, CredentialVersion: raw.CredentialVersion,
+		OrganizationID: raw.OrganizationID, PrincipalID: raw.PrincipalID, CredentialVersion: raw.CredentialVersion,
 		ACR: raw.ACR, AMR: raw.AMR, ClientID: raw.ClientID, NetworkZone: raw.NetworkZone,
 	}, nil
 }
@@ -916,7 +934,7 @@ func (s *WebService) verifySubjectState(ctx context.Context, claims *authnext.Cl
 		err := s.db.NewSelect().TableExpr("iam_principals AS principal").
 			ColumnExpr("principal.status AS status, COALESCE(credential.credential_version, 0) AS credential_version").
 			Join("LEFT JOIN iam_credentials AS credential ON credential.principal_id = principal.id").
-			Where("principal.id = ?", claims.Subject).Scan(ctx, &state)
+			Where("principal.id = ?", claims.PrincipalID).Scan(ctx, &state)
 		if errors.Is(err, sql.ErrNoRows) || err == nil && (state.Status != "active" || state.CredentialVersion != claims.CredentialVersion) {
 			return authnext.ErrInvalidToken
 		}
@@ -944,9 +962,9 @@ func (s *WebService) verifySubjectState(ctx context.Context, claims *authnext.Cl
 			ColumnExpr("account.owner_tenant_id AS tenant_id, account.status AS account_status, account.expires_at AS expires_at, account.token_version AS token_version").
 			ColumnExpr("principal.status AS principal_status, member.status AS member_status, tenant.status AS tenant_status").
 			Join("JOIN iam_principals AS principal ON principal.id = account.principal_id").
-			Join("JOIN iam_tenant_members AS member ON member.tenant_id = account.owner_tenant_id AND member.user_subject = account.principal_id").
+			Join("JOIN iam_tenant_members AS member ON member.tenant_id = account.owner_tenant_id AND member.principal_id = account.principal_id").
 			Join("JOIN iam_tenants AS tenant ON tenant.id = account.owner_tenant_id").
-			Where("account.principal_id = ?", claims.Subject).Scan(ctx, &state)
+			Where("account.principal_id = ?", claims.PrincipalID).Scan(ctx, &state)
 		now := s.now().UTC().UnixMilli()
 		if errors.Is(err, sql.ErrNoRows) || err == nil && (claims.OrganizationID == "" || state.TenantID != claims.OrganizationID || state.AccountStatus != "active" || state.PrincipalStatus != "active" || state.MemberStatus != "active" || state.TenantStatus != "active" || state.ExpiresAt > 0 && state.ExpiresAt <= now || state.TokenVersion != claims.CredentialVersion) {
 			return authnext.ErrInvalidToken
@@ -977,7 +995,7 @@ func (s *WebService) verifyOAuthClientState(ctx context.Context, clientID, tenan
 	return nil
 }
 
-func (s *WebService) claims(ctx context.Context, principalID string) (*authnext.Claims, error) {
+func (s *WebService) claims(ctx context.Context, principalID guid.ID) (*authnext.Claims, error) {
 	var principal principalRow
 	if err := s.db.NewSelect().Model(&principal).Where("id = ? AND status = 'active' AND activation_required = ?", principalID, false).Scan(ctx); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -993,17 +1011,17 @@ func (s *WebService) claims(ctx context.Context, principalID string) (*authnext.
 		// External principals (federation, directory provisioning) have no
 		// local credential; their sessions still carry credential version zero.
 	}
-	return &authnext.Claims{Issuer: s.cfg.Issuer, Subject: principal.ID, SubjectType: authnext.SubjectTypePrincipal, PreferredUsername: principal.LoginName, Email: principal.Email, EmailVerified: principal.EmailVerified, CredentialVersion: credentialVersion}, nil
+	return &authnext.Claims{Issuer: s.cfg.Issuer, Subject: principal.ID.String(), SubjectType: authnext.SubjectTypePrincipal, PrincipalID: principal.ID, PreferredUsername: principal.LoginName, Email: principal.Email, EmailVerified: principal.EmailVerified, CredentialVersion: credentialVersion}, nil
 }
 
-func (s *WebService) audit(ctx context.Context, principalID, eventType, outcome string) {
+func (s *WebService) audit(ctx context.Context, principalID guid.ID, eventType, outcome string) {
 	if s.auditTrail == nil {
 		return
 	}
 	_, _ = s.auditTrail.Append(ctx, securityAudit(principalID, eventType, outcome))
 }
 
-func (s *WebService) appendSecurityAudit(ctx context.Context, db bun.IDB, principalID, eventType, outcome string) error {
+func (s *WebService) appendSecurityAudit(ctx context.Context, db bun.IDB, principalID guid.ID, eventType, outcome string) error {
 	if s.auditTrail == nil {
 		return nil
 	}
@@ -1011,7 +1029,7 @@ func (s *WebService) appendSecurityAudit(ctx context.Context, db bun.IDB, princi
 	return err
 }
 
-func securityAudit(principalID, eventType, outcome string) auditmod.EventInput {
+func securityAudit(principalID guid.ID, eventType, outcome string) auditmod.EventInput {
 	return auditmod.EventInput{
 		TenantID: authnAuditTenant, PrincipalID: principalID,
 		EventType: eventType, TargetType: "principal", TargetID: principalID, Outcome: outcome,
@@ -1025,25 +1043,25 @@ type BootstrapPrincipal struct {
 	Email       string
 }
 
-func EnsureBootstrapPrincipal(ctx context.Context, db *bun.DB, spec BootstrapPrincipal) (string, error) {
-	if db == nil {
-		return "", errors.New("bootstrap principal requires database")
+func EnsureBootstrapPrincipal(ctx context.Context, db *bun.DB, spec BootstrapPrincipal, nextID func() (guid.ID, error)) (guid.ID, error) {
+	if db == nil || nextID == nil {
+		return 0, errors.New("bootstrap principal requires database and id generator")
 	}
 	spec.LoginName = normalizeLogin(spec.LoginName)
 	spec.DisplayName = strings.TrimSpace(spec.DisplayName)
 	spec.Email = strings.ToLower(strings.TrimSpace(spec.Email))
 	if spec.LoginName == "" || len(spec.LoginName) > 200 || len(spec.Password) < 12 || len(spec.Password) > 1024 {
-		return "", errors.New("bootstrap login name and a 12-1024 character password are required")
+		return 0, errors.New("bootstrap login name and a 12-1024 character password are required")
 	}
 	if spec.DisplayName == "" {
 		spec.DisplayName = spec.LoginName
 	}
 	hash, err := passwordx.Hash(spec.Password)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	now := time.Now().UTC().UnixMilli()
-	var principalID string
+	var principalID guid.ID
 	err = db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var existing principalRow
 		err := tx.NewSelect().Model(&existing).Where("login_name = ?", spec.LoginName).Scan(ctx)
@@ -1094,7 +1112,7 @@ func EnsureBootstrapPrincipal(ctx context.Context, db *bun.DB, spec BootstrapPri
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		principalID, err = randomToken(18)
+		principalID, err = nextID()
 		if err != nil {
 			return err
 		}
@@ -1107,7 +1125,7 @@ func EnsureBootstrapPrincipal(ctx context.Context, db *bun.DB, spec BootstrapPri
 		return err
 	})
 	if err != nil {
-		return "", fmt.Errorf("ensure bootstrap principal: %w", err)
+		return 0, fmt.Errorf("ensure bootstrap principal: %w", err)
 	}
 	return principalID, nil
 }

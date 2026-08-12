@@ -1,7 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useMemo, useState } from "react";
-import {
-  FolderKanban,
+import {FolderKanban,
   Gauge,
   GitBranch,
   Hash,
@@ -11,6 +10,7 @@ import {
   Network,
   Settings,
   UsersRound,
+  Check,
 } from "lucide-react";
 import {
   Navigate,
@@ -390,7 +390,7 @@ export default function PlatformLayout() {
                       setLocale(l.code);
                     }}
                   >
-                    {l.label} {lang === l.code && "✓"}
+                    {l.label} {lang === l.code && <Check className="ml-auto size-4" aria-hidden="true" />}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

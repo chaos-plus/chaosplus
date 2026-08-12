@@ -1,21 +1,21 @@
 -- +goose Up
 CREATE TABLE iam_tenant_members (
-    tenant_id TEXT NOT NULL,
-    user_subject TEXT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    principal_id BIGINT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     email TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
     disabled_at BIGINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (tenant_id, user_subject)
+    PRIMARY KEY (tenant_id, principal_id)
 );
-CREATE INDEX idx_iam_tenant_members_status ON iam_tenant_members (tenant_id, status, display_name, user_subject);
+CREATE INDEX idx_iam_tenant_members_status ON iam_tenant_members (tenant_id, status, display_name, principal_id);
 
 CREATE TABLE iam_menus (
-    tenant_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    parent_id TEXT NULL,
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
+    parent_id BIGINT NULL,
     label TEXT NOT NULL,
     route TEXT NULL,
     icon TEXT NOT NULL DEFAULT '',

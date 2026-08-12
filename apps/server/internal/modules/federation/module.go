@@ -5,6 +5,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	identitymod "github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/danielgtaylor/huma/v2"
@@ -19,11 +20,11 @@ type Module struct {
 	declarationOnly bool
 }
 
-func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, identities *identitymod.Service, authn *authnmod.WebService, cfg Config, key []byte) *Module {
-	if db == nil || registrar == nil {
-		panic("federation module requires database and authorization registrar")
+func NewModule(db *bun.DB, registrar *authz.Registrar, audit auditx.Appender, identities *identitymod.Service, authn *authnmod.WebService, cfg Config, key []byte, nextID func() (guid.ID, error)) *Module {
+	if db == nil || registrar == nil || nextID == nil {
+		panic("federation module requires database, authorization registrar, and id generator")
 	}
-	return &Module{service: NewService(db, audit, identities, authn, cfg, key), registrar: registrar, db: db, cfg: cfg}
+	return &Module{service: NewService(db, audit, identities, authn, cfg, key, nextID), registrar: registrar, db: db, cfg: cfg}
 }
 
 func NewDeclarationOnlyModule(registrar *authz.Registrar) *Module {

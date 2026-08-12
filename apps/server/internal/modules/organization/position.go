@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 const maxPositionCodeLength = 64
@@ -24,8 +26,8 @@ var (
 )
 
 type Position struct {
-	ID        string    `json:"id"`
-	TenantID  string    `json:"tenant_id"`
+	ID        guid.ID   `json:"id"`
+	TenantID  guid.ID   `json:"tenant_id"`
 	Code      string    `json:"code"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
@@ -51,8 +53,8 @@ type UpdatePosition struct {
 }
 
 type PositionMember struct {
-	PositionID  string     `json:"position_id"`
-	PrincipalID string     `json:"principal_id"`
+	PositionID  guid.ID    `json:"position_id"`
+	PrincipalID guid.ID    `json:"principal_id"`
 	DisplayName string     `json:"display_name"`
 	Email       string     `json:"email,omitempty"`
 	StartsAt    *time.Time `json:"starts_at,omitempty"`
@@ -63,57 +65,53 @@ type PositionMember struct {
 
 type PositionMemberWindow = MembershipWindow
 
-func normalizePositionCreate(tenantID string, input CreatePosition) (string, CreatePosition, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func normalizePositionCreate(tenantID guid.ID, input CreatePosition) (guid.ID, CreatePosition, error) {
 	input.Code = normalizePositionCode(input.Code)
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Status == "" {
 		input.Status = StatusActive
 	}
-	if !validTenant(tenantID) || !validPositionCode(input.Code) || !validPositionName(input.Name) || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
-		return "", CreatePosition{}, ErrPositionInvalid
+	if tenantID.Zero() || !validPositionCode(input.Code) || !validPositionName(input.Name) || !validStatus(input.Status) || !validSortOrder(input.SortOrder) {
+		return 0, CreatePosition{}, ErrPositionInvalid
 	}
 	return tenantID, input, nil
 }
 
-func normalizePositionUpdate(tenantID, id string, input UpdatePosition) (string, string, UpdatePosition, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) || input.Version < 1 || (input.Code == nil && input.Name == nil && input.Status == nil && input.SortOrder == nil) {
-		return "", "", UpdatePosition{}, ErrPositionInvalid
+func normalizePositionUpdate(tenantID, id guid.ID, input UpdatePosition) (guid.ID, guid.ID, UpdatePosition, error) {
+	if tenantID.Zero() || id.Zero() || input.Version < 1 || (input.Code == nil && input.Name == nil && input.Status == nil && input.SortOrder == nil) {
+		return 0, 0, UpdatePosition{}, ErrPositionInvalid
 	}
 	if input.Code != nil {
 		value := normalizePositionCode(*input.Code)
 		if !validPositionCode(value) {
-			return "", "", UpdatePosition{}, ErrPositionInvalid
+			return 0, 0, UpdatePosition{}, ErrPositionInvalid
 		}
 		input.Code = &value
 	}
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		if !validPositionName(value) {
-			return "", "", UpdatePosition{}, ErrPositionInvalid
+			return 0, 0, UpdatePosition{}, ErrPositionInvalid
 		}
 		input.Name = &value
 	}
 	if input.Status != nil && !validStatus(*input.Status) {
-		return "", "", UpdatePosition{}, ErrPositionInvalid
+		return 0, 0, UpdatePosition{}, ErrPositionInvalid
 	}
 	if input.SortOrder != nil && !validSortOrder(*input.SortOrder) {
-		return "", "", UpdatePosition{}, ErrPositionInvalid
+		return 0, 0, UpdatePosition{}, ErrPositionInvalid
 	}
 	return tenantID, id, input, nil
 }
 
-func normalizePositionMember(tenantID, positionID, principalID string, input PositionMemberWindow) (string, string, string, PositionMemberWindow, error) {
-	tenantID, positionID = trimPair(tenantID, positionID)
-	principalID = strings.TrimSpace(principalID)
-	if !validTenant(tenantID) || !validID(positionID) || principalID == "" || len(principalID) > 255 {
-		return "", "", "", PositionMemberWindow{}, ErrPositionInvalid
+func normalizePositionMember(tenantID, positionID, principalID guid.ID, input PositionMemberWindow) (guid.ID, guid.ID, guid.ID, PositionMemberWindow, error) {
+	if tenantID.Zero() || positionID.Zero() || principalID.Zero() {
+		return 0, 0, 0, PositionMemberWindow{}, ErrPositionInvalid
 	}
 	input.StartsAt = normalizeOptionalTime(input.StartsAt)
 	input.EndsAt = normalizeOptionalTime(input.EndsAt)
 	if (input.StartsAt != nil && input.StartsAt.IsZero()) || (input.EndsAt != nil && input.EndsAt.IsZero()) || (input.StartsAt != nil && input.EndsAt != nil && !input.EndsAt.After(*input.StartsAt)) {
-		return "", "", "", PositionMemberWindow{}, ErrPositionInvalid
+		return 0, 0, 0, PositionMemberWindow{}, ErrPositionInvalid
 	}
 	return tenantID, positionID, principalID, input, nil
 }

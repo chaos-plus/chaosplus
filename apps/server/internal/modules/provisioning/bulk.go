@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 func (s *Service) Bulk(ctx context.Context, auth AuthContext, request BulkRequest) (BulkResponse, error) {
@@ -56,6 +58,13 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 	} else if bulkID != "" || resourceID == "" {
 		return BulkResponseOperation{}, "", ErrInvalidSCIM
 	}
+	resourceIDValue := guid.ID(0)
+	if resourceID != "" {
+		resourceIDValue, err = guid.Parse(resourceID)
+		if err != nil {
+			return BulkResponseOperation{}, "", ErrInvalidSCIM
+		}
+	}
 	data, err := resolveBulkData(operation.Data, resolved)
 	if err != nil {
 		return BulkResponseOperation{}, "", err
@@ -82,7 +91,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if strictDecode(data, &input) != nil {
 			return result, "", ErrInvalidSCIM
 		}
-		updated, err := s.ReplaceUser(ctx, auth, resourceID, input, version)
+		updated, err := s.ReplaceUser(ctx, auth, resourceIDValue, input, version)
 		if err != nil {
 			return result, "", err
 		}
@@ -93,7 +102,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if strictDecode(data, &input) != nil {
 			return result, "", ErrInvalidSCIM
 		}
-		updated, err := s.PatchUser(ctx, auth, resourceID, input, version)
+		updated, err := s.PatchUser(ctx, auth, resourceIDValue, input, version)
 		if err != nil {
 			return result, "", err
 		}
@@ -103,7 +112,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if len(data) != 0 {
 			return result, "", ErrInvalidSCIM
 		}
-		if err := s.DeleteUser(ctx, auth, resourceID, version); err != nil {
+		if err := s.DeleteUser(ctx, auth, resourceIDValue, version); err != nil {
 			return result, "", err
 		}
 		result.Status = strconv.Itoa(http.StatusNoContent)
@@ -124,7 +133,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if strictDecode(data, &input) != nil {
 			return result, "", ErrInvalidSCIM
 		}
-		updated, err := s.ReplaceGroup(ctx, auth, resourceID, input, version)
+		updated, err := s.ReplaceGroup(ctx, auth, resourceIDValue, input, version)
 		if err != nil {
 			return result, "", err
 		}
@@ -135,7 +144,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if strictDecode(data, &input) != nil {
 			return result, "", ErrInvalidSCIM
 		}
-		updated, err := s.PatchGroup(ctx, auth, resourceID, input, version)
+		updated, err := s.PatchGroup(ctx, auth, resourceIDValue, input, version)
 		if err != nil {
 			return result, "", err
 		}
@@ -145,7 +154,7 @@ func (s *Service) bulkOperation(ctx context.Context, auth AuthContext, operation
 		if len(data) != 0 {
 			return result, "", ErrInvalidSCIM
 		}
-		if err := s.DeleteGroup(ctx, auth, resourceID, version); err != nil {
+		if err := s.DeleteGroup(ctx, auth, resourceIDValue, version); err != nil {
 			return result, "", err
 		}
 		result.Status = strconv.Itoa(http.StatusNoContent)

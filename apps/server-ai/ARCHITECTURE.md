@@ -1,101 +1,51 @@
-# server-ai architecture
+# server-ai 架构
 
-This document records the architecture that exists today and the target
-boundary used for production reviews. It deliberately does not describe the
-whole service as DDD-compliant: only the workspace context currently follows
-the module and port direction consistently.
+本文记录当前实现与目标边界，按 `apps/server` 的 DDD/module 规范描述。
+规范唯一来源是仓库根 `AGENTS.md` 与 `.rules/`。
 
-## Composition root
+## 组合根与依赖方向
 
-`cmd/server-ai/main.go` is the composition root. It owns configuration,
-process-level clients, module construction, HTTP server lifecycle and graceful
-shutdown. Feature packages must not read process configuration or construct
-infrastructure clients behind the composition root, except for temporary
-legacy code called out below.
-
-The HTTP server accepts `RESTRegistrar` modules. Cross-cutting middleware
-(authentication, tenant/actor context, security headers and recovery) remains
-in `internal/server`; feature modules register their own routes.
+`cmd/server-ai/main.go` 是唯一组合根：负责配置、数据库、NATS、模块构造、
+HTTP/Huma 生命周期与优雅退出。跨领域基础设施 client 只允许在组合根创建并注入。
 
 ```text
 cmd/server-ai (composition root)
-  -> internal/server (HTTP host and legacy application orchestration)
-  -> internal/modules/* (bounded contexts)
-       REST adapter -> application service -> domain-owned ports
-                                           -> infrastructure adapters
+  -> internal/app        (共享应用组合：Huma、Bun/Goose、IAM 扩展、生命周期)
+  -> internal/modules/*  (bounded contexts)
+       rest.go -> service -> domain -> repository/ports
+  -> internal/infra/*    (跨领域基础设施适配器：runnergateway 等)
 ```
 
-## Current bounded contexts
+`internal/app` 只做组合与接线，不放业务策略、迁移或 YAML。
+`internal/infra` 只放真正通用的基础设施适配器；业务代码全部在 `internal/modules`。
 
-| Context | Current location | State |
+## Bounded contexts
+
+| Context | 位置 | 状态 |
 |---|---|---|
-| Workspace | `internal/modules/workspace` | Module boundary exists. Domain types and validation, application service, repository/executor/notifier ports and REST adapter are separated. |
-| Workflow / run | `internal/workflow`, `internal/server/runs*.go` | Partial boundary. Engine types are isolated, but run application orchestration and HTTP handlers remain mixed in `internal/server`. |
-| Artifact | `internal/store/store_artifact.go`, `internal/server/artifacts.go` | Legacy. Persistence, reconciliation orchestration and HTTP are split by technical layer, not by bounded context. |
-| Conversation / digital human | `internal/server/chat.go`, `internal/store/store_chat.go` | Legacy. A large service owns routes, application behavior and integration concerns. |
-| Machine | `internal/machine`, `internal/server/server.go` | Partial boundary. Hub/domain behavior is separated; REST application behavior remains in the central handler. |
-| Notification / email | `internal/server/email.go` | Legacy adapter and application behavior are coupled. |
+| Workspace（需求/任务/目标/附件） | `internal/modules/workspace/{requirement,task,objective,attachment}` | 每个子聚合为独立 leaf module，自有 domain/service/repository/rest/migrate/三方言 SQL/i18n |
+| Workflow / run | `internal/modules/workflow` | 领域类型、引擎、执行器、REST、迁移与测试同属该 leaf module |
+| Machine runner | `internal/modules/machine` | Hub/领域行为、token、REST 与迁移同属该 module |
+| Artifact | `internal/modules/artifact` | 领域、REST、迁移、测试同属该 module |
+| Conversation（channel/message/agent） | `internal/modules/conversation/{channel,message,agent}` | 每个子聚合独立 leaf module |
 
-## Workspace dependency direction
+## 持久化
 
-`internal/modules/workspace` owns its vocabulary and ports:
+- Goose 负责迁移，Bun 负责 ORM/查询/事务；`*bun.DB` 由 `internal/app` 创建并注入。
+- 每个持久化 leaf module 内嵌 `sql/sqlite`、`sql/mysql`、`sql/postgres` 等价迁移，维护自己的 Goose version table。
+- 所有内部实体/事件 ID 与 FK 使用 `apps/server/internal/infra/guid.ID`（Snowflake，BIGINT），JSON/HTTP/NATS 边界编码为十进制字符串。
+- 时间统一 UTC Unix 毫秒 `BIGINT`；展示层才转换时区。
+- 可变聚合带 `tenant_id`/`entity_id`/`owner_id`/`created_at`/`created_by`/`updated_at`/`updated_by`/`deleted_at`/`deleted_by`/`version`。
 
-```text
-workspace/rest.go
-       |
-       v
-workspace/Service
-   |       |       |
-   v       v       v
-Repository Executor Notifier       (workspace-owned ports)
-   ^       ^       ^
-   |       |       |
-SQLite   RunManager ChatService     (adapters wired by the composition root)
-```
+## IAM 与基础设施
 
-The SQLite store implements the repository port. `WorkspaceExecutor` and the
-chat notifier live outside the workspace domain because they translate between
-bounded contexts. Tenant and owner context is preserved across background run
-execution.
+- 认证/授权/会话/IAM 全部由 `apps/server` 拥有；server-ai 只消费可信身份结果，不重复实现 authn/authz/security/GUID。
+- 生产与开发 NATS 使用固定官方镜像；仓库内不存在内嵌 NATS daemon（`cmd/nats` 已移除）。
+- Runner 与工作流之间的命令/事件传输使用 NATS；REST/OpenAPI 使用 Huma 按 module 注册。
+- 目录/预览隧道：`TunnelProvider` port + FRP adapter 属于独立的 Tunnel bounded context（PRD §5.4）；生产只使用官方 `frps`/`frpc`，禁止内嵌或自研隧道协议，公网流量必须经过 IAM-aware Gateway。
 
-## What `internal/store` is
+## 交付状态
 
-`internal/store` is the current SQLite infrastructure adapter and migration
-owner. It is not a business module and it is not a DDD domain layer. It
-contains persistence models and repository implementations for several
-contexts because the original service was organized by technical layer.
-
-New domain behavior must not be added to `internal/store`. A bounded context
-defines repository interfaces using its own domain types; store code may adapt
-those interfaces to Bun/SQLite. Cross-context transactions must be exposed as
-explicit application operations rather than sharing Bun models with handlers.
-
-## Production invariants
-
-- A run has one writer lease and a monotonic fencing token.
-- Run events and rebuildable projections commit in one transaction.
-- Reconciliation status events use checksum compare-and-swap so an old scan
-  cannot overwrite a newer producer result.
-- HTTP requests receive entity and actor scope before reaching modules.
-- Resource lookups are entity-scoped; callers must not fetch globally and
-  authorize afterward.
-- Long-running work uses the process context while preserving the request's
-  entity and owner identity.
-- `cmd/nats` is development-only. Production uses a pinned official NATS image.
-
-## Required migration order
-
-To reach parity with the `apps/server` module style, migrate contexts in this
-order without changing public API behavior:
-
-1. Conversation/digital-human: domain model, channel/agent repositories,
-   application service, REST/WS adapters and workflow notification port.
-2. Workflow/run: run command/query service, scheduler port, event store port,
-   REST/WS adapter and runner gateway adapter.
-3. Artifact: repository and artifact-store ports, validator/reconciliation
-   application services, REST adapter.
-4. Machine and notification: move remaining central handlers into modules.
-5. Reduce `internal/server` to the HTTP host, middleware and module lifecycle.
-
-Until these migrations are complete, the architecture is only partially
-aligned with `apps/server` and must be tracked as production architecture debt.
+- 已实现：Workspace（requirement/task/objective/attachment）、Workflow/run、Machine runner、Artifact、Conversation（channel/message/agent）、共享应用组合、官方 NATS 镜像部署说明。
+- 计划中：Runner Preview Gateway（FRP 穿透，PRD §5.4）、随机唯一域名、过期/撤销/审计/限流与分享凭据。
+- 禁止：共享业务 `internal/store`、中央 feature handler、sqlc、RSQL、重复 IAM/security/GUID 实现、内嵌基础设施 daemon。

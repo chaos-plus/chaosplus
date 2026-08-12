@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE iam_scim_targets (
-    id TEXT NOT NULL PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
+    id BIGINT NOT NULL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     name_key TEXT NOT NULL,
     base_url TEXT NOT NULL,
@@ -16,9 +16,9 @@ CREATE TABLE iam_scim_targets (
 CREATE INDEX idx_iam_scim_targets_tenant ON iam_scim_targets (tenant_id, status, name_key, id);
 
 CREATE TABLE iam_scim_target_resources (
-    target_id TEXT NOT NULL,
+    target_id BIGINT NOT NULL,
     resource_type TEXT NOT NULL CHECK (resource_type IN ('User', 'Group')),
-    resource_id TEXT NOT NULL,
+    resource_id BIGINT NOT NULL,
     external_id TEXT NOT NULL DEFAULT '',
     version BIGINT NOT NULL DEFAULT 1 CHECK (version >= 1),
     created_at BIGINT NOT NULL,

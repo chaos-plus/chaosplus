@@ -6,20 +6,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
-const invitationTokenPrefix = "cpi1_"
+const invitationTokenPrefix = "inv1_"
 
-func (s *WebService) IssueInvitationToken(id string) (string, string, error) {
-	id = strings.TrimSpace(id)
-	if s == nil || len(s.mfaKey) == 0 || id == "" || len(id) > 128 || strings.ContainsAny(id, ".\r\n") {
+func (s *WebService) IssueInvitationToken(id guid.ID) (string, string, error) {
+	if s == nil || len(s.mfaKey) == 0 || id.Zero() {
 		return "", "", fmt.Errorf("invalid invitation credential request")
 	}
 	secret, err := randomToken(32)
 	if err != nil {
 		return "", "", fmt.Errorf("generate invitation credential: %w", err)
 	}
-	token := invitationTokenPrefix + id + "." + secret
+	token := invitationTokenPrefix + id.String() + "." + secret
 	digest, err := s.InvitationTokenDigest(token)
 	return token, digest, err
 }
@@ -33,6 +34,6 @@ func (s *WebService) InvitationTokenDigest(token string) (string, error) {
 		return "", fmt.Errorf("invalid invitation credential")
 	}
 	mac := hmac.New(sha256.New, s.mfaPurposeKey("invitation:v1"))
-	_, _ = mac.Write([]byte("chaosplus:invitation:v1\x00" + token))
+	_, _ = mac.Write([]byte("platform:invitation:v1\x00" + token))
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }

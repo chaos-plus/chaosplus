@@ -1,0 +1,6 @@
+{
+  "workspace.objective.invalid": "Objektif tidak sah.",
+  "workspace.objective.not_found": "Objektif tidak ditemukan.",
+  "workspace.objective.version_conflict": "Objektif telah diubah oleh permintaan lain. Muat semula dan cuba lagi.",
+  "workspace.objective.unavailable": "Perkhidmatan objektif tidak tersedia."
+}

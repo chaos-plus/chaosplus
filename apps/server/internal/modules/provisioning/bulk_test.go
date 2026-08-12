@@ -25,7 +25,7 @@ func TestBulkCreatesReferencedResourcesAndStopsOnFailures(t *testing.T) {
 	assert.Equal(t, "201", response.Operations[0].Status)
 	assert.Equal(t, "201", response.Operations[1].Status)
 	groupID := pathID(response.Operations[1].Location)
-	group, err := env.service.GetGroup(t.Context(), env.auth, groupID)
+	group, err := env.service.GetGroup(t.Context(), env.auth, parseGUID(groupID))
 	require.NoError(t, err)
 	require.Len(t, group.Members, 1)
 	assert.Equal(t, pathID(response.Operations[0].Location), group.Members[0].Value)
@@ -50,9 +50,9 @@ func TestBulkCreatesReferencedResourcesAndStopsOnFailures(t *testing.T) {
 		response.Operations[0].Status, response.Operations[1].Status, response.Operations[2].Status,
 		response.Operations[3].Status, response.Operations[4].Status, response.Operations[5].Status,
 	})
-	_, err = env.service.GetUser(t.Context(), env.auth, userID)
+	_, err = env.service.GetUser(t.Context(), env.auth, parseGUID(userID))
 	assert.ErrorIs(t, err, ErrResourceMissing)
-	_, err = env.service.GetGroup(t.Context(), env.auth, groupID)
+	_, err = env.service.GetGroup(t.Context(), env.auth, parseGUID(groupID))
 	assert.ErrorIs(t, err, ErrResourceMissing)
 
 	response, err = env.service.Bulk(t.Context(), env.auth, BulkRequest{Schemas: []string{BulkSchema}, FailOnErrors: 1, Operations: []BulkOperation{

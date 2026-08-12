@@ -38,7 +38,7 @@ func TestSCIMManagementHTTPWorkflow(t *testing.T) {
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
-	response := adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories", "tenant-a", []byte(`{"name":"Secondary"}`), nil)
+	response := adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories", wireID("tenant-a"), []byte(`{"name":"Secondary"}`), nil)
 	assert.Equal(t, http.StatusCreated, response.StatusCode)
 	var envelope adminEnvelope
 	decodeHTTPBody(t, response, &envelope)
@@ -46,14 +46,14 @@ func TestSCIMManagementHTTPWorkflow(t *testing.T) {
 	var directory Directory
 	require.NoError(t, json.Unmarshal(envelope.Data, &directory))
 	assert.Equal(t, "Secondary", directory.Name)
-	response = adminRequest(t, server.Client(), http.MethodGet, server.URL+"/iam/scim/directories", "tenant-a", nil, nil)
+	response = adminRequest(t, server.Client(), http.MethodGet, server.URL+"/iam/scim/directories", wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	var directories []Directory
 	require.NoError(t, json.Unmarshal(envelope.Data, &directories))
 	assert.Len(t, directories, 2)
 
-	response = adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories/"+directory.ID+"/credentials", "tenant-a", []byte(`{"name":"automation"}`), nil)
+	response = adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories/"+directory.ID.String()+"/credentials", wireID("tenant-a"), []byte(`{"name":"automation"}`), nil)
 	assert.Equal(t, http.StatusCreated, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	var issued CredentialSecret
@@ -61,25 +61,25 @@ func TestSCIMManagementHTTPWorkflow(t *testing.T) {
 	assert.NotEmpty(t, issued.Token)
 	assert.NotContains(t, issued.Credential.Name, issued.Token)
 
-	response = adminRequest(t, server.Client(), http.MethodGet, server.URL+"/iam/scim/directories/"+directory.ID+"/credentials", "tenant-a", nil, nil)
+	response = adminRequest(t, server.Client(), http.MethodGet, server.URL+"/iam/scim/directories/"+directory.ID.String()+"/credentials", wireID("tenant-a"), nil, nil)
 	decodeHTTPBody(t, response, &envelope)
 	assert.NotContains(t, string(envelope.Data), issued.Token)
 	var credentials []Credential
 	require.NoError(t, json.Unmarshal(envelope.Data, &credentials))
 	require.Len(t, credentials, 1)
 
-	response = adminRequest(t, server.Client(), http.MethodDelete, server.URL+"/iam/scim/directories/"+directory.ID+"/credentials/"+issued.Credential.ID, "tenant-a", nil, nil)
+	response = adminRequest(t, server.Client(), http.MethodDelete, server.URL+"/iam/scim/directories/"+directory.ID.String()+"/credentials/"+issued.Credential.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Contains(t, string(envelope.Data), `"revoked":true`)
 
-	response = adminRequest(t, server.Client(), http.MethodPut, server.URL+"/iam/scim/directories/"+directory.ID, "tenant-a", []byte(`{"name":"Secondary","status":"disabled","version":1}`), nil)
+	response = adminRequest(t, server.Client(), http.MethodPut, server.URL+"/iam/scim/directories/"+directory.ID.String(), wireID("tenant-a"), []byte(`{"name":"Secondary","status":"disabled","version":1}`), nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	require.NoError(t, json.Unmarshal(envelope.Data, &directory))
 	assert.Equal(t, DirectoryDisabled, directory.Status)
 
-	response = adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories", "tenant-a", []byte(`{"name":"Secondary"}`), map[string]string{"Accept-Language": "zh-CN"})
+	response = adminRequest(t, server.Client(), http.MethodPost, server.URL+"/iam/scim/directories", wireID("tenant-a"), []byte(`{"name":"Secondary"}`), map[string]string{"Accept-Language": "zh-CN"})
 	assert.Equal(t, http.StatusConflict, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("zh-CN", "scim_directory_name_exists"), envelope.Message)

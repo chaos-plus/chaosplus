@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
@@ -44,7 +45,7 @@ func applyPage(query *bun.SelectQuery, offset, limit int) *bun.SelectQuery {
 // ListEntitiesPage returns one page of tenant entities plus the total count.
 // The previous path loaded every entity and sliced it in memory, which grows
 // without bound as a tenant onboards more stores.
-func (r *Repository) ListEntitiesPage(ctx context.Context, tenantID string, offset, limit int) ([]iamdomain.Entity, int64, error) {
+func (r *Repository) ListEntitiesPage(ctx context.Context, tenantID guid.ID, offset, limit int) ([]iamdomain.Entity, int64, error) {
 	offset, limit = normalizePage(offset, limit)
 	query := r.executor.NewSelect().Model((*entityRow)(nil)).Where("tenant_id = ?", tenantID)
 	total, err := query.Clone().Count(ctx)
@@ -68,7 +69,7 @@ func (r *Repository) ListEntitiesPage(ctx context.Context, tenantID string, offs
 }
 
 // ListRolesPage returns one page of tenant roles plus the total count.
-func (r *Repository) ListRolesPage(ctx context.Context, tenantID string, offset, limit int) ([]Role, int64, error) {
+func (r *Repository) ListRolesPage(ctx context.Context, tenantID guid.ID, offset, limit int) ([]Role, int64, error) {
 	offset, limit = normalizePage(offset, limit)
 	query := r.executor.NewSelect().Model((*roleRow)(nil)).Where("tenant_id = ?", tenantID)
 	total, err := query.Clone().Count(ctx)
@@ -88,7 +89,7 @@ func (r *Repository) ListRolesPage(ctx context.Context, tenantID string, offset,
 }
 
 // ListEntitiesPage exposes database-side entity paging to the API layer.
-func (s *Service) ListEntitiesPage(ctx context.Context, tenantID string, offset, limit int) ([]iamdomain.Entity, int64, error) {
+func (s *Service) ListEntitiesPage(ctx context.Context, tenantID guid.ID, offset, limit int) ([]iamdomain.Entity, int64, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, 0, err
 	}
@@ -96,7 +97,7 @@ func (s *Service) ListEntitiesPage(ctx context.Context, tenantID string, offset,
 }
 
 // ListRolesPage exposes database-side role paging to the API layer.
-func (s *Service) ListRolesPage(ctx context.Context, tenantID string, offset, limit int) ([]Role, int64, error) {
+func (s *Service) ListRolesPage(ctx context.Context, tenantID guid.ID, offset, limit int) ([]Role, int64, error) {
 	if err := validateTenant(tenantID); err != nil {
 		return nil, 0, err
 	}

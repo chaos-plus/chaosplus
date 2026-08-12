@@ -1,0 +1,1 @@
+{"workspace.task.invalid":"The task is invalid.","workspace.task.not_found":"The task was not found.","workspace.task.version_conflict":"The task was changed by another request.","workspace.task.state_conflict":"The task cannot be executed in its current state.","workspace.task.unavailable":"The task service is unavailable."}

@@ -8,13 +8,14 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type positionRow struct {
 	bun.BaseModel `bun:"table:iam_positions"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
 	Code          string
 	Name          string
 	Status        string
@@ -26,9 +27,9 @@ type positionRow struct {
 
 type positionMemberRow struct {
 	bun.BaseModel `bun:"table:iam_position_members"`
-	TenantID      string `bun:"tenant_id,pk"`
-	PositionID    string `bun:"position_id,pk"`
-	PrincipalID   string `bun:"principal_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	PositionID    guid.ID `bun:"position_id,pk"`
+	PrincipalID   guid.ID `bun:"principal_id,pk"`
 	StartsAt      int64
 	EndsAt        int64
 	CreatedAt     int64
@@ -58,7 +59,7 @@ func (r *PositionRepository) withExecutor(executor bun.IDB) *PositionRepository 
 	return &PositionRepository{db: r.db, executor: executor, dialect: r.dialect}
 }
 
-func (r *PositionRepository) list(ctx context.Context, tenantID string) ([]positionRow, error) {
+func (r *PositionRepository) list(ctx context.Context, tenantID guid.ID) ([]positionRow, error) {
 	rows := make([]positionRow, 0)
 	if err := r.executor.NewSelect().Model(&rows).Where("tenant_id = ?", tenantID).Order("sort_order ASC", "code ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list positions: %w", err)
@@ -66,7 +67,7 @@ func (r *PositionRepository) list(ctx context.Context, tenantID string) ([]posit
 	return rows, nil
 }
 
-func (r *PositionRepository) get(ctx context.Context, tenantID, id string) (positionRow, error) {
+func (r *PositionRepository) get(ctx context.Context, tenantID, id guid.ID) (positionRow, error) {
 	var row positionRow
 	if err := r.executor.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -103,7 +104,7 @@ func (r *PositionRepository) update(ctx context.Context, row *positionRow, expec
 	return nil
 }
 
-func (r *PositionRepository) delete(ctx context.Context, tenantID, id string, version int64) error {
+func (r *PositionRepository) delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
 	count, err := r.executor.NewSelect().Model((*positionMemberRow)(nil)).Where("tenant_id = ? AND position_id = ?", tenantID, id).Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count position members: %w", err)
@@ -135,13 +136,13 @@ func (r *PositionRepository) delete(ctx context.Context, tenantID, id string, ve
 	return nil
 }
 
-func (r *PositionRepository) listMembers(ctx context.Context, tenantID, positionID string) ([]positionMemberRow, error) {
+func (r *PositionRepository) listMembers(ctx context.Context, tenantID, positionID guid.ID) ([]positionMemberRow, error) {
 	rows := make([]positionMemberRow, 0)
 	err := r.executor.NewSelect().
 		TableExpr("iam_position_members AS pm").
 		ColumnExpr("pm.tenant_id, pm.position_id, pm.principal_id, pm.starts_at, pm.ends_at, pm.created_at, pm.updated_at").
 		ColumnExpr("tm.display_name, tm.email").
-		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.user_subject = pm.principal_id").
+		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.principal_id = pm.principal_id").
 		Where("pm.tenant_id = ? AND pm.position_id = ?", tenantID, positionID).
 		OrderExpr("tm.display_name ASC, pm.principal_id ASC").Scan(ctx, &rows)
 	if err != nil {
@@ -150,13 +151,13 @@ func (r *PositionRepository) listMembers(ctx context.Context, tenantID, position
 	return rows, nil
 }
 
-func (r *PositionRepository) getMember(ctx context.Context, tenantID, positionID, principalID string) (positionMemberRow, error) {
+func (r *PositionRepository) getMember(ctx context.Context, tenantID, positionID, principalID guid.ID) (positionMemberRow, error) {
 	var row positionMemberRow
 	err := r.executor.NewSelect().
 		TableExpr("iam_position_members AS pm").
 		ColumnExpr("pm.tenant_id, pm.position_id, pm.principal_id, pm.starts_at, pm.ends_at, pm.created_at, pm.updated_at").
 		ColumnExpr("tm.display_name, tm.email").
-		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.user_subject = pm.principal_id").
+		Join("JOIN iam_tenant_members AS tm ON tm.tenant_id = pm.tenant_id AND tm.principal_id = pm.principal_id").
 		Where("pm.tenant_id = ? AND pm.position_id = ? AND pm.principal_id = ?", tenantID, positionID, principalID).Scan(ctx, &row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -178,7 +179,7 @@ func (r *PositionRepository) putMember(ctx context.Context, row *positionMemberR
 	return nil
 }
 
-func (r *PositionRepository) deleteMember(ctx context.Context, tenantID, positionID, principalID string) (bool, error) {
+func (r *PositionRepository) deleteMember(ctx context.Context, tenantID, positionID, principalID guid.ID) (bool, error) {
 	result, err := r.executor.NewDelete().Model((*positionMemberRow)(nil)).Where("tenant_id = ? AND position_id = ? AND principal_id = ?", tenantID, positionID, principalID).Exec(ctx)
 	if err != nil {
 		return false, fmt.Errorf("delete position member: %w", err)

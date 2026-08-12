@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 var (
@@ -53,17 +55,17 @@ var (
 // administrator holds every declared platform permission; a restricted one
 // holds only the explicitly granted permission codes.
 type PlatformAdministrator struct {
-	PrincipalID       string
+	PrincipalID       guid.ID
 	FullAdministrator bool
 	Permissions       []string
 	CreatedAt         time.Time
 }
 
-type IDGenerator func() (string, error)
+type IDGenerator func() (guid.ID, error)
 
 type Role struct {
-	ID          string
-	TenantID    string
+	ID          guid.ID
+	TenantID    guid.ID
 	Name        string
 	Description string
 	CreatedAt   time.Time
@@ -87,9 +89,9 @@ const (
 )
 
 type RoleDataScope struct {
-	RoleID        string
+	RoleID        guid.ID
 	Scope         DataScope
-	DepartmentIDs []string
+	DepartmentIDs []guid.ID
 	UpdatedAt     time.Time
 }
 
@@ -101,9 +103,9 @@ const (
 )
 
 type RoleDirectoryBinding struct {
-	RoleID       string
+	RoleID       guid.ID
 	AssigneeType DirectoryAssigneeType
-	AssigneeID   string
+	AssigneeID   guid.ID
 	CreatedAt    time.Time
 }
 
@@ -115,11 +117,11 @@ const (
 )
 
 type TenantMember struct {
-	TenantID     string
-	Subject      string
+	TenantID     guid.ID
+	PrincipalID  guid.ID
 	DisplayName  string
 	Email        string
-	DepartmentID string
+	DepartmentID guid.ID
 	Status       MemberStatus
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -134,9 +136,9 @@ const (
 )
 
 type Entity struct {
-	ID        string
-	TenantID  string
-	ParentID  string
+	ID        guid.ID
+	TenantID  guid.ID
+	ParentID  guid.ID
 	Type      string
 	Name      string
 	Status    EntityStatus
@@ -146,7 +148,7 @@ type Entity struct {
 }
 
 type EntityPatch struct {
-	ParentID *string
+	ParentID *guid.ID
 	Type     *string
 	Name     *string
 	Status   *EntityStatus
@@ -161,23 +163,23 @@ const (
 )
 
 type EntityRoleBinding struct {
-	EntityID    string
-	RoleID      string
-	PrincipalID string
+	EntityID    guid.ID
+	RoleID      guid.ID
+	PrincipalID guid.ID
 	Effect      BindingEffect
 	ExpiresAt   time.Time
 	CreatedAt   time.Time
 }
 
 type Relationship struct {
-	TenantID        string
-	EntityID        string
+	TenantID        guid.ID
+	EntityID        guid.ID
 	SubjectType     string
-	SubjectID       string
+	SubjectID       guid.ID
 	SubjectRelation string
 	Relation        string
 	ResourceType    string
-	ResourceID      string
+	ResourceID      guid.ID
 	StartsAt        *time.Time
 	EndsAt          *time.Time
 	Condition       json.RawMessage
@@ -185,9 +187,9 @@ type Relationship struct {
 }
 
 type RelationshipFilter struct {
-	EntityID     string
+	EntityID     guid.ID
 	ResourceType string
-	ResourceID   string
+	ResourceID   guid.ID
 }
 
 type MemberFilter struct {
@@ -205,9 +207,9 @@ const (
 )
 
 type Menu struct {
-	ID             string
-	TenantID       string
-	ParentID       string
+	ID             guid.ID
+	TenantID       guid.ID
+	ParentID       guid.ID
 	Label          string
 	Route          string
 	Icon           string

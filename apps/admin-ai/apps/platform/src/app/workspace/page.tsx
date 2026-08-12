@@ -105,7 +105,8 @@ export default function WorkspacePage() {
 
   const setStatus = async (id: string, status: string) => {
     try {
-      await controlApi.updateWorkItem(id, { status })
+      const current = items.find((item) => item.id === id)
+      await controlApi.updateWorkItem(id, { type: current?.type, status })
       void load()
     } catch (e) {
       reportError("更新状态", e)
@@ -117,7 +118,7 @@ export default function WorkspacePage() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await controlApi.deleteWorkItem(deleteTarget.id)
+      await controlApi.deleteWorkItem(deleteTarget.id, deleteTarget.type)
       if (detail?.id === deleteTarget.id) setDetail(null)
       setDeleteTarget(null)
       await load()
@@ -429,7 +430,7 @@ function DetailSheet({
     setDesc(item.description)
     setEstimate(item.estimateHours ? String(item.estimateHours) : "")
     void controlApi
-      .attachments(item.id)
+      .attachments(item.type, item.id)
       .then((x) => setAtts(x ?? []))
       .catch(() => setAtts([]))
   }, [item])
@@ -439,6 +440,7 @@ function DetailSheet({
   const save = async () => {
     try {
       await controlApi.updateWorkItem(item.id, {
+        type: item.type,
         title: item.title,
         description: desc,
         status: item.status,
@@ -457,12 +459,12 @@ function DetailSheet({
     if (!files?.length) return
     setUploading(true)
     try {
-      for (const f of Array.from(files)) await controlApi.uploadAttachment(item.id, f)
+      for (const f of Array.from(files)) await controlApi.uploadAttachment(item.type, item.id, f)
     } catch (e) {
       reportError("上传附件", e)
     } finally {
       // 无论成功与否都刷新:部分成功的文件也要显示出来。
-      setAtts((await controlApi.attachments(item.id).catch(() => [])) ?? [])
+      setAtts((await controlApi.attachments(item.type, item.id).catch(() => [])) ?? [])
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ""
     }
@@ -542,7 +544,7 @@ function DetailSheet({
             )}
             <div className="grid grid-cols-2 gap-2">
               {atts.map((a) => {
-                const url = `/control/api/attachments/${a.id}`
+                const url = `/api/attachments/${a.id}/content`
                 const isImage = a.mime.startsWith("image/")
                 const isVideo = a.mime.startsWith("video/")
                 return (

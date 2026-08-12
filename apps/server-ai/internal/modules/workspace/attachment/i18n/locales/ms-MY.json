@@ -1,0 +1,6 @@
+{
+  "workspace.attachment.invalid": "Lampiran tidak sah.",
+  "workspace.attachment.not_found": "Lampiran tidak ditemukan.",
+  "workspace.attachment.version_conflict": "Lampiran telah diubah oleh permintaan lain. Muat semula dan cuba lagi.",
+  "workspace.attachment.unavailable": "Perkhidmatan lampiran tidak tersedia."
+}

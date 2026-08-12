@@ -81,7 +81,7 @@ func TestMFAAuditFailuresRollBackSecurityMutations(t *testing.T) {
 		service.now = func() time.Time { return now }
 		var beforeHashes []string
 		require.NoError(t, service.db.NewSelect().Model((*recoveryCodeRow)(nil)).Column("code_hash").Where("principal_id = ?", principalID).Order("code_hash ASC").Scan(t.Context(), &beforeHashes))
-		extraSession, err := service.insertSession(t.Context(), service.db, principalID, now, authnext.Assurance{AuthTime: now, Level: 1, Methods: []string{"pwd"}})
+		extraSession, err := service.insertSession(t.Context(), service.db, parseGUID(principalID), now, authnext.Assurance{AuthTime: now, Level: 1, Methods: []string{"pwd"}})
 		require.NoError(t, err)
 		rejectAuthnAudit(t, service, "mfa_recovery_regenerated")
 
@@ -290,16 +290,16 @@ func TestMFAKeyAndCipherValidation(t *testing.T) {
 	assert.Error(t, err)
 
 	service, principalID := newLocalService(t)
-	ciphertext, err := service.encryptMFASecret(principalID, "JBSWY3DPEHPK3PXP")
+	ciphertext, err := service.encryptMFASecret(parseGUID(principalID), "JBSWY3DPEHPK3PXP")
 	require.NoError(t, err)
-	secret, err := service.decryptMFASecret(principalID, ciphertext)
+	secret, err := service.decryptMFASecret(parseGUID(principalID), ciphertext)
 	require.NoError(t, err)
 	assert.Equal(t, "JBSWY3DPEHPK3PXP", secret)
-	_, err = service.decryptMFASecret("other", ciphertext)
+	_, err = service.decryptMFASecret(testID("other"), ciphertext)
 	assert.Error(t, err)
-	_, err = service.decryptMFASecret(principalID, "v2.invalid")
+	_, err = service.decryptMFASecret(parseGUID(principalID), "v2.invalid")
 	assert.Error(t, err)
-	_, err = service.decryptMFASecret(principalID, "v1.invalid")
+	_, err = service.decryptMFASecret(parseGUID(principalID), "v1.invalid")
 	assert.Error(t, err)
 
 	assert.Empty(t, normalizeRecoveryCode(" -- "))
@@ -327,10 +327,10 @@ func TestMFAFailsClosedForInvalidAuthenticationAndStorage(t *testing.T) {
 	assert.Error(t, service.DisableTOTP(ctx, "", "", "password", "123456"))
 	assert.Empty(t, currentSessionHash("", service.web.CookieName))
 
-	_, err = service.decryptMFASecret("principal", "v1.AAAA")
+	_, err = service.decryptMFASecret(testID("principal"), "v1.AAAA")
 	assert.Error(t, err)
 
-	credential := credentialRow{PrincipalID: "principal", TOTPSecret: "v1.invalid"}
+	credential := credentialRow{PrincipalID: testID("principal"), TOTPSecret: "v1.invalid"}
 	valid, err := service.consumeFactor(ctx, service.db, &credential, "123456", time.Now())
 	assert.False(t, valid)
 	assert.Error(t, err)
@@ -351,15 +351,15 @@ func TestMFAFailsClosedForCorruptCredentialAndClosedDatabase(t *testing.T) {
 	assert.Error(t, service.DisableTOTP(t.Context(), "", cookie, "correct horse battery staple", "123456"))
 
 	closed, _ := newLocalService(t)
-	ciphertext, err := closed.encryptMFASecret("principal", "JBSWY3DPEHPK3PXP")
+	ciphertext, err := closed.encryptMFASecret(testID("principal"), "JBSWY3DPEHPK3PXP")
 	require.NoError(t, err)
 	require.NoError(t, closed.db.Close())
-	_, err = closed.consumeFactor(t.Context(), closed.db, &credentialRow{PrincipalID: "principal"}, "RECOVERY-CODE", time.Now())
+	_, err = closed.consumeFactor(t.Context(), closed.db, &credentialRow{PrincipalID: testID("principal")}, "RECOVERY-CODE", time.Now())
 	assert.Error(t, err)
 	code := mustTOTP(t, "JBSWY3DPEHPK3PXP", time.Now())
-	_, err = closed.consumeFactor(t.Context(), closed.db, &credentialRow{PrincipalID: "principal", TOTPSecret: ciphertext}, code, time.Now())
+	_, err = closed.consumeFactor(t.Context(), closed.db, &credentialRow{PrincipalID: testID("principal"), TOTPSecret: ciphertext}, code, time.Now())
 	assert.Error(t, err)
-	_, err = closed.insertSession(t.Context(), closed.db, "principal", time.Now(), authnext.Assurance{AuthTime: time.Now(), Level: 1, Methods: []string{"pwd"}})
+	_, err = closed.insertSession(t.Context(), closed.db, testID("principal"), time.Now(), authnext.Assurance{AuthTime: time.Now(), Level: 1, Methods: []string{"pwd"}})
 	assert.Error(t, err)
 	_, valid := validateTOTP("invalid", "bad", time.Unix(0, 0))
 	assert.False(t, valid)
@@ -449,7 +449,7 @@ func TestMFAStorageFailuresFailClosed(t *testing.T) {
 
 	t.Run("recovery status storage", func(t *testing.T) {
 		service, principalID := newLocalService(t)
-		bearer, _, err := service.IssueAccessToken(t.Context(), principalID, "api", "")
+		bearer, _, err := service.IssueAccessToken(t.Context(), parseGUID(principalID), "api", "")
 		require.NoError(t, err)
 		_, err = service.db.ExecContext(t.Context(), "DROP TABLE iam_recovery_codes")
 		require.NoError(t, err)
@@ -505,7 +505,7 @@ func TestMFAStorageFailuresFailClosed(t *testing.T) {
 		service, principalID := newLocalService(t)
 		_, err := service.db.ExecContext(t.Context(), "DROP TABLE iam_mfa_challenges")
 		require.NoError(t, err)
-		_, err = service.createLoginChallenge(t.Context(), principalID, "https://app.example/", time.Now().UTC())
+		_, err = service.createLoginChallenge(t.Context(), parseGUID(principalID), "https://app.example/", time.Now().UTC())
 		assert.ErrorContains(t, err, "create MFA challenge")
 	})
 
@@ -513,7 +513,7 @@ func TestMFAStorageFailuresFailClosed(t *testing.T) {
 		service, principalID := newLocalService(t)
 		_, err := service.db.NewUpdate().Model((*principalRow)(nil)).Set("status = 'disabled'").Where("id = ?", principalID).Exec(t.Context())
 		require.NoError(t, err)
-		_, _, err = service.verifyCurrentPassword(t.Context(), principalID, "correct horse battery staple")
+		_, _, err = service.verifyCurrentPassword(t.Context(), parseGUID(principalID), "correct horse battery staple")
 		assert.ErrorIs(t, err, authnext.ErrInvalidCredentials)
 	})
 }

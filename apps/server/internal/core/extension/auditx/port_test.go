@@ -1,22 +1,23 @@
 package auditx
 
 import (
-	"strings"
 	"testing"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewEventUsesVerifiedActorAndBoundsIdentifiers(t *testing.T) {
-	event := NewEvent(t.Context(), "tenant", "changed", "principal", "target")
-	assert.Equal(t, SystemActor, event.PrincipalID)
+	event := NewEvent(t.Context(), guid.ID(1), "changed", "principal", guid.ID(2))
+	assert.Zero(t, event.PrincipalID)
+	assert.Equal(t, guid.ID(1), event.TenantID)
+	assert.Equal(t, guid.ID(2), event.TargetID)
 
-	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{Subject: strings.Repeat("a", 65)})
-	event = NewEvent(ctx, "tenant", "changed", "principal", strings.Repeat("b", 129))
-	assert.Len(t, event.PrincipalID, 64)
-	assert.Len(t, event.TargetID, 64)
+	ctx := authnext.WithClaims(t.Context(), &authnext.Claims{PrincipalID: guid.ID(9)})
+	event = NewEvent(ctx, guid.ID(3), "changed", "principal", guid.ID(4))
+	assert.Equal(t, guid.ID(9), event.PrincipalID)
+	assert.Equal(t, guid.ID(3), event.TenantID)
+	assert.Equal(t, guid.ID(4), event.TargetID)
 	assert.NotNil(t, event.Detail)
-	assert.Equal(t, "short", BoundedID("short", 8))
-	assert.Len(t, BoundedID(strings.Repeat("x", 9), 8), 8)
 }

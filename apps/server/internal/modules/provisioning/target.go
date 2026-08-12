@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/uptrace/bun"
@@ -83,9 +84,8 @@ type remoteResource struct {
 	resource   any
 }
 
-func (s *Service) ListTargets(ctx context.Context, tenantID string) ([]Target, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || len(tenantID) > 128 {
+func (s *Service) ListTargets(ctx context.Context, tenantID guid.ID) ([]Target, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvalidTarget
 	}
 	rows, err := s.repo.listTargets(ctx, tenantID)
@@ -99,16 +99,16 @@ func (s *Service) ListTargets(ctx context.Context, tenantID string) ([]Target, e
 	return result, nil
 }
 
-func (s *Service) CreateTarget(ctx context.Context, tenantID, name, baseURL, bearerToken string) (TargetSecret, error) {
-	tenantID, name, baseURL, bearerToken = strings.TrimSpace(tenantID), strings.TrimSpace(name), strings.TrimSpace(baseURL), strings.TrimSpace(bearerToken)
-	if tenantID == "" || len(tenantID) > 128 || name == "" || len(name) > 128 || bearerToken == "" || len(bearerToken) > 4096 || !validTargetURL(baseURL) {
+func (s *Service) CreateTarget(ctx context.Context, tenantID guid.ID, name, baseURL, bearerToken string) (TargetSecret, error) {
+	name, baseURL, bearerToken = strings.TrimSpace(name), strings.TrimSpace(baseURL), strings.TrimSpace(bearerToken)
+	if tenantID.Zero() || name == "" || len(name) > 128 || bearerToken == "" || len(bearerToken) > 4096 || !validTargetURL(baseURL) {
 		return TargetSecret{}, ErrInvalidTarget
 	}
 	if len(s.key) == 0 {
 		return TargetSecret{}, ErrTargetKeyMissing
 	}
 	id, err := s.nextID()
-	if err != nil || strings.TrimSpace(id) == "" || len(id) > 128 {
+	if err != nil || id.Zero() {
 		return TargetSecret{}, fmt.Errorf("generate SCIM target id: %w", firstError(err, ErrInvalidTarget))
 	}
 	ciphertext, err := s.encryptToken(id, bearerToken)
@@ -137,9 +137,9 @@ func (s *Service) CreateTarget(ctx context.Context, tenantID, name, baseURL, bea
 	return TargetSecret{Target: targetFromRow(row), BearerToken: bearerToken}, nil
 }
 
-func (s *Service) ReplaceTarget(ctx context.Context, tenantID, id, name, baseURL, status, bearerToken string, version int64) (Target, error) {
-	tenantID, id, name, baseURL, status, bearerToken = strings.TrimSpace(tenantID), strings.TrimSpace(id), strings.TrimSpace(name), strings.TrimSpace(baseURL), strings.TrimSpace(status), strings.TrimSpace(bearerToken)
-	if tenantID == "" || id == "" || name == "" || len(name) > 128 || !validTargetURL(baseURL) || len(bearerToken) > 4096 || version < 1 || (status != TargetActive && status != TargetDisabled) {
+func (s *Service) ReplaceTarget(ctx context.Context, tenantID, id guid.ID, name, baseURL, status, bearerToken string, version int64) (Target, error) {
+	name, baseURL, status, bearerToken = strings.TrimSpace(name), strings.TrimSpace(baseURL), strings.TrimSpace(status), strings.TrimSpace(bearerToken)
+	if tenantID.Zero() || id.Zero() || name == "" || len(name) > 128 || !validTargetURL(baseURL) || len(bearerToken) > 4096 || version < 1 || (status != TargetActive && status != TargetDisabled) {
 		return Target{}, ErrInvalidTarget
 	}
 	now := s.now().UTC().UnixMilli()
@@ -183,9 +183,8 @@ func (s *Service) ReplaceTarget(ctx context.Context, tenantID, id, name, baseURL
 	return targetFromRow(updated), nil
 }
 
-func (s *Service) DeleteTarget(ctx context.Context, tenantID, id string) error {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if tenantID == "" || id == "" {
+func (s *Service) DeleteTarget(ctx context.Context, tenantID, id guid.ID) error {
+	if tenantID.Zero() || id.Zero() {
 		return ErrInvalidTarget
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -206,9 +205,9 @@ func (s *Service) DeleteTarget(ctx context.Context, tenantID, id string) error {
 
 // PushResource PUTs the current local user or group to the target. The mapping
 // is upserted with the remote id so later pushes and deprovisioning reuse it.
-func (s *Service) PushResource(ctx context.Context, tenantID, targetID, resourceType, resourceID string) (PushResult, error) {
-	tenantID, targetID, resourceType, resourceID = strings.TrimSpace(tenantID), strings.TrimSpace(targetID), strings.TrimSpace(resourceType), strings.TrimSpace(resourceID)
-	if tenantID == "" || targetID == "" || resourceID == "" || len(targetID) > 128 || len(resourceID) > 128 || (resourceType != ResourceUser && resourceType != ResourceGroup) {
+func (s *Service) PushResource(ctx context.Context, tenantID, targetID guid.ID, resourceType string, resourceID guid.ID) (PushResult, error) {
+	resourceType = strings.TrimSpace(resourceType)
+	if tenantID.Zero() || targetID.Zero() || resourceID.Zero() || (resourceType != ResourceUser && resourceType != ResourceGroup) {
 		return PushResult{}, ErrInvalidTarget
 	}
 	// Serialize push/deprovision per resource to avoid racing the remote
@@ -278,14 +277,14 @@ func (s *Service) PushResource(ctx context.Context, tenantID, targetID, resource
 	if err != nil {
 		return PushResult{}, fmt.Errorf("record SCIM push mapping: %w", err)
 	}
-	return PushResult{TargetID: targetID, ResourceType: resourceType, ResourceID: resourceID, ExternalID: payload.externalID, RemoteID: remoteID}, nil
+	return PushResult{TargetID: targetID.String(), ResourceType: resourceType, ResourceID: resourceID.String(), ExternalID: payload.externalID, RemoteID: remoteID}, nil
 }
 
 // DeprovisionResource DELETEs the mapped remote resource and soft-deletes the
 // mapping so a later push re-creates the resource on the target.
-func (s *Service) DeprovisionResource(ctx context.Context, tenantID, targetID, resourceType, resourceID string) error {
-	tenantID, targetID, resourceType, resourceID = strings.TrimSpace(tenantID), strings.TrimSpace(targetID), strings.TrimSpace(resourceType), strings.TrimSpace(resourceID)
-	if tenantID == "" || targetID == "" || resourceID == "" || len(targetID) > 128 || len(resourceID) > 128 || (resourceType != ResourceUser && resourceType != ResourceGroup) {
+func (s *Service) DeprovisionResource(ctx context.Context, tenantID, targetID guid.ID, resourceType string, resourceID guid.ID) error {
+	resourceType = strings.TrimSpace(resourceType)
+	if tenantID.Zero() || targetID.Zero() || resourceID.Zero() || (resourceType != ResourceUser && resourceType != ResourceGroup) {
 		return ErrInvalidTarget
 	}
 	unlock := s.lockPushResource(targetID, resourceType, resourceID)
@@ -346,8 +345,8 @@ func (s *Service) DeprovisionResource(ctx context.Context, tenantID, targetID, r
 	return nil
 }
 
-func (s *Service) buildRemoteResource(ctx context.Context, tenantID, targetID, resourceType, resourceID string) (remoteResource, error) {
-	externalID := resourceID
+func (s *Service) buildRemoteResource(ctx context.Context, tenantID, targetID guid.ID, resourceType string, resourceID guid.ID) (remoteResource, error) {
+	externalID := resourceID.String()
 	if mapping, err := s.repo.getTargetResource(ctx, targetID, resourceType, resourceID); err == nil && mapping.ExternalID != "" {
 		externalID = mapping.ExternalID
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -365,7 +364,7 @@ func (s *Service) buildRemoteResource(ctx context.Context, tenantID, targetID, r
 		user := UserResource{
 			Schemas:     []string{UserSchema},
 			ID:          externalID,
-			ExternalID:  resourceID,
+			ExternalID:  resourceID.String(),
 			UserName:    principal.LoginName,
 			DisplayName: principal.DisplayName,
 			Active:      principal.Status == "active",
@@ -403,7 +402,7 @@ func (s *Service) buildRemoteResource(ctx context.Context, tenantID, targetID, r
 		resource := GroupResource{
 			Schemas:     []string{GroupSchema},
 			ID:          externalID,
-			ExternalID:  resourceID,
+			ExternalID:  resourceID.String(),
 			DisplayName: group.Name,
 			Members:     mapped,
 			Meta:        ResourceMeta{ResourceType: "Group"},
@@ -413,7 +412,7 @@ func (s *Service) buildRemoteResource(ctx context.Context, tenantID, targetID, r
 	return remoteResource{}, ErrInvalidTarget
 }
 
-func (s *Service) encryptToken(targetID, token string) (string, error) {
+func (s *Service) encryptToken(targetID guid.ID, token string) (string, error) {
 	block, err := aes.NewCipher(purposeKey(s.key, "scim-target-bearer"))
 	if err != nil {
 		return "", fmt.Errorf("create provisioning cipher: %w", err)
@@ -426,11 +425,11 @@ func (s *Service) encryptToken(targetID, token string) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("generate provisioning nonce: %w", err)
 	}
-	sealed := gcm.Seal(nonce, nonce, []byte(token), []byte("chaosplus:provisioning:secret\x00"+targetID))
+	sealed := gcm.Seal(nonce, nonce, []byte(token), []byte("provisioning:secret\x00"+targetID.String()))
 	return provisioningCipherVersion + "." + base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-func (s *Service) decryptToken(targetID, encoded string) (string, error) {
+func (s *Service) decryptToken(targetID guid.ID, encoded string) (string, error) {
 	version, payload, ok := strings.Cut(encoded, ".")
 	if !ok || version != provisioningCipherVersion || payload == "" {
 		return "", errors.New("unsupported provisioning ciphertext")
@@ -451,7 +450,7 @@ func (s *Service) decryptToken(targetID, encoded string) (string, error) {
 		return "", errors.New("invalid provisioning ciphertext")
 	}
 	nonce, ciphertext := sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():]
-	plain, err := gcm.Open(nil, nonce, ciphertext, []byte("chaosplus:provisioning:secret\x00"+targetID))
+	plain, err := gcm.Open(nil, nonce, ciphertext, []byte("provisioning:secret\x00"+targetID.String()))
 	if err != nil {
 		return "", errors.New("decrypt provisioning token")
 	}
@@ -462,12 +461,12 @@ func (s *Service) decryptToken(targetID, encoded string) (string, error) {
 // never encrypts two different kinds of payload with the same key material.
 func purposeKey(key []byte, purpose string) []byte {
 	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte("chaosplus:provisioning:key:" + purpose))
+	_, _ = mac.Write([]byte("provisioning:key:" + purpose))
 	return mac.Sum(nil)
 }
 
 func targetFromRow(row targetRow) Target {
-	return Target{ID: row.ID, TenantID: row.TenantID, Name: row.Name, BaseURL: row.BaseURL, Status: row.Status, Version: row.Version, CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}
+	return Target{ID: row.ID.String(), TenantID: row.TenantID.String(), Name: row.Name, BaseURL: row.BaseURL, Status: row.Status, Version: row.Version, CreatedAt: time.UnixMilli(row.CreatedAt).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC()}
 }
 
 func validTargetURL(raw string) bool {
@@ -503,9 +502,8 @@ func trimRemoteDetail(body []byte) string {
 // ponytail: full incremental sync (drift detection, auto-deprovision on
 // disable, outbound bulk) deferred to a scheduled-worker delivery. This
 // provides the on-demand reconciliation primitive.
-func (s *Service) SyncTarget(ctx context.Context, tenantID, targetID string) (int, error) {
-	tenantID, targetID = strings.TrimSpace(tenantID), strings.TrimSpace(targetID)
-	if tenantID == "" || targetID == "" || len(targetID) > 128 {
+func (s *Service) SyncTarget(ctx context.Context, tenantID, targetID guid.ID) (int, error) {
+	if tenantID.Zero() || targetID.Zero() {
 		return 0, ErrInvalidTarget
 	}
 	target, err := s.repo.getTarget(ctx, tenantID, targetID)

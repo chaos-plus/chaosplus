@@ -2,10 +2,8 @@ package audit
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -26,11 +25,11 @@ var (
 const exportBatchSize = 500
 
 type EventInput struct {
-	TenantID    string
-	PrincipalID string
+	TenantID    guid.ID
+	PrincipalID guid.ID
 	EventType   string
 	TargetType  string
-	TargetID    string
+	TargetID    guid.ID
 	Outcome     string
 	IPAddress   string
 	UserAgent   string
@@ -38,12 +37,12 @@ type EventInput struct {
 }
 
 type Event struct {
-	ID           string          `json:"id"`
-	TenantID     string          `json:"tenant_id"`
-	PrincipalID  string          `json:"principal_id,omitempty"`
+	ID           guid.ID         `json:"id"`
+	TenantID     guid.ID         `json:"tenant_id"`
+	PrincipalID  guid.ID         `json:"principal_id,omitempty"`
 	EventType    string          `json:"event_type"`
 	TargetType   string          `json:"target_type,omitempty"`
-	TargetID     string          `json:"target_id,omitempty"`
+	TargetID     guid.ID         `json:"target_id,omitempty"`
 	Outcome      string          `json:"outcome"`
 	IPAddress    string          `json:"ip_address,omitempty"`
 	UserAgent    string          `json:"user_agent,omitempty"`
@@ -55,12 +54,12 @@ type Event struct {
 }
 
 type Filter struct {
-	TenantID    string
-	PrincipalID string
+	TenantID    guid.ID
+	PrincipalID guid.ID
 	EventType   string
 	Outcome     string
 	TargetType  string
-	TargetID    string
+	TargetID    guid.ID
 	From        time.Time
 	To          time.Time
 	Offset      int
@@ -68,7 +67,7 @@ type Filter struct {
 }
 
 type Integrity struct {
-	TenantID       string       `json:"tenant_id"`
+	TenantID       guid.ID      `json:"tenant_id"`
 	Valid          bool         `json:"valid"`
 	VerifiedEvents int64        `json:"verified_events"`
 	HeadSequence   int64        `json:"head_sequence"`
@@ -83,19 +82,19 @@ type ExportSnapshot struct {
 }
 
 type exportCriteria struct {
-	PrincipalID string `json:"principal_id,omitempty"`
-	EventType   string `json:"event_type,omitempty"`
-	Outcome     string `json:"outcome,omitempty"`
-	TargetType  string `json:"target_type,omitempty"`
-	TargetID    string `json:"target_id,omitempty"`
-	From        string `json:"from,omitempty"`
-	To          string `json:"to,omitempty"`
+	PrincipalID guid.ID `json:"principal_id,omitempty"`
+	EventType   string  `json:"event_type,omitempty"`
+	Outcome     string  `json:"outcome,omitempty"`
+	TargetType  string  `json:"target_type,omitempty"`
+	TargetID    guid.ID `json:"target_id,omitempty"`
+	From        string  `json:"from,omitempty"`
+	To          string  `json:"to,omitempty"`
 }
 
 type exportManifest struct {
 	Type           string         `json:"type"`
 	Schema         string         `json:"schema"`
-	TenantID       string         `json:"tenant_id"`
+	TenantID       guid.ID        `json:"tenant_id"`
 	GeneratedAt    time.Time      `json:"generated_at"`
 	HeadSequence   int64          `json:"head_sequence"`
 	HeadHash       string         `json:"head_hash,omitempty"`
@@ -116,12 +115,12 @@ type exportComplete struct {
 
 type eventRow struct {
 	bun.BaseModel `bun:"table:iam_audit_events"`
-	ID            string `bun:"id,pk"`
-	TenantID      string
-	PrincipalID   string
+	ID            guid.ID `bun:"id,pk"`
+	TenantID      guid.ID
+	PrincipalID   guid.ID
 	EventType     string
 	TargetType    string
-	TargetID      string
+	TargetID      guid.ID
 	Outcome       string
 	IPAddress     string
 	UserAgent     string
@@ -134,7 +133,7 @@ type eventRow struct {
 
 type headRow struct {
 	bun.BaseModel `bun:"table:iam_audit_heads"`
-	TenantID      string `bun:"tenant_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
 	Sequence      int64
 	EventHash     string
 	UpdatedAt     int64
@@ -144,27 +143,27 @@ type Service struct {
 	db      *bun.DB
 	dialect string
 	now     func() time.Time
-	nextID  func() (string, error)
+	nextID  func() (guid.ID, error)
 	anchor  *AnchorStore
 	signer  *RootSigner
 }
 
-func NewService(db *bun.DB) *Service {
-	return NewServiceWithAnchor(db, nil)
+func NewService(db *bun.DB, nextID func() (guid.ID, error)) *Service {
+	return NewServiceWithAnchor(db, nil, nextID)
 }
 
-func NewServiceWithAnchor(db *bun.DB, anchor *AnchorStore) *Service {
-	if db == nil {
-		panic("audit service requires database")
+func NewServiceWithAnchor(db *bun.DB, anchor *AnchorStore, nextID func() (guid.ID, error)) *Service {
+	if db == nil || nextID == nil {
+		panic("audit service requires database and id generator")
 	}
 	dialect := db.Dialect().Name().String()
-	return &Service{db: db, dialect: dialect, now: time.Now, nextID: secureID, anchor: anchor}
+	return &Service{db: db, dialect: dialect, now: time.Now, nextID: nextID, anchor: anchor}
 }
 
 // NewServiceWithAnchorAndSigner builds an anchored service that signs every
 // committed head with the configured Ed25519 root key.
-func NewServiceWithAnchorAndSigner(db *bun.DB, anchor *AnchorStore, signer *RootSigner) *Service {
-	service := NewServiceWithAnchor(db, anchor)
+func NewServiceWithAnchorAndSigner(db *bun.DB, anchor *AnchorStore, signer *RootSigner, nextID func() (guid.ID, error)) *Service {
+	service := NewServiceWithAnchor(db, anchor, nextID)
 	service.signer = signer
 	return service
 }
@@ -252,7 +251,7 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Event, int64, erro
 	return events, int64(total), nil
 }
 
-func (s *Service) Get(ctx context.Context, tenantID, id string) (Event, error) {
+func (s *Service) Get(ctx context.Context, tenantID, id guid.ID) (Event, error) {
 	var row eventRow
 	if err := s.db.NewSelect().Model(&row).Where("tenant_id = ? AND id = ?", tenantID, id).Scan(ctx); err != nil {
 		return Event{}, err
@@ -260,10 +259,7 @@ func (s *Service) Get(ctx context.Context, tenantID, id string) (Event, error) {
 	return eventFromRow(row), nil
 }
 
-func (s *Service) Verify(ctx context.Context, tenantID string) (Integrity, error) {
-	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
-		return Integrity{}, ErrInvalidFilter
-	}
+func (s *Service) Verify(ctx context.Context, tenantID guid.ID) (Integrity, error) {
 	head, found, err := s.readHead(ctx, tenantID)
 	if err != nil {
 		return Integrity{}, err
@@ -287,11 +283,11 @@ func (s *Service) Verify(ctx context.Context, tenantID string) (Integrity, error
 
 // Anchor commits the current verified head into the external WORM store.
 // Anchoring is idempotent: an already-committed head returns its anchor.
-func (s *Service) Anchor(ctx context.Context, tenantID string) (Anchor, error) {
+func (s *Service) Anchor(ctx context.Context, tenantID guid.ID) (Anchor, error) {
 	if s.anchor == nil {
 		return Anchor{}, ErrAnchorDisabled
 	}
-	if strings.TrimSpace(tenantID) == "" || len(tenantID) > 128 {
+	if tenantID.Zero() {
 		return Anchor{}, ErrInvalidFilter
 	}
 	head, found, err := s.readHead(ctx, tenantID)
@@ -355,7 +351,7 @@ func (s *Service) Anchor(ctx context.Context, tenantID string) (Anchor, error) {
 // SignRoot commits the current verified head and requires a root signature.
 // An anchor already committed before signing was enabled cannot be
 // retrofitted, so it fails closed instead of returning an unsigned root.
-func (s *Service) SignRoot(ctx context.Context, tenantID string) (Anchor, error) {
+func (s *Service) SignRoot(ctx context.Context, tenantID guid.ID) (Anchor, error) {
 	anchor, err := s.Anchor(ctx, tenantID)
 	if err != nil {
 		return Anchor{}, err
@@ -366,7 +362,7 @@ func (s *Service) SignRoot(ctx context.Context, tenantID string) (Anchor, error)
 	return anchor, nil
 }
 
-func (s *Service) verifyAnchors(ctx context.Context, tenantID string) (AnchorStatus, error) {
+func (s *Service) verifyAnchors(ctx context.Context, tenantID guid.ID) (AnchorStatus, error) {
 	anchors, err := s.anchor.List(ctx, tenantID)
 	if err != nil {
 		return AnchorStatus{}, anchorStoreError(err)
@@ -432,7 +428,7 @@ func (s *Service) WriteExport(ctx context.Context, snapshot ExportSnapshot, writ
 		return ErrInvalidFilter
 	}
 	manifest := exportManifest{
-		Type: "manifest", Schema: "chaosplus.audit-export.v1", TenantID: snapshot.Filter.TenantID,
+		Type: "manifest", Schema: "audit-export.v1", TenantID: snapshot.Filter.TenantID,
 		GeneratedAt: snapshot.GeneratedAt.UTC(), HeadSequence: snapshot.Integrity.HeadSequence,
 		HeadHash: snapshot.Integrity.HeadHash, VerifiedEvents: snapshot.Integrity.VerifiedEvents,
 		Filter: exportCriteriaOf(snapshot.Filter),
@@ -478,7 +474,7 @@ func (s *Service) WriteExport(ctx context.Context, snapshot ExportSnapshot, writ
 	return nil
 }
 
-func (s *Service) readHead(ctx context.Context, tenantID string) (headRow, bool, error) {
+func (s *Service) readHead(ctx context.Context, tenantID guid.ID) (headRow, bool, error) {
 	var head headRow
 	err := s.db.NewSelect().Model(&head).Where("tenant_id = ?", tenantID).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -500,7 +496,7 @@ func (s *Service) verifyHead(ctx context.Context, head headRow) (Integrity, erro
 	return result, nil
 }
 
-func (s *Service) verifyPrefix(ctx context.Context, tenantID string, maxSequence int64) (Integrity, error) {
+func (s *Service) verifyPrefix(ctx context.Context, tenantID guid.ID, maxSequence int64) (Integrity, error) {
 	result := Integrity{TenantID: tenantID, Valid: true, HeadSequence: maxSequence}
 	previous := ""
 	seen := int64(0)
@@ -535,7 +531,7 @@ func (s *Service) verifyPrefix(ctx context.Context, tenantID string, maxSequence
 }
 
 func applyFilter(query *bun.SelectQuery, filter Filter) *bun.SelectQuery {
-	if filter.PrincipalID != "" {
+	if !filter.PrincipalID.Zero() {
 		query = query.Where("principal_id = ?", filter.PrincipalID)
 	}
 	if filter.EventType != "" {
@@ -547,7 +543,7 @@ func applyFilter(query *bun.SelectQuery, filter Filter) *bun.SelectQuery {
 	if filter.TargetType != "" {
 		query = query.Where("target_type = ?", filter.TargetType)
 	}
-	if filter.TargetID != "" {
+	if !filter.TargetID.Zero() {
 		query = query.Where("target_id = ?", filter.TargetID)
 	}
 	if !filter.From.IsZero() {
@@ -560,7 +556,10 @@ func applyFilter(query *bun.SelectQuery, filter Filter) *bun.SelectQuery {
 }
 
 func validateFilter(filter Filter, paginated bool) error {
-	if strings.TrimSpace(filter.TenantID) == "" || len(filter.TenantID) > 128 || len(filter.PrincipalID) > 64 || len(filter.EventType) > 64 || len(filter.TargetType) > 64 || len(filter.TargetID) > 128 {
+	// A zero tenant is the platform audit scope: platform-level authentication
+	// and registration events are recorded there and must remain listable and
+	// verifiable. Tenant-scoped events always carry a positive tenant id.
+	if len(filter.EventType) > 64 || len(filter.TargetType) > 64 {
 		return ErrInvalidFilter
 	}
 	if filter.Outcome != "" && filter.Outcome != "success" && filter.Outcome != "denied" && filter.Outcome != "failure" {
@@ -606,10 +605,10 @@ func writeLine(writer io.Writer, line []byte) error {
 }
 
 func validate(input EventInput) error {
-	if strings.TrimSpace(input.TenantID) == "" || len(input.TenantID) > 128 || strings.TrimSpace(input.EventType) == "" || len(input.EventType) > 64 || (input.Outcome != "success" && input.Outcome != "denied" && input.Outcome != "failure") {
+	if strings.TrimSpace(input.EventType) == "" || len(input.EventType) > 64 || (input.Outcome != "success" && input.Outcome != "denied" && input.Outcome != "failure") {
 		return ErrInvalidEvent
 	}
-	if len(input.PrincipalID) > 64 || len(input.TargetType) > 64 || len(input.TargetID) > 128 || len(input.IPAddress) > 64 || len(input.UserAgent) > 512 {
+	if len(input.TargetType) > 64 || len(input.IPAddress) > 64 || len(input.UserAgent) > 512 {
 		return ErrInvalidEvent
 	}
 	return nil
@@ -620,19 +619,11 @@ func hash(row eventRow) string {
 		ID, TenantID, PrincipalID, EventType, TargetType, TargetID, Outcome, IPAddress, UserAgent, Detail string
 		CreatedAt, Sequence                                                                               int64
 		PreviousHash                                                                                      string
-	}{row.ID, row.TenantID, row.PrincipalID, row.EventType, row.TargetType, row.TargetID, row.Outcome, row.IPAddress, row.UserAgent, row.Detail, row.CreatedAt, row.Sequence, row.PreviousHash})
+	}{row.ID.String(), row.TenantID.String(), row.PrincipalID.String(), row.EventType, row.TargetType, row.TargetID.String(), row.Outcome, row.IPAddress, row.UserAgent, row.Detail, row.CreatedAt, row.Sequence, row.PreviousHash})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
 
 func eventFromRow(row eventRow) Event {
 	return Event{ID: row.ID, TenantID: row.TenantID, PrincipalID: row.PrincipalID, EventType: row.EventType, TargetType: row.TargetType, TargetID: row.TargetID, Outcome: row.Outcome, IPAddress: row.IPAddress, UserAgent: row.UserAgent, Detail: json.RawMessage(row.Detail), Sequence: row.Sequence, PreviousHash: row.PreviousHash, EventHash: row.EventHash, CreatedAt: time.UnixMilli(row.CreatedAt).UTC()}
-}
-
-func secureID() (string, error) {
-	data := make([]byte, 18)
-	if _, err := rand.Read(data); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(data), nil
 }

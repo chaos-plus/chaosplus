@@ -1,14 +1,14 @@
 -- +goose Up
 CREATE TABLE iam_invitations (
-    tenant_id VARCHAR(128) NOT NULL,
-    id VARCHAR(32) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    id BIGINT NOT NULL,
     email VARCHAR(320) NOT NULL,
     email_key VARCHAR(320) NOT NULL,
     token_hmac CHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL,
-    department_id VARCHAR(128) NOT NULL DEFAULT '',
+    department_id BIGINT NOT NULL DEFAULT '',
     expires_at BIGINT NOT NULL,
-    accepted_by VARCHAR(255) NOT NULL DEFAULT '',
+    accepted_by BIGINT NOT NULL DEFAULT '',
     accepted_at BIGINT NOT NULL DEFAULT 0,
     revoked_at BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL,
@@ -22,9 +22,9 @@ CREATE TABLE iam_invitations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE iam_invitation_roles (
-    tenant_id VARCHAR(128) NOT NULL,
-    invitation_id VARCHAR(32) NOT NULL,
-    role_id VARCHAR(32) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    invitation_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
     PRIMARY KEY (tenant_id, invitation_id, role_id),
     CONSTRAINT fk_iam_invitation_roles_invitation FOREIGN KEY (tenant_id, invitation_id)
         REFERENCES iam_invitations (tenant_id, id) ON DELETE CASCADE,

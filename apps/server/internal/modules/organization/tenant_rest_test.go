@@ -21,20 +21,20 @@ func TestTenantHTTPWorkflow(t *testing.T) {
 	created := api.Post("/iam/tenants", map[string]any{"slug": "acme", "name": "Acme"})
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
 	tenant := decodeTenant(t, created.Body.Bytes())
-	assert.Equal(t, http.StatusOK, api.Get("/iam/tenants/"+tenant.ID).Code)
+	assert.Equal(t, http.StatusOK, api.Get("/iam/tenants/"+tenant.ID.String()).Code)
 	assert.Equal(t, http.StatusOK, api.Get("/iam/tenants").Code)
 
-	updated := api.Patch("/iam/tenants/"+tenant.ID, map[string]any{"status": TenantSuspended, "version": tenant.Version})
+	updated := api.Patch("/iam/tenants/"+tenant.ID.String(), map[string]any{"status": TenantSuspended, "version": tenant.Version})
 	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
 	tenant = decodeTenant(t, updated.Body.Bytes())
 	assert.Equal(t, TenantSuspended, tenant.Status)
-	assert.Equal(t, http.StatusConflict, api.Patch("/iam/tenants/"+tenant.ID, map[string]any{"name": "Stale", "version": 1}).Code)
-	assert.Equal(t, http.StatusOK, api.Delete("/iam/tenants/"+tenant.ID+"?version=2").Code)
-	assert.Equal(t, http.StatusConflict, api.Delete("/iam/tenants/"+tenant.ID+"?version=2").Code)
+	assert.Equal(t, http.StatusConflict, api.Patch("/iam/tenants/"+tenant.ID.String(), map[string]any{"name": "Stale", "version": 1}).Code)
+	assert.Equal(t, http.StatusOK, api.Delete("/iam/tenants/"+tenant.ID.String()+"?version=2").Code)
+	assert.Equal(t, http.StatusConflict, api.Delete("/iam/tenants/"+tenant.ID.String()+"?version=2").Code)
 
 	assert.Equal(t, http.StatusConflict, api.Post("/iam/tenants", map[string]any{"slug": "acme", "name": "Duplicate"}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/tenants", map[string]any{"slug": "BAD", "name": "Invalid"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/tenants/missing").Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/tenants/"+wireID("missing")).Code)
 }
 
 func TestTenantHTTPStorageFailure(t *testing.T) {

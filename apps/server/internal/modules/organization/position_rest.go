@@ -71,7 +71,11 @@ type deletedPosition struct {
 
 func RegisterPositionREST(api huma.API, service *PositionService, registrar *authz.Registrar) {
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-list-positions", Method: http.MethodGet, Path: "/iam/positions", Summary: "List tenant positions", Tags: []string{"organization"}, Errors: []int{http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "view"}, func(ctx context.Context, in *positionListInput) (*respx.Body[[]Position], error) {
-		items, err := service.List(ctx, in.TenantID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.List(ctx, tenantID)
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -79,7 +83,11 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-create-position", Method: http.MethodPost, Path: "/iam/positions", Summary: "Create a tenant position", Tags: []string{"organization"}, DefaultStatus: http.StatusCreated, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "create"}, func(ctx context.Context, in *createPositionInput) (*respx.Body[Position], error) {
-		item, err := service.Create(ctx, in.TenantID, CreatePosition{Code: in.Body.Code, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Create(ctx, tenantID, CreatePosition{Code: in.Body.Code, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder})
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -87,7 +95,15 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-get-position", Method: http.MethodGet, Path: "/iam/positions/{id}", Summary: "Get a tenant position", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "view"}, func(ctx context.Context, in *positionIDInput) (*respx.Body[Position], error) {
-		item, err := service.Get(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Get(ctx, tenantID, id)
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -95,7 +111,15 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-update-position", Method: http.MethodPatch, Path: "/iam/positions/{id}", Summary: "Update a tenant position", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "update"}, func(ctx context.Context, in *updatePositionInput) (*respx.Body[Position], error) {
-		item, err := service.Update(ctx, in.TenantID, in.ID, UpdatePosition{Code: in.Body.Code, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder, Version: in.Body.Version})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.Update(ctx, tenantID, id, UpdatePosition{Code: in.Body.Code, Name: in.Body.Name, Status: in.Body.Status, SortOrder: in.Body.SortOrder, Version: in.Body.Version})
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -103,14 +127,30 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-delete-position", Method: http.MethodDelete, Path: "/iam/positions/{id}", Summary: "Delete an empty tenant position", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "delete"}, func(ctx context.Context, in *deletePositionInput) (*respx.Body[deletedPosition], error) {
-		if err := service.Delete(ctx, in.TenantID, in.ID, in.Version); err != nil {
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.Delete(ctx, tenantID, id, in.Version); err != nil {
 			return nil, positionError(err)
 		}
 		return respx.OK(ctx, deletedPosition{Deleted: true}), nil
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-list-position-members", Method: http.MethodGet, Path: "/iam/positions/{id}/members", Summary: "List position members", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "view"}, func(ctx context.Context, in *positionIDInput) (*respx.Body[[]PositionMember], error) {
-		items, err := service.ListMembers(ctx, in.TenantID, in.ID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := service.ListMembers(ctx, tenantID, id)
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -118,7 +158,19 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-put-position-member", Method: http.MethodPut, Path: "/iam/positions/{id}/members/{principal_id}", Summary: "Assign or update a position member", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "manage_member"}, func(ctx context.Context, in *putPositionMemberInput) (*respx.Body[PositionMember], error) {
-		item, err := service.PutMember(ctx, in.TenantID, in.ID, in.PrincipalID, PositionMemberWindow{StartsAt: in.Body.StartsAt, EndsAt: in.Body.EndsAt})
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principalID, err := parseOrganizationID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		item, err := service.PutMember(ctx, tenantID, id, principalID, PositionMemberWindow{StartsAt: in.Body.StartsAt, EndsAt: in.Body.EndsAt})
 		if err != nil {
 			return nil, positionError(err)
 		}
@@ -126,7 +178,19 @@ func RegisterPositionREST(api huma.API, service *PositionService, registrar *aut
 	})
 
 	authz.Register(registrar, api, huma.Operation{OperationID: "organization-delete-position-member", Method: http.MethodDelete, Path: "/iam/positions/{id}/members/{principal_id}", Summary: "Remove a position member", Tags: []string{"organization"}, Errors: []int{http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}}, authz.Guard{Resource: "position", Verb: "manage_member"}, func(ctx context.Context, in *positionMemberInput) (*respx.Body[deletedPosition], error) {
-		deleted, err := service.DeleteMember(ctx, in.TenantID, in.ID, in.PrincipalID)
+		tenantID, err := parseOrganizationID(in.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := parseOrganizationID(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		principalID, err := parseOrganizationID(in.PrincipalID)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := service.DeleteMember(ctx, tenantID, id, principalID)
 		if err != nil {
 			return nil, positionError(err)
 		}

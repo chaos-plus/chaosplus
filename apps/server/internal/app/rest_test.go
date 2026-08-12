@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -48,8 +50,6 @@ func TestRESTOperationsDeclareAuthorization(t *testing.T) {
 		"federation-saml-sso",
 		"federation-saml-sso-post",
 		"federation-start-login",
-		"iam-accept-entity-invite",
-		"iam-lookup-entity-invite",
 		"lookup-geoip",
 		"lookup-geoip-self",
 		"next-guid",
@@ -97,7 +97,7 @@ func TestOpenAPIQualityContract(t *testing.T) {
 		SigningKey: base64.RawStdEncoding.EncodeToString(seed),
 		MFA:        authn.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
 		Web:        authn.WebConfig{Enabled: true, CookieName: "session", SessionTTL: time.Hour, IdleTTL: 10 * time.Minute},
-	}, db)
+	}, db, authnmod.WithIDGenerator(newTestIDGenerator()))
 	require.NoError(t, err)
 	registry := authz.DefaultRegistry()
 	registrar := authz.NewRegistrar(registry, web, iam.NewAuthorizer(db), iam.NewMembershipChecker(db))
@@ -296,6 +296,29 @@ func TestTrustedProxyClientIP(t *testing.T) {
 
 	_, err = trustedProxyClientIP([]string{"invalid"})
 	assert.ErrorContains(t, err, "trusted proxy")
+}
+
+type hijackableResponseWriter struct {
+	header http.Header
+	conn   net.Conn
+}
+
+func (w *hijackableResponseWriter) Header() http.Header             { return w.header }
+func (w *hijackableResponseWriter) Write(value []byte) (int, error) { return len(value), nil }
+func (w *hijackableResponseWriter) WriteHeader(int)                 {}
+func (w *hijackableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func TestStatusWriterPreservesProtocolUpgrade(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	wrapped := &statusWriter{ResponseWriter: &hijackableResponseWriter{header: http.Header{}, conn: server}}
+	hijacker, ok := any(wrapped).(http.Hijacker)
+	require.True(t, ok)
+	conn, _, err := hijacker.Hijack()
+	require.NoError(t, err)
+	assert.Same(t, server, conn)
 }
 
 func buildRouter(cfg Config) chi.Router {

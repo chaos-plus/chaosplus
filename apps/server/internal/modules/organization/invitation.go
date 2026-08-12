@@ -13,6 +13,7 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
@@ -37,14 +38,14 @@ var (
 )
 
 type Invitation struct {
-	ID           string    `json:"id"`
-	TenantID     string    `json:"tenant_id"`
+	ID           guid.ID   `json:"id"`
+	TenantID     guid.ID   `json:"tenant_id"`
 	Email        string    `json:"email"`
 	Status       string    `json:"status"`
-	DepartmentID string    `json:"department_id,omitempty"`
-	RoleIDs      []string  `json:"role_ids"`
+	DepartmentID guid.ID   `json:"department_id,omitempty"`
+	RoleIDs      []guid.ID `json:"role_ids"`
 	ExpiresAt    time.Time `json:"expires_at"`
-	AcceptedBy   string    `json:"accepted_by,omitempty"`
+	AcceptedBy   guid.ID   `json:"accepted_by,omitempty"`
 	AcceptedAt   time.Time `json:"accepted_at,omitempty"`
 	RevokedAt    time.Time `json:"revoked_at,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -52,17 +53,17 @@ type Invitation struct {
 }
 
 type InvitationAcceptance struct {
-	InvitationID    string `json:"invitation_id"`
-	TenantID        string `json:"tenant_id"`
-	PrincipalID     string `json:"principal_id"`
-	Email           string `json:"email"`
-	AlreadyAccepted bool   `json:"already_accepted"`
+	InvitationID    guid.ID `json:"invitation_id"`
+	TenantID        guid.ID `json:"tenant_id"`
+	PrincipalID     guid.ID `json:"principal_id"`
+	Email           string  `json:"email"`
+	AlreadyAccepted bool    `json:"already_accepted"`
 }
 
 type CreateInvitation struct {
 	Email        string
-	DepartmentID string
-	RoleIDs      []string
+	DepartmentID guid.ID
+	RoleIDs      []guid.ID
 	TTL          time.Duration
 }
 
@@ -74,23 +75,23 @@ type AcceptInvitation struct {
 }
 
 type InvitationCredentials interface {
-	IssueInvitationToken(string) (string, string, error)
+	IssueInvitationToken(guid.ID) (string, string, error)
 	InvitationTokenDigest(string) (string, error)
 }
 
-type InvitationPrincipalCreator func(context.Context, bun.IDB, string, string, string, string, string) (string, error)
+type InvitationPrincipalCreator func(context.Context, bun.IDB, guid.ID, string, string, string, string) (guid.ID, error)
 
 type invitationRow struct {
 	bun.BaseModel `bun:"table:iam_invitations"`
-	TenantID      string `bun:"tenant_id,pk"`
-	ID            string `bun:"id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	ID            guid.ID `bun:"id,pk"`
 	Email         string
 	EmailKey      string
 	TokenHMAC     string
 	Status        string
-	DepartmentID  string
+	DepartmentID  guid.ID
 	ExpiresAt     int64
-	AcceptedBy    string
+	AcceptedBy    guid.ID
 	AcceptedAt    int64
 	RevokedAt     int64
 	CreatedAt     int64
@@ -99,9 +100,9 @@ type invitationRow struct {
 
 type invitationRoleRow struct {
 	bun.BaseModel `bun:"table:iam_invitation_roles"`
-	TenantID      string `bun:"tenant_id,pk"`
-	InvitationID  string `bun:"invitation_id,pk"`
-	RoleID        string `bun:"role_id,pk"`
+	TenantID      guid.ID `bun:"tenant_id,pk"`
+	InvitationID  guid.ID `bun:"invitation_id,pk"`
+	RoleID        guid.ID `bun:"role_id,pk"`
 }
 
 type InvitationService struct {
@@ -125,9 +126,8 @@ func NewInvitationService(db *bun.DB, audit auditx.Appender, nextID IDGenerator,
 	return &InvitationService{db: db, dialect: dialect, audit: audit, nextID: nextID, credentials: credentials, createPrincipal: createPrincipal, now: time.Now}
 }
 
-func (s *InvitationService) List(ctx context.Context, tenantID string) ([]Invitation, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if !validTenant(tenantID) {
+func (s *InvitationService) List(ctx context.Context, tenantID guid.ID) ([]Invitation, error) {
+	if tenantID.Zero() {
 		return nil, ErrInvitationInvalid
 	}
 	rows := make([]invitationRow, 0)
@@ -137,7 +137,7 @@ func (s *InvitationService) List(ctx context.Context, tenantID string) ([]Invita
 	return s.invitations(ctx, rows)
 }
 
-func (s *InvitationService) Create(ctx context.Context, tenantID string, input CreateInvitation) (Invitation, string, error) {
+func (s *InvitationService) Create(ctx context.Context, tenantID guid.ID, input CreateInvitation) (Invitation, string, error) {
 	tenantID, input, err := normalizeInvitation(tenantID, input)
 	if err != nil {
 		return Invitation{}, "", err
@@ -153,7 +153,7 @@ func (s *InvitationService) Create(ctx context.Context, tenantID string, input C
 	now := s.now().UTC()
 	row := invitationRow{TenantID: tenantID, ID: id, Email: input.Email, EmailKey: input.Email, TokenHMAC: digest, Status: InvitationPending, DepartmentID: input.DepartmentID, ExpiresAt: now.Add(input.TTL).UnixMilli(), CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
 	event := auditx.NewEvent(ctx, tenantID, "invitation_created", "invitation", id)
-	event.Detail["department_assigned"] = input.DepartmentID != ""
+	event.Detail["department_assigned"] = !input.DepartmentID.Zero()
 	event.Detail["role_count"] = len(input.RoleIDs)
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := policyx.Lock(ctx, tx, s.dialect, tenantID); err != nil {
@@ -179,9 +179,8 @@ func (s *InvitationService) Create(ctx context.Context, tenantID string, input C
 	return invitationFromRow(row, input.RoleIDs, now), token, nil
 }
 
-func (s *InvitationService) Revoke(ctx context.Context, tenantID, id string) error {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
-	if !validTenant(tenantID) || !validInvitationID(id) {
+func (s *InvitationService) Revoke(ctx context.Context, tenantID, id guid.ID) error {
+	if tenantID.Zero() || !validInvitationID(id) {
 		return ErrInvitationInvalid
 	}
 	now := s.now().UTC()
@@ -215,12 +214,11 @@ func (s *InvitationService) Revoke(ctx context.Context, tenantID, id string) err
 	return nil
 }
 
-func (s *InvitationService) Resend(ctx context.Context, tenantID, id string, ttl time.Duration) (Invitation, string, error) {
-	tenantID, id = strings.TrimSpace(tenantID), strings.TrimSpace(id)
+func (s *InvitationService) Resend(ctx context.Context, tenantID, id guid.ID, ttl time.Duration) (Invitation, string, error) {
 	if ttl == 0 {
 		ttl = defaultInvitationTTL
 	}
-	if !validTenant(tenantID) || !validInvitationID(id) || ttl < time.Hour || ttl > maxInvitationTTL {
+	if tenantID.Zero() || !validInvitationID(id) || ttl < time.Hour || ttl > maxInvitationTTL {
 		return Invitation{}, "", ErrInvitationInvalid
 	}
 	token, digest, err := s.credentials.IssueInvitationToken(id)
@@ -266,7 +264,10 @@ func (s *InvitationService) Resend(ctx context.Context, tenantID, id string, ttl
 
 func (s *InvitationService) Accept(ctx context.Context, input AcceptInvitation) (InvitationAcceptance, error) {
 	input.Token, input.LoginName, input.DisplayName = strings.TrimSpace(input.Token), strings.TrimSpace(input.LoginName), strings.TrimSpace(input.DisplayName)
-	id := invitationIDFromToken(input.Token)
+	id, idErr := invitationIDFromToken(input.Token)
+	if idErr != nil {
+		return InvitationAcceptance{}, ErrInvitationCredential
+	}
 	if !validInvitationID(id) || input.LoginName == "" || len(input.LoginName) > 200 || len(input.Password) < 12 || len(input.Password) > 1024 || len(input.DisplayName) > 128 {
 		return InvitationAcceptance{}, ErrInvitationCredential
 	}
@@ -308,13 +309,13 @@ func (s *InvitationService) Accept(ctx context.Context, input AcceptInvitation) 
 		if err != nil {
 			return err
 		}
-		if row.DepartmentID != "" {
+		if !row.DepartmentID.Zero() {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO iam_member_departments (tenant_id, principal_id, department_id, updated_at) VALUES (?, ?, ?, ?)`, row.TenantID, principalID, row.DepartmentID, now.UnixMilli()); err != nil {
 				return fmt.Errorf("assign invitation department: %w", err)
 			}
 		}
 		for _, roleID := range roles {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO iam_role_members (tenant_id, role_id, user_subject, created_at) VALUES (?, ?, ?, ?)`, row.TenantID, roleID, principalID, now.UnixMilli()); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO iam_role_members (tenant_id, role_id, principal_id, created_at) VALUES (?, ?, ?, ?)`, row.TenantID, roleID, principalID, now.UnixMilli()); err != nil {
 				return fmt.Errorf("assign invitation role: %w", err)
 			}
 		}
@@ -330,7 +331,7 @@ func (s *InvitationService) Accept(ctx context.Context, input AcceptInvitation) 
 		}
 		event := auditx.NewEvent(ctx, row.TenantID, "invitation_accepted", "invitation", row.ID)
 		event.PrincipalID = principalID
-		event.Detail["department_assigned"] = row.DepartmentID != ""
+		event.Detail["department_assigned"] = !row.DepartmentID.Zero()
 		event.Detail["role_count"] = len(roles)
 		if err := s.audit(ctx, tx, event); err != nil {
 			return err
@@ -344,24 +345,21 @@ func (s *InvitationService) Accept(ctx context.Context, input AcceptInvitation) 
 	return accepted, nil
 }
 
-func normalizeInvitation(tenantID string, input CreateInvitation) (string, CreateInvitation, error) {
-	tenantID = strings.TrimSpace(tenantID)
+func normalizeInvitation(tenantID guid.ID, input CreateInvitation) (guid.ID, CreateInvitation, error) {
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
-	input.DepartmentID = strings.TrimSpace(input.DepartmentID)
 	if input.TTL == 0 {
 		input.TTL = defaultInvitationTTL
 	}
 	parsed, err := mail.ParseAddress(input.Email)
-	if !validTenant(tenantID) || err != nil || !strings.EqualFold(parsed.Address, input.Email) || len(input.Email) > 320 ||
+	if tenantID.Zero() || err != nil || !strings.EqualFold(parsed.Address, input.Email) || len(input.Email) > 320 ||
 		!validOptionalID(input.DepartmentID) || input.TTL < time.Hour || input.TTL > maxInvitationTTL {
-		return "", CreateInvitation{}, ErrInvitationInvalid
+		return 0, CreateInvitation{}, ErrInvitationInvalid
 	}
-	seen := make(map[string]struct{}, len(input.RoleIDs))
-	roles := make([]string, 0, len(input.RoleIDs))
+	seen := make(map[guid.ID]struct{}, len(input.RoleIDs))
+	roles := make([]guid.ID, 0, len(input.RoleIDs))
 	for _, roleID := range input.RoleIDs {
-		roleID = strings.TrimSpace(roleID)
 		if !validInvitationID(roleID) {
-			return "", CreateInvitation{}, ErrInvitationInvalid
+			return 0, CreateInvitation{}, ErrInvitationInvalid
 		}
 		if _, ok := seen[roleID]; ok {
 			continue
@@ -369,12 +367,12 @@ func normalizeInvitation(tenantID string, input CreateInvitation) (string, Creat
 		seen[roleID] = struct{}{}
 		roles = append(roles, roleID)
 	}
-	sort.Strings(roles)
+	sort.Slice(roles, func(i, j int) bool { return roles[i] < roles[j] })
 	input.RoleIDs = roles
 	return tenantID, input, nil
 }
 
-func (s *InvitationService) validateTenantAndBindings(ctx context.Context, db bun.IDB, tenantID, departmentID string, roleIDs []string) error {
+func (s *InvitationService) validateTenantAndBindings(ctx context.Context, db bun.IDB, tenantID, departmentID guid.ID, roleIDs []guid.ID) error {
 	tenant, err := getTenantRow(ctx, db, tenantID)
 	if err != nil {
 		return err
@@ -382,7 +380,7 @@ func (s *InvitationService) validateTenantAndBindings(ctx context.Context, db bu
 	if tenant.Status != TenantActive {
 		return ErrInvitationBindingInactive
 	}
-	if departmentID != "" {
+	if !departmentID.Zero() {
 		var status string
 		if err := db.NewSelect().Table("iam_departments").Column("status").Where("tenant_id = ? AND id = ?", tenantID, departmentID).Scan(ctx, &status); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -406,12 +404,12 @@ func (s *InvitationService) validateTenantAndBindings(ctx context.Context, db bu
 	return nil
 }
 
-func getInvitation(ctx context.Context, db bun.IDB, dialect, tenantID, id string) (invitationRow, error) {
+func getInvitation(ctx context.Context, db bun.IDB, dialect string, tenantID, id guid.ID) (invitationRow, error) {
 	query := db.NewSelect().Model((*invitationRow)(nil)).Where("tenant_id = ? AND id = ?", tenantID, id)
 	return scanInvitation(ctx, query, dialect)
 }
 
-func getInvitationByID(ctx context.Context, db bun.IDB, dialect, id string) (invitationRow, error) {
+func getInvitationByID(ctx context.Context, db bun.IDB, dialect string, id guid.ID) (invitationRow, error) {
 	query := db.NewSelect().Model((*invitationRow)(nil)).Where("id = ?", id)
 	return scanInvitation(ctx, query, dialect)
 }
@@ -430,7 +428,7 @@ func scanInvitation(ctx context.Context, query *bun.SelectQuery, dialect string)
 	return row, nil
 }
 
-func insertInvitationRoles(ctx context.Context, db bun.IDB, tenantID, invitationID string, roleIDs []string) error {
+func insertInvitationRoles(ctx context.Context, db bun.IDB, tenantID, invitationID guid.ID, roleIDs []guid.ID) error {
 	for _, roleID := range roleIDs {
 		row := invitationRoleRow{TenantID: tenantID, InvitationID: invitationID, RoleID: roleID}
 		if _, err := db.NewInsert().Model(&row).Exec(ctx); err != nil {
@@ -440,8 +438,8 @@ func insertInvitationRoles(ctx context.Context, db bun.IDB, tenantID, invitation
 	return nil
 }
 
-func invitationRoleIDs(ctx context.Context, db bun.IDB, tenantID, invitationID string) ([]string, error) {
-	roleIDs := make([]string, 0)
+func invitationRoleIDs(ctx context.Context, db bun.IDB, tenantID, invitationID guid.ID) ([]guid.ID, error) {
+	roleIDs := make([]guid.ID, 0)
 	if err := db.NewSelect().Model((*invitationRoleRow)(nil)).Column("role_id").Where("tenant_id = ? AND invitation_id = ?", tenantID, invitationID).Order("role_id ASC").Scan(ctx, &roleIDs); err != nil {
 		return nil, fmt.Errorf("list invitation roles: %w", err)
 	}
@@ -461,12 +459,12 @@ func (s *InvitationService) invitations(ctx context.Context, rows []invitationRo
 	return items, nil
 }
 
-func invitationFromRow(row invitationRow, roleIDs []string, now time.Time) Invitation {
+func invitationFromRow(row invitationRow, roleIDs []guid.ID, now time.Time) Invitation {
 	status := row.Status
 	if status == InvitationPending && row.ExpiresAt <= now.UnixMilli() {
 		status = InvitationExpired
 	}
-	item := Invitation{ID: row.ID, TenantID: row.TenantID, Email: row.Email, Status: status, DepartmentID: row.DepartmentID, RoleIDs: append([]string{}, roleIDs...), ExpiresAt: unixTime(row.ExpiresAt), AcceptedBy: row.AcceptedBy, CreatedAt: unixTime(row.CreatedAt), UpdatedAt: unixTime(row.UpdatedAt)}
+	item := Invitation{ID: row.ID, TenantID: row.TenantID, Email: row.Email, Status: status, DepartmentID: row.DepartmentID, RoleIDs: append([]guid.ID{}, roleIDs...), ExpiresAt: unixTime(row.ExpiresAt), AcceptedBy: row.AcceptedBy, CreatedAt: unixTime(row.CreatedAt), UpdatedAt: unixTime(row.UpdatedAt)}
 	if row.AcceptedAt > 0 {
 		item.AcceptedAt = unixTime(row.AcceptedAt)
 	}
@@ -476,16 +474,16 @@ func invitationFromRow(row invitationRow, roleIDs []string, now time.Time) Invit
 	return item
 }
 
-func invitationIDFromToken(token string) string {
-	const prefix = "cpi1_"
+func invitationIDFromToken(token string) (guid.ID, error) {
+	const prefix = "inv1_"
 	if !strings.HasPrefix(token, prefix) {
-		return ""
+		return 0, ErrInvitationCredential
 	}
 	id, _, ok := strings.Cut(strings.TrimPrefix(token, prefix), ".")
 	if !ok {
-		return ""
+		return 0, ErrInvitationCredential
 	}
-	return id
+	return guid.Parse(id)
 }
 
-func validInvitationID(value string) bool { return value != "" && len(value) <= 32 }
+func validInvitationID(value guid.ID) bool { return !value.Zero() }

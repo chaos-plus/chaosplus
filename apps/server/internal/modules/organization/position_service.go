@@ -8,11 +8,12 @@ import (
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/uptrace/bun"
 )
 
 type ActiveMemberChecker interface {
-	IsMemberActiveOn(context.Context, bun.IDB, string, string) (bool, error)
+	IsMemberActiveOn(context.Context, bun.IDB, guid.ID, guid.ID) (bool, error)
 }
 
 type PositionService struct {
@@ -31,9 +32,8 @@ func NewPositionService(db *bun.DB, audit auditx.Appender, members ActiveMemberC
 	return &PositionService{repo: NewPositionRepository(db), audit: audit, members: members, administrators: administrators, nextID: nextID, now: time.Now}
 }
 
-func (s *PositionService) List(ctx context.Context, tenantID string) ([]Position, error) {
-	tenantID = normalizePositionTenant(tenantID)
-	if !validTenant(tenantID) {
+func (s *PositionService) List(ctx context.Context, tenantID guid.ID) ([]Position, error) {
+	if tenantID.Zero() {
 		return nil, ErrPositionInvalid
 	}
 	rows, err := s.repo.list(ctx, tenantID)
@@ -47,9 +47,8 @@ func (s *PositionService) List(ctx context.Context, tenantID string) ([]Position
 	return result, nil
 }
 
-func (s *PositionService) Get(ctx context.Context, tenantID, id string) (Position, error) {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) {
+func (s *PositionService) Get(ctx context.Context, tenantID, id guid.ID) (Position, error) {
+	if tenantID.Zero() || !validID(id) {
 		return Position{}, ErrPositionInvalid
 	}
 	row, err := s.repo.get(ctx, tenantID, id)
@@ -59,7 +58,7 @@ func (s *PositionService) Get(ctx context.Context, tenantID, id string) (Positio
 	return positionFromRow(row), nil
 }
 
-func (s *PositionService) Create(ctx context.Context, tenantID string, input CreatePosition) (Position, error) {
+func (s *PositionService) Create(ctx context.Context, tenantID guid.ID, input CreatePosition) (Position, error) {
 	tenantID, input, err := normalizePositionCreate(tenantID, input)
 	if err != nil {
 		return Position{}, err
@@ -91,7 +90,7 @@ func (s *PositionService) Create(ctx context.Context, tenantID string, input Cre
 	return positionFromRow(row), nil
 }
 
-func (s *PositionService) Update(ctx context.Context, tenantID, id string, input UpdatePosition) (Position, error) {
+func (s *PositionService) Update(ctx context.Context, tenantID, id guid.ID, input UpdatePosition) (Position, error) {
 	tenantID, id, input, err := normalizePositionUpdate(tenantID, id, input)
 	if err != nil {
 		return Position{}, err
@@ -156,9 +155,8 @@ func (s *PositionService) Update(ctx context.Context, tenantID, id string, input
 	return positionFromRow(updated), nil
 }
 
-func (s *PositionService) Delete(ctx context.Context, tenantID, id string, version int64) error {
-	tenantID, id = trimPair(tenantID, id)
-	if !validTenant(tenantID) || !validID(id) || version < 1 {
+func (s *PositionService) Delete(ctx context.Context, tenantID, id guid.ID, version int64) error {
+	if tenantID.Zero() || !validID(id) || version < 1 {
 		return ErrPositionInvalid
 	}
 	now := s.now().UTC().UnixMilli()
@@ -186,9 +184,8 @@ func (s *PositionService) Delete(ctx context.Context, tenantID, id string, versi
 	return nil
 }
 
-func (s *PositionService) ListMembers(ctx context.Context, tenantID, positionID string) ([]PositionMember, error) {
-	tenantID, positionID = trimPair(tenantID, positionID)
-	if !validTenant(tenantID) || !validID(positionID) {
+func (s *PositionService) ListMembers(ctx context.Context, tenantID, positionID guid.ID) ([]PositionMember, error) {
+	if tenantID.Zero() || !validID(positionID) {
 		return nil, ErrPositionInvalid
 	}
 	if _, err := s.repo.get(ctx, tenantID, positionID); err != nil {
@@ -205,7 +202,7 @@ func (s *PositionService) ListMembers(ctx context.Context, tenantID, positionID 
 	return result, nil
 }
 
-func (s *PositionService) PutMember(ctx context.Context, tenantID, positionID, principalID string, input PositionMemberWindow) (PositionMember, error) {
+func (s *PositionService) PutMember(ctx context.Context, tenantID, positionID, principalID guid.ID, input PositionMemberWindow) (PositionMember, error) {
 	tenantID, positionID, principalID, input, err := normalizePositionMember(tenantID, positionID, principalID, input)
 	if err != nil {
 		return PositionMember{}, err
@@ -265,7 +262,7 @@ func (s *PositionService) PutMember(ctx context.Context, tenantID, positionID, p
 	return positionMemberFromRow(result), nil
 }
 
-func (s *PositionService) DeleteMember(ctx context.Context, tenantID, positionID, principalID string) (bool, error) {
+func (s *PositionService) DeleteMember(ctx context.Context, tenantID, positionID, principalID guid.ID) (bool, error) {
 	tenantID, positionID, principalID, _, err := normalizePositionMember(tenantID, positionID, principalID, PositionMemberWindow{})
 	if err != nil {
 		return false, err
@@ -326,9 +323,4 @@ func optionalUnixMilli(value *time.Time) int64 {
 		return 0
 	}
 	return value.UTC().UnixMilli()
-}
-
-func normalizePositionTenant(value string) string {
-	value, _ = trimPair(value, "")
-	return value
 }
