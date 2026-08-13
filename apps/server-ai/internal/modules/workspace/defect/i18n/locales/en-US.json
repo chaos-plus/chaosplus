@@ -1,0 +1,1 @@
+{"workspace.defect.invalid":"The defect is invalid.","workspace.defect.not_found":"The defect was not found.","workspace.defect.version_conflict":"The defect was changed by another request.","workspace.defect.state_conflict":"The defect cannot enter the requested state.","workspace.defect.unavailable":"The defect service is unavailable."}

@@ -6,13 +6,27 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
-type Service struct{ repository Repository }
+type KeyResultUsage interface {
+	KeyResultsInUse(context.Context, []guid.ID) (bool, error)
+}
+
+type Service struct {
+	repository Repository
+	usage      KeyResultUsage
+}
 
 func NewService(repository Repository) *Service {
 	if repository == nil {
 		panic("objective service requires repository")
 	}
 	return &Service{repository: repository}
+}
+
+func (s *Service) SetKeyResultUsage(usage KeyResultUsage) {
+	if usage == nil {
+		panic("objective service requires key result usage")
+	}
+	s.usage = usage
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Objective, error) {
@@ -22,6 +36,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Objective, er
 	}
 	if err := validateKeyResults(input.KeyResults); err != nil {
 		return nil, err
+	}
+	for _, result := range input.KeyResults {
+		if result.ID != nil {
+			return nil, ErrInvalid
+		}
 	}
 	if err := s.repository.Create(ctx, value, input.KeyResults); err != nil {
 		return nil, err
@@ -80,7 +99,8 @@ func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*O
 	}
 	results := make([]KeyResultInput, len(value.KeyResults))
 	for i, result := range value.KeyResults {
-		results[i] = KeyResultInput{Title: result.Title, TargetValue: result.TargetValue, CurrentValue: result.CurrentValue, Unit: result.Unit}
+		id := result.ID
+		results[i] = KeyResultInput{ID: &id, Title: result.Title, TargetValue: result.TargetValue, CurrentValue: result.CurrentValue, Unit: result.Unit}
 	}
 	if input.KeyResults != nil {
 		results = *input.KeyResults
@@ -89,6 +109,32 @@ func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*O
 		return nil, err
 	}
 	if err := validateKeyResults(results); err != nil {
+		return nil, err
+	}
+	current := make(map[guid.ID]struct{}, len(value.KeyResults))
+	for _, result := range value.KeyResults {
+		current[result.ID] = struct{}{}
+	}
+	kept := make(map[guid.ID]struct{}, len(results))
+	for _, result := range results {
+		if result.ID == nil {
+			continue
+		}
+		if _, ok := current[*result.ID]; !ok {
+			return nil, ErrInvalid
+		}
+		if _, duplicate := kept[*result.ID]; duplicate {
+			return nil, ErrInvalid
+		}
+		kept[*result.ID] = struct{}{}
+	}
+	removed := make([]guid.ID, 0, len(current)-len(kept))
+	for id := range current {
+		if _, ok := kept[id]; !ok {
+			removed = append(removed, id)
+		}
+	}
+	if err := s.ensureUnused(ctx, removed); err != nil {
 		return nil, err
 	}
 	if err := s.repository.Update(ctx, value, results, input.Version); err != nil {
@@ -101,5 +147,36 @@ func (s *Service) Delete(ctx context.Context, id guid.ID, version int64) error {
 	if id.Zero() || version < 1 {
 		return ErrInvalid
 	}
+	value, err := s.repository.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if value.Version != version {
+		return ErrVersionConflict
+	}
+	ids := make([]guid.ID, len(value.KeyResults))
+	for i := range value.KeyResults {
+		ids[i] = value.KeyResults[i].ID
+	}
+	if err := s.ensureUnused(ctx, ids); err != nil {
+		return err
+	}
 	return s.repository.Delete(ctx, id, version)
+}
+
+func (s *Service) ensureUnused(ctx context.Context, ids []guid.ID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if s.usage == nil {
+		return ErrStateConflict
+	}
+	inUse, err := s.usage.KeyResultsInUse(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return ErrStateConflict
+	}
+	return nil
 }

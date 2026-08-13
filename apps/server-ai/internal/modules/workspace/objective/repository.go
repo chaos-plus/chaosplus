@@ -21,6 +21,37 @@ type Repository interface {
 	Delete(context.Context, guid.ID, int64) error
 }
 
+func (r *BunRepository) KeyResultsExist(ctx context.Context, ids []guid.ID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tenantID, entityID, _, err := scope(ctx)
+	if err != nil {
+		return err
+	}
+	unique := make(map[guid.ID]struct{}, len(ids))
+	for _, id := range ids {
+		if id.Zero() {
+			return ErrInvalid
+		}
+		unique[id] = struct{}{}
+	}
+	values := make([]guid.ID, 0, len(unique))
+	for id := range unique {
+		values = append(values, id)
+	}
+	count, err := r.db.NewSelect().Model((*KeyResult)(nil)).
+		Where("tenant_id = ? AND entity_id = ? AND deleted_at = 0", tenantID, entityID).
+		Where("id IN (?)", bun.List(values)).Count(ctx)
+	if err != nil {
+		return fmt.Errorf("validate key result references: %w", err)
+	}
+	if count != len(values) {
+		return ErrNotFound
+	}
+	return nil
+}
+
 type BunRepository struct {
 	db     *bun.DB
 	nextID func() (guid.ID, error)
@@ -57,7 +88,7 @@ func (r *BunRepository) Create(ctx context.Context, value *Objective, inputs []K
 	value.CreatedAt, value.UpdatedAt = now, now
 	value.CreatedBy, value.UpdatedBy, value.Version = principalID, principalID, 1
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(value).Table("workspace_objectives").Exec(ctx); err != nil {
+		if _, err := tx.NewInsert().Model(value).Exec(ctx); err != nil {
 			return fmt.Errorf("create objective: %w", err)
 		}
 		results, err := r.insertKeyResults(ctx, tx, *value, inputs, now, principalID)
@@ -82,7 +113,7 @@ func (r *BunRepository) insertKeyResults(ctx context.Context, tx bun.IDB, object
 			CurrentValue: input.CurrentValue, Unit: strings.TrimSpace(input.Unit), CreatedAt: now,
 			CreatedBy: principalID, UpdatedAt: now, UpdatedBy: principalID, Version: 1,
 		}
-		if _, err := tx.NewInsert().Model(&result).Table("workspace_key_results").Exec(ctx); err != nil {
+		if _, err := tx.NewInsert().Model(&result).Exec(ctx); err != nil {
 			return nil, fmt.Errorf("create key result: %w", err)
 		}
 		results = append(results, result)
@@ -96,7 +127,7 @@ func (r *BunRepository) List(ctx context.Context, status Status) ([]Objective, e
 		return nil, err
 	}
 	items := []Objective{}
-	query := r.db.NewSelect().Model(&items).Table("workspace_objectives").
+	query := r.db.NewSelect().Model(&items).
 		Where("tenant_id = ? AND entity_id = ? AND deleted_at = 0", tenantID, entityID)
 	if status != "" {
 		query = query.Where("status = ?", status)
@@ -119,7 +150,7 @@ func (r *BunRepository) Get(ctx context.Context, id guid.ID) (*Objective, error)
 		return nil, err
 	}
 	value := new(Objective)
-	err = r.db.NewSelect().Model(value).Table("workspace_objectives").
+	err = r.db.NewSelect().Model(value).
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0", id, tenantID, entityID).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -136,7 +167,7 @@ func (r *BunRepository) Get(ctx context.Context, id guid.ID) (*Objective, error)
 
 func (r *BunRepository) listKeyResults(ctx context.Context, db bun.IDB, tenantID, entityID, objectiveID guid.ID) ([]KeyResult, error) {
 	results := []KeyResult{}
-	err := db.NewSelect().Model(&results).Table("workspace_key_results").
+	err := db.NewSelect().Model(&results).
 		Where("tenant_id = ? AND entity_id = ? AND objective_id = ? AND deleted_at = 0", tenantID, entityID, objectiveID).
 		Order("id ASC").Scan(ctx)
 	if err != nil {
@@ -152,7 +183,7 @@ func (r *BunRepository) Update(ctx context.Context, value *Objective, inputs []K
 	}
 	now := time.Now().UTC().UnixMilli()
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		result, err := tx.NewUpdate().Model((*Objective)(nil)).Table("workspace_objectives").
+		result, err := tx.NewUpdate().Model((*Objective)(nil)).
 			Set("owner_id = ?", value.OwnerID).Set("title = ?", value.Title).Set("description = ?", value.Description).
 			Set("period_start = ?", value.PeriodStart).Set("period_end = ?", value.PeriodEnd).Set("status = ?", value.Status).
 			Set("updated_at = ?", now).Set("updated_by = ?", principalID).Set("version = version + 1").
@@ -167,16 +198,58 @@ func (r *BunRepository) Update(ctx context.Context, value *Objective, inputs []K
 		if rows == 0 {
 			return ErrVersionConflict
 		}
-		if _, err := tx.NewUpdate().Model((*KeyResult)(nil)).Table("workspace_key_results").
-			Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).
-			Set("updated_by = ?", principalID).Set("version = version + 1").
-			Where("tenant_id = ? AND entity_id = ? AND objective_id = ? AND deleted_at = 0", tenantID, entityID, value.ID).Exec(ctx); err != nil {
-			return fmt.Errorf("retire key results: %w", err)
+		existing := make(map[guid.ID]KeyResult, len(value.KeyResults))
+		for _, result := range value.KeyResults {
+			existing[result.ID] = result
 		}
-		value.TenantID, value.EntityID = tenantID, entityID
-		results, err := r.insertKeyResults(ctx, tx, *value, inputs, now, principalID)
-		if err != nil {
-			return err
+		kept := make(map[guid.ID]struct{}, len(inputs))
+		results := make([]KeyResult, 0, len(inputs))
+		for _, input := range inputs {
+			if input.ID == nil {
+				value.TenantID, value.EntityID = tenantID, entityID
+				created, err := r.insertKeyResults(ctx, tx, *value, []KeyResultInput{input}, now, principalID)
+				if err != nil {
+					return err
+				}
+				results = append(results, created[0])
+				continue
+			}
+			current, ok := existing[*input.ID]
+			if !ok {
+				return ErrInvalid
+			}
+			updated, err := tx.NewUpdate().Model((*KeyResult)(nil)).
+				Set("owner_id = ?", value.OwnerID).Set("title = ?", strings.TrimSpace(input.Title)).
+				Set("target_value = ?", input.TargetValue).Set("current_value = ?", input.CurrentValue).
+				Set("unit = ?", strings.TrimSpace(input.Unit)).Set("updated_at = ?", now).
+				Set("updated_by = ?", principalID).Set("version = version + 1").
+				Where("id = ? AND tenant_id = ? AND entity_id = ? AND objective_id = ? AND deleted_at = 0 AND version = ?", current.ID, tenantID, entityID, value.ID, current.Version).Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("update key result: %w", err)
+			}
+			rows, err := updated.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if rows == 0 {
+				return ErrVersionConflict
+			}
+			current.OwnerID, current.Title = value.OwnerID, strings.TrimSpace(input.Title)
+			current.TargetValue, current.CurrentValue, current.Unit = input.TargetValue, input.CurrentValue, strings.TrimSpace(input.Unit)
+			current.UpdatedAt, current.UpdatedBy, current.Version = now, principalID, current.Version+1
+			kept[current.ID] = struct{}{}
+			results = append(results, current)
+		}
+		for id := range existing {
+			if _, ok := kept[id]; ok {
+				continue
+			}
+			if _, err := tx.NewUpdate().Model((*KeyResult)(nil)).
+				Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).
+				Set("updated_by = ?", principalID).Set("version = version + 1").
+				Where("id = ? AND tenant_id = ? AND entity_id = ? AND objective_id = ? AND deleted_at = 0", id, tenantID, entityID, value.ID).Exec(ctx); err != nil {
+				return fmt.Errorf("retire key result: %w", err)
+			}
 		}
 		value.KeyResults, value.UpdatedAt, value.UpdatedBy, value.Version = results, now, principalID, version+1
 		return nil
@@ -190,7 +263,7 @@ func (r *BunRepository) Delete(ctx context.Context, id guid.ID, version int64) e
 	}
 	now := time.Now().UTC().UnixMilli()
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		result, err := tx.NewUpdate().Model((*Objective)(nil)).Table("workspace_objectives").
+		result, err := tx.NewUpdate().Model((*Objective)(nil)).
 			Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).
 			Set("updated_by = ?", principalID).Set("version = version + 1").
 			Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ?", id, tenantID, entityID, version).Exec(ctx)
@@ -204,7 +277,7 @@ func (r *BunRepository) Delete(ctx context.Context, id guid.ID, version int64) e
 		if rows == 0 {
 			return ErrVersionConflict
 		}
-		_, err = tx.NewUpdate().Model((*KeyResult)(nil)).Table("workspace_key_results").
+		_, err = tx.NewUpdate().Model((*KeyResult)(nil)).
 			Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).
 			Set("updated_by = ?", principalID).Set("version = version + 1").
 			Where("tenant_id = ? AND entity_id = ? AND objective_id = ? AND deleted_at = 0", tenantID, entityID, id).Exec(ctx)

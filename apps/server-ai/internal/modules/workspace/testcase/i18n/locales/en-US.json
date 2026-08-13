@@ -1,0 +1,1 @@
+{"workspace.testcase.invalid":"The test case is invalid.","workspace.testcase.not_found":"The test case was not found.","workspace.testcase.version_conflict":"The test case was changed by another request.","workspace.testcase.state_conflict":"The test case cannot enter the requested state.","workspace.testcase.unavailable":"The test case service is unavailable."}

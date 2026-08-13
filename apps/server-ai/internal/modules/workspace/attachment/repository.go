@@ -49,7 +49,7 @@ func (r *BunRepository) Create(ctx context.Context, value *Attachment) error {
 	now := time.Now().UTC().UnixMilli()
 	value.Status, value.CreatedAt, value.UpdatedAt = StatusAvailable, now, now
 	value.CreatedBy, value.UpdatedBy, value.Version = principalID, principalID, 1
-	if _, err := r.db.NewInsert().Model(value).Table("workspace_attachments").Exec(ctx); err != nil {
+	if _, err := r.db.NewInsert().Model(value).Exec(ctx); err != nil {
 		return fmt.Errorf("create attachment: %w", err)
 	}
 	return nil
@@ -61,7 +61,7 @@ func (r *BunRepository) List(ctx context.Context, resourceType ResourceType, res
 		return nil, err
 	}
 	items := []Attachment{}
-	err = r.db.NewSelect().Model(&items).Table("workspace_attachments").
+	err = r.db.NewSelect().Model(&items).
 		Where("tenant_id = ? AND entity_id = ? AND resource_type = ? AND resource_id = ? AND deleted_at = 0", tenantID, entityID, resourceType, resourceID).
 		Order("created_at ASC", "id ASC").Scan(ctx)
 	if err != nil {
@@ -76,7 +76,7 @@ func (r *BunRepository) Get(ctx context.Context, id guid.ID) (*Attachment, error
 		return nil, err
 	}
 	value := new(Attachment)
-	err = r.db.NewSelect().Model(value).Table("workspace_attachments").
+	err = r.db.NewSelect().Model(value).
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0", id, tenantID, entityID).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -93,7 +93,7 @@ func (r *BunRepository) MarkDeleting(ctx context.Context, id guid.ID, version in
 		return nil, err
 	}
 	now := time.Now().UTC().UnixMilli()
-	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).Table("workspace_attachments").
+	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).
 		Set("status = ?", StatusDeleting).Set("updated_at = ?", now).Set("updated_by = ?", principalID).Set("version = version + 1").
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ? AND status IN (?, ?)", id, tenantID, entityID, version, StatusAvailable, StatusDeleteFailed).Exec(ctx)
 	if err != nil {
@@ -114,7 +114,7 @@ func (r *BunRepository) MarkDeleteFailed(ctx context.Context, id guid.ID, versio
 	if err != nil {
 		return err
 	}
-	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).Table("workspace_attachments").
+	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).
 		Set("status = ?", StatusDeleteFailed).Set("updated_at = ?", time.Now().UTC().UnixMilli()).Set("updated_by = ?", principalID).Set("version = version + 1").
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ? AND status = ?", id, tenantID, entityID, version, StatusDeleting).Exec(ctx)
 	if err != nil {
@@ -136,7 +136,7 @@ func (r *BunRepository) CompleteDelete(ctx context.Context, id guid.ID, version 
 		return err
 	}
 	now := time.Now().UTC().UnixMilli()
-	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).Table("workspace_attachments").
+	result, err := r.db.NewUpdate().Model((*Attachment)(nil)).
 		Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).Set("updated_by = ?", principalID).Set("version = version + 1").
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ? AND status = ?", id, tenantID, entityID, version, StatusDeleting).Exec(ctx)
 	if err != nil {

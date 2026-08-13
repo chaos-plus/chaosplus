@@ -88,11 +88,73 @@ export interface WorkItem {
   workflowRunId: string;
   assigneeAgent: string;
   channelId: string;
+  requirementId: string;
+  acceptanceCriteria: string;
+  keyResultIds: string[];
+  version: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export const FEEDBACK_CATEGORIES = ["功能缺陷", "样式", "需求偏差", "其他"] as const;
+export interface TestStep {
+  id?: string;
+  position?: number;
+  action: string;
+  expectedResult: string;
+}
+
+export interface TestCase {
+  id: string;
+  requirementId?: string;
+  title: string;
+  description: string;
+  preconditions: string;
+  priority: string;
+  status: string;
+  steps: TestStep[];
+  version: number;
+  updatedAt: number;
+}
+
+export interface TestRun {
+  id: string;
+  testCaseId: string;
+  environment: string;
+  status: string;
+  observedResult: string;
+  failureSummary: string;
+  startedAt: number;
+  completedAt: number;
+  version: number;
+  createdAt: number;
+}
+
+export interface Defect {
+  id: string;
+  requirementId?: string;
+  taskId?: string;
+  testCaseId?: string;
+  testRunId?: string;
+  title: string;
+  description: string;
+  reproductionSteps: string;
+  expectedResult: string;
+  actualResult: string;
+  severity: string;
+  priority: string;
+  status: string;
+  resolution: string;
+  resolutionNote: string;
+  version: number;
+  updatedAt: number;
+}
+
+export const FEEDBACK_CATEGORIES = [
+  "功能缺陷",
+  "样式",
+  "需求偏差",
+  "其他",
+] as const;
 export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number];
 
 export interface Feedback {
@@ -110,6 +172,7 @@ export interface Attachment {
   mime: string;
   sizeBytes: number;
   createdAt: number;
+  version: number;
 }
 
 export interface Okr {
@@ -118,6 +181,18 @@ export interface Okr {
   objective: string;
   period: string;
   keyResults: string;
+  keyResultRows: Array<{
+    id?: string;
+    title: string;
+    currentValue: string;
+    targetValue: string;
+    unit: string;
+  }>;
+  keyResultOptions: Array<{ id: string; title: string }>;
+  status: string;
+  periodStart: number;
+  periodEnd: number;
+  version: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -211,6 +286,7 @@ interface ServerRequirement {
   title: string;
   description: string;
   acceptanceCriteria: string;
+  keyResultIds: string[];
   status: string;
   createdAt: number;
   createdBy: string;
@@ -223,10 +299,17 @@ interface ServerTask {
   tenantId: string;
   entityId: string;
   ownerId: string;
+  requirementId?: string;
   parentId?: string;
   title: string;
   description: string;
   status: string;
+  estimateMs: number;
+  spentMs: number;
+  progress: number;
+  workflowRunId?: string;
+  assigneeId?: string;
+  channelId?: string;
   createdAt: number;
   createdBy: string;
   updatedAt: number;
@@ -242,7 +325,14 @@ interface ServerObjective {
   periodEnd: number;
   createdAt: number;
   updatedAt: number;
-  keyResults: Array<{ id: string; title: string; targetValue: string; currentValue: string }>;
+  version: number;
+  keyResults: Array<{
+    id: string;
+    title: string;
+    targetValue: string;
+    currentValue: string;
+    unit: string;
+  }>;
 }
 interface ServerAttachment {
   id: string;
@@ -252,15 +342,19 @@ interface ServerAttachment {
   contentType: string;
   sizeBytes: number;
   createdAt: number;
+  version: number;
 }
 interface ServerRun {
   id: string;
   status: string;
   createdAt: number;
-  def?: { nodes?: Array<{ id: string; type?: string }>; edges?: Array<{ from: string; to: string; condition?: string }> };
+  def?: {
+    nodes?: Array<{ id: string; type?: string }>;
+    edges?: Array<{ from: string; to: string; condition?: string }>;
+  };
 }
 
-const base = "/api";
+const base = "/control/api";
 
 function headersFor(extra?: Record<string, string>): Headers {
   const headers = new Headers(extra);
@@ -277,13 +371,20 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   const res = await fetch(base + path, { ...init, headers });
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string; detail?: string };
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      detail?: string;
+    };
     throw new Error(body.detail ?? body.error ?? `HTTP ${res.status}`);
   }
   return (await res.json()) as T;
 }
 
-async function upload(resourceType: string, resourceId: string, file: File): Promise<Attachment> {
+async function upload(
+  resourceType: string,
+  resourceId: string,
+  file: File,
+): Promise<Attachment> {
   const fd = new FormData();
   fd.append("resourceType", resourceType);
   fd.append("resourceId", resourceId);
@@ -294,8 +395,13 @@ async function upload(resourceType: string, resourceId: string, file: File): Pro
     headers: headersFor(),
   });
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string; detail?: string };
-    throw new Error(body.detail ?? body.error ?? `上传失败(HTTP ${res.status})`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      detail?: string;
+    };
+    throw new Error(
+      body.detail ?? body.error ?? `上传失败(HTTP ${res.status})`,
+    );
   }
   const created = (await res.json()) as { data?: ServerAttachment };
   return toAttachment(created.data ?? (created as unknown as ServerAttachment));
@@ -310,6 +416,7 @@ function toAttachment(a: ServerAttachment): Attachment {
     mime: a.contentType,
     sizeBytes: a.sizeBytes,
     createdAt: a.createdAt,
+    version: a.version,
   };
 }
 
@@ -361,11 +468,17 @@ function toMessage(m: ServerMessage): ChannelMessage {
     ts: m.createdAt,
     authorMemberId: m.authorId,
     authorKind: m.authorKind,
-    payloadJson: typeof m.payload === "string" ? m.payload : JSON.stringify(m.payload ?? {}),
+    payloadJson:
+      typeof m.payload === "string"
+        ? m.payload
+        : JSON.stringify(m.payload ?? {}),
   };
 }
 
 function toWorkItem(type: string, r: ServerRequirement | ServerTask): WorkItem {
+  const task = type === "task" ? (r as ServerTask) : undefined;
+  const requirement =
+    type === "requirement" ? (r as ServerRequirement) : undefined;
   return {
     id: r.id,
     type,
@@ -373,12 +486,16 @@ function toWorkItem(type: string, r: ServerRequirement | ServerTask): WorkItem {
     description: r.description,
     status: r.status,
     parentId: r.parentId ?? "",
-    estimateHours: 0,
-    spentHours: 0,
-    progress: 0,
-    workflowRunId: "",
-    assigneeAgent: r.ownerId,
-    channelId: "",
+    estimateHours: (task?.estimateMs ?? 0) / 3_600_000,
+    spentHours: (task?.spentMs ?? 0) / 3_600_000,
+    progress: task?.progress ?? 0,
+    workflowRunId: task?.workflowRunId ?? "",
+    assigneeAgent: task?.assigneeId ?? r.ownerId,
+    channelId: task?.channelId ?? "",
+    requirementId: task?.requirementId ?? "",
+    acceptanceCriteria: requirement?.acceptanceCriteria ?? "",
+    keyResultIds: requirement?.keyResultIds ?? [],
+    version: r.version,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
@@ -389,8 +506,25 @@ function toOkr(o: ServerObjective): Okr {
     id: o.id,
     title: o.title,
     objective: o.description,
-    period: `${o.periodStart}-${o.periodEnd}`,
-    keyResults: o.keyResults.map((k) => `${k.title}: ${k.currentValue}/${k.targetValue}`).join("\n"),
+    period: `${new Date(o.periodStart).toISOString().slice(0, 10)} / ${new Date(o.periodEnd).toISOString().slice(0, 10)}`,
+    keyResults: o.keyResults
+      .map((k) => `${k.title}|${k.currentValue}|${k.targetValue}|${k.unit}`)
+      .join("\n"),
+    keyResultRows: o.keyResults.map((keyResult) => ({
+      id: keyResult.id,
+      title: keyResult.title,
+      currentValue: keyResult.currentValue,
+      targetValue: keyResult.targetValue,
+      unit: keyResult.unit,
+    })),
+    keyResultOptions: o.keyResults.map((keyResult) => ({
+      id: keyResult.id,
+      title: keyResult.title,
+    })),
+    status: o.status,
+    periodStart: o.periodStart,
+    periodEnd: o.periodEnd,
+    version: o.version,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
   };
@@ -406,11 +540,28 @@ function toRun(r: ServerRun): Run {
 }
 
 function workItemKind(type: string): "requirement" | "task" {
-  return type === "task" ? "task" : "requirement";
+  if (type === "requirement" || type === "task") return type;
+  throw new Error(`不支持的工作项类型:${type}`);
+}
+
+function parsePeriod(period: string): [number, number] {
+  const [start, end] = period.split("/").map((value) => value.trim());
+  const periodStart = Date.parse(`${start}T00:00:00Z`);
+  const periodEnd = Date.parse(`${end}T23:59:59.999Z`);
+  if (
+    !Number.isFinite(periodStart) ||
+    !Number.isFinite(periodEnd) ||
+    periodEnd < periodStart
+  )
+    throw new Error("周期格式应为 YYYY-MM-DD / YYYY-MM-DD");
+  return [periodStart, periodEnd];
 }
 
 export function machineConnectCommand(token: string): string {
-  const origin = typeof window === "undefined" ? "http://127.0.0.1:8080" : window.location.origin;
+  const origin =
+    typeof window === "undefined"
+      ? "http://127.0.0.1:8080"
+      : window.location.origin;
   // Pass the token via env (RUNNER_TOKEN) so it never lands on argv, where any
   // local process could read it via /proc/<pid>/cmdline (PRD §17.2).
   return `RUNNER_TOKEN=${token} bun run src/serve.ts --server ${origin}/api/machines/ws`;
@@ -434,21 +585,38 @@ export const controlApi = {
     return detail;
   },
   issueToken: () =>
-    req<{ token: string; machineId: string; longTerm: false; expiresAt: number }>("/machines/tokens", {
+    req<{
+      token: string;
+      machineId: string;
+      longTerm: false;
+      expiresAt: number;
+    }>("/machines/tokens", {
       method: "POST",
     }),
   onboardingStatus: (id: string, token: string) =>
-    req<{ state: "waiting" | "connected" | "confirmed" | "expired" | "invalid"; expiresAt?: number }>(
-      `/machines/${id}/onboarding-status`,
-      { method: "POST", body: JSON.stringify({ token }) },
-    ),
+    req<{
+      state: "waiting" | "connected" | "confirmed" | "expired" | "invalid";
+      expiresAt?: number;
+    }>(`/machines/${id}/onboarding-status`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
   confirmMachine: (id: string, token: string) =>
-    req<{ ok: boolean }>(`/machines/${id}/confirm`, { method: "POST", body: JSON.stringify({ token }) }),
-  cancelMachine: (id: string) => req<{ ok: boolean }>(`/machines/${id}`, { method: "DELETE" }),
+    req<{ ok: boolean }>(`/machines/${id}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  cancelMachine: (id: string) =>
+    req<{ ok: boolean }>(`/machines/${id}`, { method: "DELETE" }),
   refreshToken: (id: string) =>
-    req<{ token: string; longTerm: boolean }>(`/machines/${id}/refresh-token`, { method: "POST" }),
+    req<{ token: string; longTerm: boolean }>(`/machines/${id}/refresh-token`, {
+      method: "POST",
+    }),
   machineToken: async (id: string) => {
-    const r = await req<{ data?: { token: string } }>(`/machines/${id}/refresh-token`, { method: "POST" });
+    const r = await req<{ data?: { token: string } }>(
+      `/machines/${id}/refresh-token`,
+      { method: "POST" },
+    );
     const body = r.data ?? (r as unknown as { token: string });
     return { token: body.token };
   },
@@ -460,12 +628,20 @@ export const controlApi = {
   runDetail: async (runId: string): Promise<RunDetailResponse> => {
     const r = await req<{ data: ServerRun }>(`/runs/${runId}`);
     const run = r.data ?? (r as unknown as ServerRun);
-    return { id: run.id, status: run.status, def: run.def ?? { nodes: [], edges: [] } };
+    return {
+      id: run.id,
+      status: run.status,
+      def: run.def ?? { nodes: [], edges: [] },
+    };
   },
   dashboard: async (): Promise<DashboardStats> => {
-    const [runs, machines] = await Promise.all([controlApi.runs().catch(() => []), controlApi.machines().catch(() => [])]);
+    const [runs, machines] = await Promise.all([
+      controlApi.runs().catch(() => []),
+      controlApi.machines().catch(() => []),
+    ]);
     const runsByStatus: Record<string, number> = {};
-    for (const run of runs) runsByStatus[run.status] = (runsByStatus[run.status] ?? 0) + 1;
+    for (const run of runs)
+      runsByStatus[run.status] = (runsByStatus[run.status] ?? 0) + 1;
     return {
       runsByStatus,
       pendingApprovals: [],
@@ -476,15 +652,27 @@ export const controlApi = {
     };
   },
   launchRun: (workflowJSON: unknown, workspace: string) =>
-    req<{ runId: string }>("/runs", { method: "POST", body: JSON.stringify({ workflowJSON, workspace }) }),
-  approve: (runId: string, nodeId: string, approve: boolean, reason?: string, feedback?: Feedback) =>
+    req<{ runId: string }>("/runs", {
+      method: "POST",
+      body: JSON.stringify({ workflowJSON, workspace }),
+    }),
+  approve: (
+    runId: string,
+    nodeId: string,
+    approve: boolean,
+    reason?: string,
+    feedback?: Feedback,
+  ) =>
     req<{ ok: boolean }>(`/runs/${runId}/approvals/${nodeId}`, {
       method: "POST",
       body: JSON.stringify({ approve, reason, feedback }),
     }),
-  pauseRun: (runId: string) => req<{ ok: boolean }>(`/runs/${runId}/pause`, { method: "POST" }),
-  resumeRun: (runId: string) => req<{ ok: boolean }>(`/runs/${runId}/resume`, { method: "POST" }),
-  cancelRun: (runId: string) => req<{ ok: boolean }>(`/runs/${runId}/cancel`, { method: "POST" }),
+  pauseRun: (runId: string) =>
+    req<{ ok: boolean }>(`/runs/${runId}/pause`, { method: "POST" }),
+  resumeRun: (runId: string) =>
+    req<{ ok: boolean }>(`/runs/${runId}/resume`, { method: "POST" }),
+  cancelRun: (runId: string) =>
+    req<{ ok: boolean }>(`/runs/${runId}/cancel`, { method: "POST" }),
 
   agents: async () => {
     const r = await req<{ data: ServerAgent[] }>("/agents");
@@ -494,96 +682,326 @@ export const controlApi = {
     req<Agent>("/agents", { method: "POST", body: JSON.stringify(a) }),
   updateAgent: (id: string, a: Partial<Omit<Agent, "id" | "createdAt">>) =>
     req<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(a) }),
-  deleteAgent: (id: string) => req<{ ok: boolean }>(`/agents/${id}`, { method: "DELETE" }),
+  deleteAgent: (id: string) =>
+    req<{ ok: boolean }>(`/agents/${id}`, { method: "DELETE" }),
   setAgentStatus: (id: string, status: "running" | "stopped") =>
-    req<{ ok: boolean; status: string }>(`/agents/${id}/status`, { method: "POST", body: JSON.stringify({ status }) }),
-  retireAgent: (id: string, body: { force?: boolean; confirm?: string; successor?: string; reason?: string }) =>
-    req<{ ok: boolean; handoverDoc: string }>(`/agents/${id}/retire`, { method: "POST", body: JSON.stringify(body) }),
+    req<{ ok: boolean; status: string }>(`/agents/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  retireAgent: (
+    id: string,
+    body: {
+      force?: boolean;
+      confirm?: string;
+      successor?: string;
+      reason?: string;
+    },
+  ) =>
+    req<{ ok: boolean; handoverDoc: string }>(`/agents/${id}/retire`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   channels: async () => {
     const r = await req<{ data: ServerChannel[] }>("/channels");
     return (r.data ?? (r as unknown as ServerChannel[])).map(toChannel);
   },
   createChannel: async (name: string) => {
-    const r = await req<{ data: ServerChannel }>("/channels", { method: "POST", body: JSON.stringify({ name }) });
+    const r = await req<{ data: ServerChannel }>("/channels", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
     return toChannel(r.data ?? (r as unknown as ServerChannel));
   },
-  deleteChannel: (id: string) => req<{ ok: boolean }>(`/channels/${id}`, { method: "DELETE" }),
+  deleteChannel: (id: string) =>
+    req<{ ok: boolean }>(`/channels/${id}`, { method: "DELETE" }),
   addMember: (id: string, memberId: string, kind: string) =>
-    req<{ ok: boolean }>(`/channels/${id}/members`, { method: "POST", body: JSON.stringify({ memberId, kind }) }),
+    req<{ ok: boolean }>(`/channels/${id}/members`, {
+      method: "POST",
+      body: JSON.stringify({ memberId, kind }),
+    }),
   removeMember: (id: string, memberId: string, kind: string) =>
-    req<{ ok: boolean }>(`/channels/${id}/members/${memberId}/${kind}`, { method: "DELETE" }),
+    req<{ ok: boolean }>(`/channels/${id}/members/${memberId}/${kind}`, {
+      method: "DELETE",
+    }),
   members: async (id: string) => {
-    const r = await req<{ data: ServerChannelMember[] }>(`/channels/${id}/members`);
-    return (r.data ?? (r as unknown as ServerChannelMember[])).map((m) => toMember({ channelId: id, ...m }));
+    const r = await req<{ data: ServerChannelMember[] }>(
+      `/channels/${id}/members`,
+    );
+    return (r.data ?? (r as unknown as ServerChannelMember[])).map((m) =>
+      toMember({ channelId: id, ...m }),
+    );
   },
   messages: async (id: string) => {
     const r = await req<{ data: ServerMessage[] }>(`/channels/${id}/messages`);
     return (r.data ?? (r as unknown as ServerMessage[])).map(toMessage);
   },
   execution: async () => [] as ProgressEntry[],
-  postMessage: (id: string, text: string, attachments?: Array<{ id: string; filename: string; mime: string }>) =>
-    req<{ ok: boolean }>(`/channels/${id}/messages`, { method: "POST", body: JSON.stringify({ text, attachments }) }),
-  uploadChannelAttachment: (channelId: string, file: File) => upload("conversation", channelId, file),
+  postMessage: (
+    id: string,
+    text: string,
+    attachments?: Array<{ id: string; filename: string; mime: string }>,
+  ) =>
+    req<{ ok: boolean }>(`/channels/${id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text, attachments }),
+    }),
+  uploadChannelAttachment: (channelId: string, file: File) =>
+    upload("conversation", channelId, file),
 
   workItems: async (type?: string, status?: string): Promise<WorkItem[]> => {
-    const kinds = type ? [workItemKind(type)] : (["requirement", "task"] as const);
+    const kinds = type
+      ? [workItemKind(type)]
+      : (["requirement", "task"] as const);
     const q = status ? `?status=${encodeURIComponent(status)}` : "";
     const result: WorkItem[] = [];
     for (const kind of kinds) {
-      const r = await req<{ data: Array<ServerRequirement | ServerTask> }>(`/${kind === "requirement" ? "requirements" : "tasks"}${q}`);
-      for (const item of r.data ?? (r as unknown as Array<ServerRequirement | ServerTask>)) {
-        result.push(toWorkItem(kind === "requirement" ? "requirement" : "task", item));
+      const r = await req<{ data: Array<ServerRequirement | ServerTask> }>(
+        `/${kind === "requirement" ? "requirements" : "tasks"}${q}`,
+      );
+      for (const item of r.data ??
+        (r as unknown as Array<ServerRequirement | ServerTask>)) {
+        result.push(
+          toWorkItem(kind === "requirement" ? "requirement" : "task", item),
+        );
       }
     }
     return result;
   },
-  createWorkItem: async (w: Partial<Omit<WorkItem, "id" | "createdAt" | "updatedAt">>) => {
+  createWorkItem: async (
+    w: Partial<Omit<WorkItem, "id" | "createdAt" | "updatedAt">>,
+  ) => {
     const kind = workItemKind(w.type ?? "requirement");
     const path = kind === "requirement" ? "/requirements" : "/tasks";
     const r = await req<{ data: ServerRequirement | ServerTask }>(path, {
       method: "POST",
-      body: JSON.stringify({ title: w.title, description: w.description, parentId: w.parentId || undefined }),
+      body: JSON.stringify(
+        kind === "requirement"
+          ? {
+              title: w.title,
+              description: w.description,
+              acceptanceCriteria: w.acceptanceCriteria ?? "",
+              parentId: w.parentId || undefined,
+              keyResultIds: w.keyResultIds ?? [],
+            }
+          : {
+              title: w.title,
+              description: w.description,
+              parentId: w.parentId || undefined,
+              requirementId: w.requirementId || undefined,
+              estimateMs: Math.round((w.estimateHours ?? 0) * 3_600_000),
+              channelId: w.channelId || undefined,
+            },
+      ),
     });
-    return toWorkItem(kind === "requirement" ? "requirement" : "task", r.data ?? (r as unknown as ServerRequirement));
+    return toWorkItem(
+      kind === "requirement" ? "requirement" : "task",
+      r.data ?? (r as unknown as ServerRequirement),
+    );
   },
   updateWorkItem: async (id: string, w: Partial<WorkItem>) => {
     const kind = workItemKind(w.type ?? "requirement");
     const path = kind === "requirement" ? "/requirements" : "/tasks";
-    const r = await req<{ data: ServerRequirement | ServerTask }>(`${path}/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: w.status, title: w.title, description: w.description }),
-    });
-    return toWorkItem(kind === "requirement" ? "requirement" : "task", r.data ?? (r as unknown as ServerRequirement));
+    const r = await req<{ data: ServerRequirement | ServerTask }>(
+      `${path}/${id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: w.status,
+          title: w.title,
+          description: w.description,
+          acceptanceCriteria:
+            kind === "requirement" ? w.acceptanceCriteria : undefined,
+          keyResultIds: kind === "requirement" ? w.keyResultIds : undefined,
+          estimateMs:
+            kind === "task" && w.estimateHours !== undefined
+              ? Math.round(w.estimateHours * 3_600_000)
+              : undefined,
+          version: w.version,
+        }),
+      },
+    );
+    return toWorkItem(
+      kind === "requirement" ? "requirement" : "task",
+      r.data ?? (r as unknown as ServerRequirement),
+    );
   },
-  deleteWorkItem: async (id: string, type?: string) => {
+  deleteWorkItem: async (id: string, type: string, version: number) => {
     const kind = workItemKind(type ?? "requirement");
     const path = kind === "requirement" ? "/requirements" : "/tasks";
-    return req<{ ok: boolean }>(`${path}/${id}`, { method: "DELETE" });
+    return req<{ ok: boolean }>(`${path}/${id}?version=${version}`, {
+      method: "DELETE",
+    });
   },
-  createWorkItemFromChannel: async (channelId: string, w: { type: string; title: string; description?: string }) =>
-    controlApi.createWorkItem({ ...w, channelId }),
-  executeWorkItem: (id: string) => req<{ runId: string }>(`/tasks/${id}/executions`, { method: "POST" }),
+  createWorkItemFromChannel: async (
+    channelId: string,
+    w: { type: string; title: string; description?: string },
+  ) => controlApi.createWorkItem({ ...w, channelId }),
+  executeWorkItem: (id: string, version: number) =>
+    req<{ runId: string }>(`/tasks/${id}/executions`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    }),
   attachments: async (ownerType: string, ownerId: string) => {
-    const kind = workItemKind(ownerType);
-    const q = new URLSearchParams({ resourceType: kind === "task" ? "task" : "requirement", resourceId: ownerId });
-    const r = await req<{ data: ServerAttachment[] }>(`/attachments?${q.toString()}`);
+    if (
+      !["requirement", "task", "objective", "testcase", "defect"].includes(
+        ownerType,
+      )
+    )
+      throw new Error(`不支持的附件类型:${ownerType}`);
+    const q = new URLSearchParams({
+      resourceType: ownerType,
+      resourceId: ownerId,
+    });
+    const r = await req<{ data: ServerAttachment[] }>(
+      `/attachments?${q.toString()}`,
+    );
     return (r.data ?? (r as unknown as ServerAttachment[])).map(toAttachment);
   },
   uploadAttachment: (ownerType: string, ownerId: string, file: File) =>
-    upload(workItemKind(ownerType) === "task" ? "task" : "requirement", ownerId, file),
+    upload(ownerType, ownerId, file),
+  attachmentContentUrl: (id: string) =>
+    `${base}/attachments/${encodeURIComponent(id)}/content`,
+  deleteAttachment: (id: string, version: number) =>
+    req<{ ok: boolean }>(
+      `/attachments/${encodeURIComponent(id)}?version=${version}`,
+      { method: "DELETE" },
+    ),
+  testCases: async (status?: string) => {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    const r = await req<{ data: TestCase[] }>(`/test-cases${q}`);
+    return r.data ?? (r as unknown as TestCase[]);
+  },
+  createTestCase: async (
+    value: Omit<TestCase, "id" | "status" | "version" | "updatedAt">,
+  ) => {
+    const r = await req<{ data: TestCase }>("/test-cases", {
+      method: "POST",
+      body: JSON.stringify(value),
+    });
+    return r.data ?? (r as unknown as TestCase);
+  },
+  updateTestCase: async (
+    id: string,
+    value: Partial<TestCase> & { version: number },
+  ) => {
+    const r = await req<{ data: TestCase }>(`/test-cases/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(value),
+    });
+    return r.data ?? (r as unknown as TestCase);
+  },
+  deleteTestCase: (id: string, version: number) =>
+    req<{ ok: boolean }>(`/test-cases/${id}?version=${version}`, {
+      method: "DELETE",
+    }),
+  testRuns: async (testCaseId?: string) => {
+    const q = testCaseId ? `?testCaseId=${encodeURIComponent(testCaseId)}` : "";
+    const r = await req<{ data: TestRun[] }>(`/test-runs${q}`);
+    return r.data ?? (r as unknown as TestRun[]);
+  },
+  createTestRun: async (testCaseId: string, environment: string) => {
+    const r = await req<{ data: TestRun }>("/test-runs", {
+      method: "POST",
+      body: JSON.stringify({ testCaseId, environment }),
+    });
+    return r.data ?? (r as unknown as TestRun);
+  },
+  updateTestRun: async (
+    id: string,
+    value: {
+      status: string;
+      observedResult?: string;
+      failureSummary?: string;
+      version: number;
+    },
+  ) => {
+    const r = await req<{ data: TestRun }>(`/test-runs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(value),
+    });
+    return r.data ?? (r as unknown as TestRun);
+  },
+  defects: async (status?: string) => {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    const r = await req<{ data: Defect[] }>(`/defects${q}`);
+    return r.data ?? (r as unknown as Defect[]);
+  },
+  createDefect: async (
+    value: Omit<
+      Defect,
+      | "id"
+      | "status"
+      | "resolution"
+      | "resolutionNote"
+      | "version"
+      | "updatedAt"
+    >,
+  ) => {
+    const r = await req<{ data: Defect }>("/defects", {
+      method: "POST",
+      body: JSON.stringify(value),
+    });
+    return r.data ?? (r as unknown as Defect);
+  },
+  updateDefect: async (
+    id: string,
+    value: Partial<Defect> & { version: number },
+  ) => {
+    const r = await req<{ data: Defect }>(`/defects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(value),
+    });
+    return r.data ?? (r as unknown as Defect);
+  },
+  deleteDefect: (id: string, version: number) =>
+    req<{ ok: boolean }>(`/defects/${id}?version=${version}`, {
+      method: "DELETE",
+    }),
   okrs: async () => {
     const r = await req<{ data: ServerObjective[] }>("/objectives");
     return (r.data ?? (r as unknown as ServerObjective[])).map(toOkr);
   },
-  createOkr: async (o: Omit<Okr, "id" | "createdAt" | "updatedAt">) => {
+  createOkr: async (
+    o: Pick<Okr, "title" | "objective" | "period" | "keyResultRows">,
+  ) => {
+    const [periodStart, periodEnd] = parsePeriod(o.period);
     const r = await req<{ data: ServerObjective }>("/objectives", {
       method: "POST",
-      body: JSON.stringify({ title: o.title, description: o.objective }),
+      body: JSON.stringify({
+        title: o.title,
+        description: o.objective,
+        periodStart,
+        periodEnd,
+        keyResults: o.keyResultRows,
+      }),
     });
     return toOkr(r.data ?? (r as unknown as ServerObjective));
   },
-  updateOkr: (id: string, o: Partial<Okr>) =>
-    req<Okr>(`/objectives/${id}`, { method: "PATCH", body: JSON.stringify({ title: o.title, description: o.objective }) }),
-  deleteOkr: (id: string) => req<{ ok: boolean }>(`/objectives/${id}`, { method: "DELETE" }),
+  updateOkr: async (
+    id: string,
+    o: Pick<
+      Okr,
+      "title" | "objective" | "period" | "keyResultRows" | "version"
+    >,
+  ) => {
+    const [periodStart, periodEnd] = parsePeriod(o.period);
+    const r = await req<{ data: ServerObjective }>(`/objectives/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: o.title,
+        description: o.objective,
+        periodStart,
+        periodEnd,
+        keyResults: o.keyResultRows,
+        version: o.version,
+      }),
+    });
+    return toOkr(r.data ?? (r as unknown as ServerObjective));
+  },
+  deleteOkr: (id: string, version: number) =>
+    req<{ ok: boolean }>(`/objectives/${id}?version=${version}`, {
+      method: "DELETE",
+    }),
 };

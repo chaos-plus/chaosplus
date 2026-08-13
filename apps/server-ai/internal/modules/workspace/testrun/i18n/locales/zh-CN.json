@@ -1,0 +1,1 @@
+{"workspace.testrun.invalid":"测试执行无效。","workspace.testrun.not_found":"未找到测试执行。","workspace.testrun.version_conflict":"测试执行已被其他请求修改。","workspace.testrun.state_conflict":"测试执行无法进入请求的状态。","workspace.testrun.unavailable":"测试执行服务暂不可用。"}

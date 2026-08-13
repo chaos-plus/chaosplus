@@ -91,6 +91,13 @@ func buildModules(config Config, dependencies sharedapp.ModuleDependencies) ([]a
 		Authorization:    dependencies.Authorization,
 		WorkflowLauncher: workspace.NewWorkflowLauncher(workflowModule.Repository(), workflowModule.Manager()),
 		Blobs:            blobs,
+		ConversationExists: func(ctx context.Context, id guid.ID) error {
+			_, err := channelModule.Service().Get(ctx, id)
+			if errors.Is(err, channel.ErrNotFound) {
+				return attachment.ErrNotFound
+			}
+			return err
+		},
 	})
 	if err != nil {
 		_ = client.Stop(context.Background())

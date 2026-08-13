@@ -30,7 +30,7 @@ func (s *Service) emit(ctx context.Context, v Task, event string) error {
 	return s.events.TaskChanged(ctx, v, event)
 }
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Task, error) {
-	v := &Task{RequirementID: in.RequirementID, ParentID: in.ParentID, Kind: in.Kind, Title: in.Title, Description: in.Description, EstimateMS: in.EstimateMS, AssigneeID: in.AssigneeID, ChannelID: in.ChannelID, WorkflowID: in.WorkflowID, ProjectID: in.ProjectID, Workspace: in.Workspace, Status: StatusOpen}
+	v := &Task{RequirementID: in.RequirementID, ParentID: in.ParentID, Title: in.Title, Description: in.Description, EstimateMS: in.EstimateMS, AssigneeID: in.AssigneeID, ChannelID: in.ChannelID, WorkflowID: in.WorkflowID, ProjectID: in.ProjectID, Workspace: in.Workspace, Status: StatusOpen}
 	if err := validate(v); err != nil {
 		return nil, err
 	}
@@ -47,20 +47,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Task, error) {
 	}
 	return v, nil
 }
-func (s *Service) List(ctx context.Context, k Kind, st Status, rid *guid.ID) ([]Task, error) {
-	probe := &Task{Title: "probe", Kind: k, Status: st}
-	if k != "" || st != "" {
-		if k == "" {
-			probe.Kind = KindTask
-		}
-		if st == "" {
-			probe.Status = StatusOpen
-		}
+func (s *Service) List(ctx context.Context, st Status, rid *guid.ID) ([]Task, error) {
+	if st != "" {
+		probe := &Task{Title: "probe", Status: st}
 		if validate(probe) != nil {
 			return nil, ErrInvalid
 		}
 	}
-	return s.repository.List(ctx, k, st, rid)
+	return s.repository.List(ctx, st, rid)
 }
 func (s *Service) Get(ctx context.Context, id guid.ID) (*Task, error) {
 	if id.Zero() {

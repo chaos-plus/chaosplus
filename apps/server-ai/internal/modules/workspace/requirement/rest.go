@@ -16,29 +16,23 @@ var Actions = []authz.Action{
 	{Resource: "workspace_requirement", Verb: "delete", Scope: "entity", AllowedRelations: []string{"owner"}, DataScoped: true},
 }
 
-type entityInput struct{}
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
-	entityInput
-	Status   Status   `query:"status"`
+	Status   Status       `query:"status"`
 	ParentID guid.ParamID `query:"parentId"`
 }
 type createInput struct {
-	entityInput
 	Body CreateInput
 }
 type updateInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
-	Version int64 `query:"version" minimum:"1"`
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
 type ok struct {

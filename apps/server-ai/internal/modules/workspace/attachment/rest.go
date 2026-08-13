@@ -21,28 +21,23 @@ var Actions = []authz.Action{
 	{Resource: "workspace_attachment", Verb: "delete", Scope: "entity", AllowedRelations: []string{"owner", "editor"}, DataScoped: true},
 }
 
-type entityInput struct{}
 type listInput struct {
-	entityInput
 	ResourceType ResourceType `query:"resourceType"`
 	ResourceID   guid.ParamID `query:"resourceId"`
 }
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type deleteInput struct {
-	entityInput
 	ID      guid.ParamID `path:"id"`
 	Version int64        `query:"version" minimum:"1"`
 }
 type uploadData struct {
 	ResourceType ResourceType  `form:"resourceType" required:"true"`
-	ResourceID   guid.ID       `form:"resourceId" required:"true"`
+	ResourceID   string        `form:"resourceId" required:"true" pattern:"^[1-9][0-9]*$"`
 	File         huma.FormFile `form:"file" contentType:"application/octet-stream" required:"true"`
 }
 type uploadInput struct {
-	entityInput
 	RawBody huma.MultipartFormFiles[uploadData]
 }
 type body[T any] struct{ Body T }
@@ -75,7 +70,11 @@ func (m *Module) upload(ctx context.Context, input *uploadInput) (*body[Attachme
 		return nil, apiError(ErrInvalid)
 	}
 	defer func() { _ = data.File.Close() }()
-	value, err := m.service.Upload(ctx, UploadInput{ResourceType: data.ResourceType, ResourceID: data.ResourceID, Filename: data.File.Filename, ContentType: data.File.ContentType, SizeBytes: data.File.Size, Content: data.File})
+	resourceID, err := guid.Parse(data.ResourceID)
+	if err != nil {
+		return nil, apiError(ErrInvalid)
+	}
+	value, err := m.service.Upload(ctx, UploadInput{ResourceType: data.ResourceType, ResourceID: resourceID, Filename: data.File.Filename, ContentType: data.File.ContentType, SizeBytes: data.File.Size, Content: data.File})
 	if err != nil {
 		return nil, apiError(err)
 	}

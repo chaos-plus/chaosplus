@@ -5,17 +5,24 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
-type Service struct{ repository Repository }
+type KeyResultReferences interface {
+	KeyResultsExist(context.Context, []guid.ID) error
+}
 
-func NewService(repository Repository) *Service {
+type Service struct {
+	repository Repository
+	keyResults KeyResultReferences
+}
+
+func NewService(repository Repository, keyResults KeyResultReferences) *Service {
 	if repository == nil {
 		panic("requirement service requires repository")
 	}
-	return &Service{repository: repository}
+	return &Service{repository: repository, keyResults: keyResults}
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Requirement, error) {
-	value := &Requirement{ParentID: input.ParentID, Title: input.Title, Description: input.Description, AcceptanceCriteria: input.AcceptanceCriteria, Status: StatusDraft}
+	value := &Requirement{ParentID: input.ParentID, Title: input.Title, Description: input.Description, AcceptanceCriteria: input.AcceptanceCriteria, Status: StatusDraft, KeyResultIDs: input.KeyResultIDs}
 	if err := validate(value); err != nil {
 		return nil, err
 	}
@@ -23,6 +30,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Requirement, 
 		if _, err := s.repository.Get(ctx, *input.ParentID); err != nil {
 			return nil, ErrInvalid
 		}
+	}
+	if err := s.validateKeyResults(ctx, input.KeyResultIDs); err != nil {
+		return nil, err
 	}
 	if err := s.repository.Create(ctx, value); err != nil {
 		return nil, err
@@ -74,6 +84,12 @@ func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*R
 		}
 		value.OwnerID = *input.OwnerID
 	}
+	if input.KeyResultIDs != nil {
+		if err := s.validateKeyResults(ctx, *input.KeyResultIDs); err != nil {
+			return nil, err
+		}
+		value.KeyResultIDs = *input.KeyResultIDs
+	}
 	if err := validate(value); err != nil {
 		return nil, err
 	}
@@ -81,6 +97,19 @@ func (s *Service) Update(ctx context.Context, id guid.ID, input UpdateInput) (*R
 		return nil, err
 	}
 	return value, nil
+}
+
+func (s *Service) validateKeyResults(ctx context.Context, ids []guid.ID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) > 100 || s.keyResults == nil {
+		return ErrInvalid
+	}
+	if err := s.keyResults.KeyResultsExist(ctx, ids); err != nil {
+		return ErrInvalid
+	}
+	return nil
 }
 func (s *Service) Delete(ctx context.Context, id guid.ID, version int64) error {
 	if id.Zero() || version < 1 {

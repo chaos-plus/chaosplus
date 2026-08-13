@@ -1,0 +1,1 @@
+{"workspace.testcase.invalid":"测试用例无效。","workspace.testcase.not_found":"未找到测试用例。","workspace.testcase.version_conflict":"测试用例已被其他请求修改。","workspace.testcase.state_conflict":"测试用例无法进入请求的状态。","workspace.testcase.unavailable":"测试用例服务暂不可用。"}

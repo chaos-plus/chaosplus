@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/uptrace/bun"
 )
 
 const MaxUploadBytes int64 = 100 << 20
@@ -26,6 +27,8 @@ const (
 	ResourceRequirement  ResourceType = "requirement"
 	ResourceTask         ResourceType = "task"
 	ResourceObjective    ResourceType = "objective"
+	ResourceTestCase     ResourceType = "testcase"
+	ResourceDefect       ResourceType = "defect"
 	ResourceConversation ResourceType = "conversation"
 
 	StatusAvailable    Status = "available"
@@ -34,25 +37,26 @@ const (
 )
 
 type Attachment struct {
-	ID           guid.ID      `bun:"id,pk" json:"id"`
-	TenantID     guid.ID      `bun:"tenant_id,notnull" json:"tenantId"`
-	EntityID     guid.ID      `bun:"entity_id,notnull" json:"entityId"`
-	OwnerID      guid.ID      `bun:"owner_id,notnull" json:"ownerId"`
-	ResourceType ResourceType `bun:"resource_type,notnull" json:"resourceType"`
-	ResourceID   guid.ID      `bun:"resource_id,notnull" json:"resourceId"`
-	Filename     string       `bun:"filename,notnull" json:"filename"`
-	ContentType  string       `bun:"content_type,notnull" json:"contentType"`
-	SizeBytes    int64        `bun:"size_bytes,notnull" json:"sizeBytes"`
-	Checksum     string       `bun:"checksum,notnull" json:"checksum"`
-	ObjectKey    string       `bun:"object_key,notnull" json:"-"`
-	Status       Status       `bun:"status,notnull" json:"status"`
-	CreatedAt    int64        `bun:"created_at,notnull" json:"createdAt"`
-	CreatedBy    guid.ID      `bun:"created_by,notnull" json:"createdBy"`
-	UpdatedAt    int64        `bun:"updated_at,notnull" json:"updatedAt"`
-	UpdatedBy    guid.ID      `bun:"updated_by,notnull" json:"updatedBy"`
-	DeletedAt    int64        `bun:"deleted_at,notnull" json:"-"`
-	DeletedBy    guid.ID      `bun:"deleted_by,notnull" json:"-"`
-	Version      int64        `bun:"version,notnull" json:"version"`
+	bun.BaseModel `bun:"table:workspace_attachments"`
+	ID            guid.ID      `bun:"id,pk" json:"id"`
+	TenantID      guid.ID      `bun:"tenant_id,notnull" json:"tenantId"`
+	EntityID      guid.ID      `bun:"entity_id,notnull" json:"entityId"`
+	OwnerID       guid.ID      `bun:"owner_id,notnull" json:"ownerId"`
+	ResourceType  ResourceType `bun:"resource_type,notnull" json:"resourceType"`
+	ResourceID    guid.ID      `bun:"resource_id,notnull" json:"resourceId"`
+	Filename      string       `bun:"filename,notnull" json:"filename"`
+	ContentType   string       `bun:"content_type,notnull" json:"contentType"`
+	SizeBytes     int64        `bun:"size_bytes,notnull" json:"sizeBytes"`
+	Checksum      string       `bun:"checksum,notnull" json:"checksum"`
+	ObjectKey     string       `bun:"object_key,notnull" json:"-"`
+	Status        Status       `bun:"status,notnull" json:"status"`
+	CreatedAt     int64        `bun:"created_at,notnull" json:"createdAt"`
+	CreatedBy     guid.ID      `bun:"created_by,notnull" json:"createdBy"`
+	UpdatedAt     int64        `bun:"updated_at,notnull" json:"updatedAt"`
+	UpdatedBy     guid.ID      `bun:"updated_by,notnull" json:"updatedBy"`
+	DeletedAt     int64        `bun:"deleted_at,notnull" json:"-"`
+	DeletedBy     guid.ID      `bun:"deleted_by,notnull" json:"-"`
+	Version       int64        `bun:"version,notnull" json:"version"`
 }
 
 type UploadInput struct {
@@ -78,7 +82,7 @@ func validateUpload(input *UploadInput) error {
 		return ErrInvalid
 	}
 	switch input.ResourceType {
-	case ResourceRequirement, ResourceTask, ResourceObjective, ResourceConversation:
+	case ResourceRequirement, ResourceTask, ResourceObjective, ResourceTestCase, ResourceDefect, ResourceConversation:
 		return nil
 	default:
 		return ErrInvalid

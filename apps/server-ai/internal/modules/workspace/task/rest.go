@@ -11,34 +11,26 @@ import (
 
 var Actions = []authz.Action{{Resource: "workspace_task", Verb: "create", Scope: "entity", AllowedRelations: []string{"owner", "editor"}, DataScoped: true}, {Resource: "workspace_task", Verb: "view", Scope: "entity", AllowedRelations: []string{"owner", "editor", "viewer"}, DataScoped: true, Menu: true}, {Resource: "workspace_task", Verb: "update", Scope: "entity", AllowedRelations: []string{"owner", "editor"}, DataScoped: true}, {Resource: "workspace_task", Verb: "delete", Scope: "entity", AllowedRelations: []string{"owner"}, DataScoped: true}, {Resource: "workspace_task", Verb: "execute", Scope: "entity", AllowedRelations: []string{"owner", "editor"}, DataScoped: true}}
 
-type entityInput struct{}
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
-	entityInput
-	Kind          Kind     `query:"kind"`
-	Status        Status   `query:"status"`
+	Status        Status       `query:"status"`
 	RequirementID guid.ParamID `query:"requirementId"`
 }
 type createInput struct {
-	entityInput
 	Body CreateInput
 }
 type updateInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
-	Version int64 `query:"version" minimum:"1"`
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type executeInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body struct {
 		Version int64 `json:"version" minimum:"1"`
 	}
@@ -68,7 +60,7 @@ func (m *Module) list(c context.Context, i *listInput) (*body[[]Task], error) {
 		id := guid.ID(i.RequirementID)
 		requirementID = &id
 	}
-	v, e := m.service.List(c, i.Kind, i.Status, requirementID)
+	v, e := m.service.List(c, i.Status, requirementID)
 	if e != nil {
 		return nil, apiError(e)
 	}

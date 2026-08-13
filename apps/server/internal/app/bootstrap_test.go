@@ -20,6 +20,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/plugin"
+	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/danielgtaylor/huma/v2/humatest"
@@ -177,6 +178,52 @@ func TestBootstrapRealSQLiteApplication(t *testing.T) {
 	assert.Contains(t, api.OpenAPI().Paths, "/iam/principals")
 	assert.Contains(t, api.OpenAPI().Paths, "/oauth/token")
 	require.NoError(t, application.shutdown())
+}
+
+func TestResourceApplicationAuthenticatesSharedBrowserSession(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	for index := range seed {
+		seed[index] = byte(index + 1)
+	}
+	dsn := filepath.Join(t.TempDir(), "resource-session.db")
+	cfg := Config{
+		Name: "resource-session-test", Timezone: "UTC", WorkerLease: 30,
+		Database: map[string]bunx.Datasource{
+			"primary": {Type: "sqlite", Dsn: dsn, Writable: true},
+		},
+		Migrations: Migrations{Auto: true},
+		Authn: authn.Config{
+			Enabled: true, Issuer: "https://iam.example", Audience: []string{"api"},
+			SigningKey: base64.RawStdEncoding.EncodeToString(seed), AccessTokenTTL: time.Minute,
+			MFA: authn.MFAConfig{EncryptionKey: base64.RawStdEncoding.EncodeToString(seed)},
+			Web: authn.WebConfig{
+				Enabled: true, CookieName: "session", SessionTTL: time.Hour, IdleTTL: time.Minute,
+				PostLoginURL: "http://127.0.0.1:8092/", AllowedReturnURLs: []string{"http://127.0.0.1:8092/"},
+			},
+		},
+		Authz: Authz{Enabled: true},
+	}
+
+	issuer := withCtx(NewApp(cfg))
+	t.Cleanup(func() { _ = issuer.shutdown() })
+	require.NoError(t, issuer.Bootstrap())
+	principalID, err := authnmod.EnsureBootstrapPrincipal(t.Context(), issuer.dbr.Write(), authnmod.BootstrapPrincipal{
+		LoginName: "admin", Password: "correct horse battery staple", DisplayName: "Administrator", Email: "admin@example.com",
+	}, nextGUID)
+	require.NoError(t, err)
+	sessionID, _, err := issuer.authnWeb.Login(t.Context(), "admin", "correct horse battery staple", "")
+	require.NoError(t, err)
+	cookie := issuer.authnWeb.SessionCookie(sessionID)
+	require.NoError(t, issuer.shutdown())
+
+	resource := withCtx(NewResourceApp(cfg))
+	t.Cleanup(func() { _ = resource.shutdown() })
+	require.NoError(t, resource.Bootstrap())
+	claims, err := resource.authnRequest.Authenticate(t.Context(), "", cookie)
+	require.NoError(t, err)
+	assert.Equal(t, principalID, claims.PrincipalID)
+	assert.Equal(t, "admin", claims.PreferredUsername)
+	require.NoError(t, resource.shutdown())
 }
 
 func TestBootstrapRejectsInvalidDependencyConfigurations(t *testing.T) {

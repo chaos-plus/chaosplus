@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/uptrace/bun"
 )
 
 var (
@@ -14,14 +15,9 @@ var (
 	ErrStateConflict   = errors.New("task state conflict")
 )
 
-type Kind string
 type Status string
 
 const (
-	KindTask Kind = "task"
-	KindTest Kind = "test"
-	KindBug  Kind = "bug"
-
 	StatusOpen       Status = "open"
 	StatusInProgress Status = "in_progress"
 	StatusReview     Status = "review"
@@ -30,13 +26,13 @@ const (
 )
 
 type Task struct {
+	bun.BaseModel `bun:"table:workspace_tasks"`
 	ID            guid.ID  `bun:"id,pk" json:"id"`
 	TenantID      guid.ID  `bun:"tenant_id,notnull" json:"tenantId"`
 	EntityID      guid.ID  `bun:"entity_id,notnull" json:"entityId"`
 	OwnerID       guid.ID  `bun:"owner_id,notnull" json:"ownerId"`
 	RequirementID *guid.ID `bun:"requirement_id" json:"requirementId,omitempty"`
 	ParentID      *guid.ID `bun:"parent_id" json:"parentId,omitempty"`
-	Kind          Kind     `bun:"kind,notnull" json:"kind"`
 	Title         string   `bun:"title,notnull" json:"title"`
 	Description   string   `bun:"description,notnull" json:"description"`
 	Status        Status   `bun:"status,notnull" json:"status"`
@@ -61,7 +57,6 @@ type Task struct {
 type CreateInput struct {
 	RequirementID *guid.ID `json:"requirementId,omitempty"`
 	ParentID      *guid.ID `json:"parentId,omitempty"`
-	Kind          Kind     `json:"kind"`
 	Title         string   `json:"title"`
 	Description   string   `json:"description"`
 	EstimateMS    int64    `json:"estimateMs"`
@@ -69,7 +64,7 @@ type CreateInput struct {
 	ChannelID     *guid.ID `json:"channelId,omitempty"`
 	WorkflowID    *guid.ID `json:"workflowId,omitempty"`
 	ProjectID     *guid.ID `json:"projectId,omitempty"`
-	Workspace     string   `json:"workspace"`
+	Workspace     string   `json:"workspace,omitempty"`
 }
 
 type UpdateInput struct {
@@ -97,16 +92,8 @@ func validate(value *Task) error {
 	if len(value.Workspace) > 1024 || (value.WorkflowID == nil) != (value.ProjectID == nil) || (value.WorkflowID == nil && value.Workspace != "") || (value.WorkflowID != nil && value.Workspace == "") {
 		return ErrInvalid
 	}
-	if value.Kind == "" {
-		value.Kind = KindTask
-	}
 	if value.Status == "" {
 		value.Status = StatusOpen
-	}
-	switch value.Kind {
-	case KindTask, KindTest, KindBug:
-	default:
-		return ErrInvalid
 	}
 	switch value.Status {
 	case StatusOpen, StatusInProgress, StatusReview, StatusDone, StatusCancelled:

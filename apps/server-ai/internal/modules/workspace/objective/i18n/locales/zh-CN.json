@@ -1,6 +1,7 @@
 {
   "workspace.objective.invalid": "目标数据无效。",
   "workspace.objective.not_found": "未找到该目标。",
+  "workspace.objective.state_conflict": "已被需求引用的关键结果不能移除。",
   "workspace.objective.version_conflict": "目标已被其他请求修改，请刷新后重试。",
   "workspace.objective.unavailable": "目标服务暂不可用。"
 }

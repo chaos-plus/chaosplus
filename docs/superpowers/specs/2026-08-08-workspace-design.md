@@ -1,83 +1,103 @@
-# 工作区(协作区)设计 —— 需求/任务/测试/缺陷/OKR + 文件 + 走工作流
+# 工作区最终设计：OKR、需求、任务、测试与缺陷
 
-日期:2026-08-08
-状态:Draft(待 architect 评审)
-参照:PRD C5(协作区 = 工作流 artifact 视图)、附录 A、§9(群聊订阅)、§13、§23.A;spec `2026-08-08-mvp-closure-design.md`
+日期：2026-08-08
+修订：2026-08-13
+状态：已采纳
+范围：`apps/server-ai/internal/modules/workspace` 与 `apps/admin-ai/apps/platform`
 
-## 1. 定位(对齐 PRD C5)
+## 1. 决策
 
-**工作区 = 工作流 artifact 的视图,不新造执行引擎。** 需求/任务/缺陷/测试是工作项(work item),它们的**执行统一走既有 DAG 工作流引擎**(RunManager/Engine/真实 runner)。群聊是沟通层(快速提需求/评审/确认),工作项变化订阅回群聊。
+工作区继续作为工作流 artifact 与协作状态的产品视图，不新建执行引擎。OKR、需求、任务、测试和缺陷是五个产品入口，但不能继续共用一个 `work_items` 写模型：它们的字段、状态机、授权动作和生命周期不同，必须由独立叶模块拥有。
 
-## 2. 数据模型(全部 DB 持久化,控制面 = 权威)
-
-### work_items(扩展现有)
-```
-id, type(requirement|task|test|bug), title, description(支持文件引用),
-status(open|in_progress|review|done), parent_id(子任务,可多级),
-estimate_hours(校准工时), spent_hours(已耗,由 run 时长累计), progress(0-100,自动),
-workflow_run_id(最近一次执行 run), channel_id(订阅频道), assignee_agent,
-created_at, updated_at
-```
-
-### attachments(文件/图片/视频,聊天与描述共用)
-```
-id, work_item_id 或 message_id, filename, mime, size_bytes,
-store_path(磁盘相对路径,控制面管理的 artifact 存储), created_at
-```
-- 上传:multipart → 存控制面 artifact 目录(env `ARTIFACT_ROOT`);下载/预览:GET /api/attachments/:id(按 mime 返回)。
-- 聊天引用:消息 payload 可带 `attachments:[{id,filename}]`;工作项描述引用同。
-
-### okrs
-```
-id, title, objective, period, key_results(JSON:[{title, target, progress, unit}]),
-overall_progress(自动=各 KR 进度均值), created_at, updated_at
+```mermaid
+flowchart LR
+    O[Objective] --> KR[Key Result]
+    KR --> R[Requirement]
+    R --> T[Task]
+    R --> TC[Test Case]
+    TC --> TR[Test Run]
+    T --> D[Defect]
+    TC --> D
+    TR --> D
+    T --> W[Workflow Run]
+    TR --> W
 ```
 
-### 执行进度/工时
-- `progress` 由工作项关联的 workflow run 状态自动推导:run 节点 completed 比例 → progress;run done → status done。
-- `spent_hours` = 关联 run 的累计执行时长(控制面记录 run 起止)。
-- `estimate_hours` 人工设置(校准),可随 run 实际耗时调整(记录校准历史可选)。
+| 产品入口 | 最终 owner | 核心职责 |
+| --- | --- | --- |
+| OKR | `workspace/objective` | Objective、Key Result、周期和进度 |
+| 需求 | `workspace/requirement` | 层级需求、验收标准、审批状态、KR 关联 |
+| 任务 | `workspace/task` | 可执行工作、负责人、进度、工时和 workflow run |
+| 测试 | `workspace/testcase` + `workspace/testrun` | 用例版本/步骤与每次不可覆盖的执行事实 |
+| 缺陷 | `workspace/defect` | 严重度、优先级、复现、解决、验证与重开 |
+| 附件 | `workspace/attachment` | 复用对象存储和受控下载，不保存领域状态 |
 
-## 3. API(控制面,Go)
+## 2. 领域合同
 
-```
-GET/POST /api/work-items?type=&status=&parent=  列表/创建(含子任务 parent_id)
-GET/PUT/DELETE /api/work-items/:id
-POST /api/work-items/:id/execute               → 用工作项上下文发起 workflow run(返回 runId)
-POST /api/work-items/:id/attachments           multipart 上传 → attachment
-GET /api/attachments/:id                       → 文件流(按 mime)
-GET/POST/PUT/DELETE /api/okrs
-GET/PUT /api/work-items/:id/progress           → 校准 estimate/查看自动 progress
-```
-- `execute` 路由:任务 → 构造 WorkflowDef(内置 task-execution 模板:trigger→agent(按任务描述执行)→[test 时跑 validator]→完成)→ RunManager.Launch → 关联 workflow_run_id。
-- run 事件(OnEvent)→ 更新 work_item 的 progress/status/spent_hours → 群聊通知(若 channel_id)。
+### 2.1 Objective 与 Key Result
 
-## 4. 前端(platform,ui-ux-pro-max 打磨)
+沿用现有 `workspace_objectives` 和 `workspace_key_results`。Objective 状态为 `draft/active/completed/cancelled`；KR 使用有界 decimal target/current value。Requirement 通过 owner 自有的关联表连接一个或多个 KR，不把 `objective_id` 冗余到后续所有资源。
 
-- 左侧二级菜单(工作区下):**需求 / 任务 / 测试 / 缺陷 / OKR**。
-- 各管理页:列表(类型/状态筛选、子任务树)、详情(Dialog/抽屉:描述+附件上传/预览+工时+进度+「执行」按钮→工作流)+ 新建/编辑(弹窗)。
-- OKR 页:目标 + KR 进度条。
-- 群聊:消息支持附件(上传/预览);工作项变化通知已实现(§9 订阅)。
-- 操作体验:加载态/空态/焦点/响应式,遵循 ui-ux-pro-max 设计系统。
+### 2.2 Requirement
 
-## 5. 后端规范
+沿用 `draft/approved/rejected/closed`，保留层级、描述和验收标准。Requirement owner 管理 `workspace_requirement_key_results`，创建/更新关系前通过 objective 的 scoped reference port 验证 KR 属于当前 tenant/entity。
 
-- Go:gofmt/goimports、`-race`、表驱动测试、**覆盖率 ≥80%**(work-item/attachment/okr/execute 路径)。
-- runner(TS):测试覆盖率同后端要求(bun test,补 backends/transport 覆盖率)。
-- 无 mock 交付:真实 claude 执行 + 真实验收。
+### 2.3 Task
 
-## 6. 验收(真实,严禁 mock)
+`workspace_tasks` 最终只存任务，不再用 `kind` 模拟测试或缺陷。状态为 `open/in_progress/review/done/cancelled`。任务可关联需求、父任务、负责人、频道和一个 workflow 定义；执行尝试的可靠领取、outbox 与 fencing 属于自治执行 P0，按 Paperclip 吸收报告另行实现。
 
-1. 工作区建需求 → 关联频道 → 群聊收到订阅通知。
-2. 任务建子任务、设 estimate → 点「执行」→ 真实 claude 走 DAG → 进度自动更新 → done → 群聊通知。
-3. 上传图片/文件到任务 → 详情/群聊可预览;描述引用附件。
-4. OKR 建目标 + KR → 进度自动汇总。
-5. 后端 `go test -cover` ≥80%;runner `bun test` 覆盖率达标。
+### 2.4 Test Case 与 Test Run
 
-## 7. 待评审点
+Test Case 是可版本化定义，状态为 `draft/active/retired`，包含需求、标题、说明、前置条件、优先级、负责人和有序步骤。步骤使用 `workspace_test_steps` 子表：`position/action/expected_result`，不把结构化步骤塞入自由文本 JSON。
 
-- work_items 是否复用既有(已建)表还是新表(扩展列 vs 迁移 00005)。
-- 附件存储:控制面磁盘目录 vs 复用 workspace artifact 存储(PRD ArtifactStore)。
-- 任务→工作流模板:内置 task-execution 模板 vs 复用 software-dev-agile;测试节点 validator 接入。
-- 工时/进度推导的准确性(以 run 事件为准)。
-- 前端菜单结构(工作区二级:需求/任务/测试/缺陷/OKR)是否按 PRD §30 布局。
+Test Run 是执行事实，状态为 `queued/running/passed/failed/blocked/cancelled`，记录 testcase、执行者、环境、workflow run、开始/完成时间、observed result 和 failure summary。终态执行不可改写为另一结果；重测创建新 run。
+
+### 2.5 Defect
+
+Defect 可关联 requirement、task、testcase、testrun；至少一个来源必须存在。严重度为 `blocker/critical/major/minor/trivial`，优先级为 `highest/high/medium/low/lowest`，状态为 `open/triaged/in_progress/resolved/verified/closed/reopened/rejected`。解决时必须给出 `fixed/duplicate/cannot_reproduce/wont_fix/by_design` 和说明；只有 resolved 可验证，验证失败进入 reopened，verified 才可 closed。
+
+## 3. API 与 IAM
+
+- 使用共享 Huma host 下的 REST：`/api/objectives`、`/api/requirements`、`/api/tasks`、`/api/test-cases`、`/api/test-runs`、`/api/defects`。
+- 所有 mutation 携带 optimistic `version`，返回最新 version；非法状态和 version 冲突使用稳定业务错误。
+- GUID 在 HTTP/JSON/JavaScript 边界是十进制字符串，数据库为 `BIGINT`；时间为 UTC Unix 毫秒 `BIGINT`。
+- 每个 repository 从 verified claims 取得 tenant/entity/principal 并强制 scope；客户端提供的 tenant/entity/owner 不受信任。
+- 跨 owner 引用只通过 scoped reference port 验证，由 `workspace.NewModules` 组合；消费模块不查询其他 owner 私表。
+
+## 4. 迁移与兼容
+
+现有 `workspace_tasks.kind=test|bug` 是已验证的错误所有权，不能永久兼容。迁移顺序：
+
+1. 创建 testcase/testrun/defect 表和 requirement-KR 关联表。
+2. 将旧 `kind=test` 行按原 ID、scope、审计、标题、描述和关联迁入 testcase；将旧 `kind=bug` 行迁入 defect。
+3. 清理已迁移行并把 `workspace_tasks` 收敛为 task-only schema。
+4. Down migration 可将基础字段映回旧 task schema；新模型专属信息无法无损降级，因此生产回滚必须先导出并确认无新 testcase/testrun/defect 写入，或回滚应用而不回滚 schema。
+
+SQLite、MySQL、PostgreSQL 必须提供等价 PK/FK、scope、CHECK、unique、index、audit、version 和 Down。
+
+## 5. 前端
+
+左侧保留需求、任务、测试、缺陷、OKR 五个入口，但每页消费真实 owner API，不再通过字符串映射伪装同一资源。管理面使用紧凑表格/树与详情抽屉：
+
+- OKR：目标、周期、KR target/current 与汇总进度。
+- 需求：层级、验收标准、KR 关联和状态。
+- 任务：需求、负责人、进度、工时、工作流执行。
+- 测试：用例步骤、执行历史、运行结果和从失败 run 创建缺陷。
+- 缺陷：严重度/优先级、复现与预期/实际、来源追溯、解决和验证。
+
+所有页面必须具备 loading、empty、error、validation、pending、success、retry、disabled、focus 和响应式状态；不得用本地假数据或吞掉 API 错误。
+
+## 6. 验收
+
+1. Objective/KR 可追溯到 Requirement，再到 Task/Test Case/Test Run/Defect。
+2. 任务执行继续走真实 workflow/runner；测试执行留下独立 Test Run，不覆盖用例定义。
+3. 失败 Test Run 能创建带来源的 Defect；Defect 按合法状态机解决、验证、关闭或重开。
+4. 错误 tenant/entity 引用、非法状态、旧 version、重复步骤位置和不完整解决信息均被服务端拒绝。
+5. 三方言 migration 生命周期、Go race/vet/staticcheck/govulncheck、前端 lint/typecheck/test/build 全部通过。
+6. 真实服务与浏览器在 375/768/1024/1440 宽度完成五个入口主流程，无 console error、网络假拦截、重叠或溢出。
+
+## 7. 非目标
+
+- 不新建 work item 中央仓库、通用状态机或第二套 workflow runtime。
+- 不在本轮实现 Paperclip 的 Agent wakeup、task checkout/outbox、成本账本或通用 attention；这些按研究报告优先级独立交付。
+- 不复制 IAM、审计、附件存储、conversation comment 或 organization。

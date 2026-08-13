@@ -190,12 +190,21 @@ func (app *App) Bootstrap() error {
 		if len(app.dbr.Writer) == 0 {
 			return fmt.Errorf("resource application requires a writable business database with IAM projections")
 		}
-		verifier, err := authnext.NewVerifier(app.cfg.Authn)
-		if err != nil {
-			return fmt.Errorf("init resource authentication: %w", err)
+		if app.cfg.Authn.Web.Enabled {
+			web, err := authnmod.NewWebService(app.cfg.Authn, app.dbr.Write(), authnmod.WithIDGenerator(nextGUID))
+			if err != nil {
+				return fmt.Errorf("init resource browser authentication: %w", err)
+			}
+			app.authnWeb = web
+			app.authnRequest = web
+		} else {
+			verifier, err := authnext.NewVerifier(app.cfg.Authn)
+			if err != nil {
+				return fmt.Errorf("init resource authentication: %w", err)
+			}
+			app.authnRequest = verifier
 		}
-		app.authnRequest = verifier
-		app.authzRegistrar = authz.NewRegistrar(registry, verifier, iam.NewAuthorizerWithRegistry(app.dbr.Write(), registry), iam.NewMembershipChecker(app.dbr.Write()))
+		app.authzRegistrar = authz.NewRegistrar(registry, app.authnRequest, iam.NewAuthorizerWithRegistry(app.dbr.Write(), registry), iam.NewMembershipChecker(app.dbr.Write()))
 	} else if app.cfg.Authn.Enabled {
 		if len(app.dbr.Writer) == 0 {
 			return fmt.Errorf("local authentication requires a writable database")

@@ -8,16 +8,19 @@ import (
 )
 
 type Module struct {
-	db        *bun.DB
-	service   *Service
-	registrar *authz.Registrar
+	db         *bun.DB
+	repository *BunRepository
+	service    *Service
+	registrar  *authz.Registrar
 }
 
-func NewModule(db *bun.DB, nextID func() (guid.ID, error), registrar *authz.Registrar) *Module {
+func NewModule(db *bun.DB, nextID func() (guid.ID, error), registrar *authz.Registrar, keyResults KeyResultReferences) *Module {
 	if registrar == nil {
 		panic("requirement module requires authorization registrar")
 	}
-	return &Module{db: db, service: NewService(NewRepository(db, nextID)), registrar: registrar}
+	repository := NewRepository(db, nextID)
+	return &Module{db: db, repository: repository, service: NewService(repository, keyResults), registrar: registrar}
 }
 func (m *Module) Migrate(ctx context.Context) error { return Migrate(ctx, m.db) }
 func (m *Module) Service() *Service                 { return m.service }
+func (m *Module) References() *BunRepository        { return m.repository }

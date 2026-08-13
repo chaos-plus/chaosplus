@@ -17,28 +17,22 @@ var Actions = []authz.Action{
 	{Resource: "workspace_objective", Verb: "delete", Scope: "entity", AllowedRelations: []string{"owner"}, DataScoped: true},
 }
 
-type entityInput struct{}
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
-	entityInput
 	Status Status `query:"status"`
 }
 type createInput struct {
-	entityInput
 	Body CreateInput
 }
 type updateInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body UpdateInput
 }
 type deleteInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
-	Version int64 `query:"version" minimum:"1"`
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
 type ok struct {
@@ -100,6 +94,8 @@ func apiError(err error) error {
 		return huma.Error404NotFound("workspace.objective.not_found")
 	case errors.Is(err, ErrVersionConflict):
 		return huma.Error409Conflict("workspace.objective.version_conflict")
+	case errors.Is(err, ErrStateConflict):
+		return huma.Error409Conflict("workspace.objective.state_conflict")
 	default:
 		return huma.Error500InternalServerError("workspace.objective.unavailable")
 	}

@@ -3,7 +3,9 @@
 > 调研日期：2026-08-13  
 > 上游仓库：[paperclipai/paperclip](https://github.com/paperclipai/paperclip)  
 > 固定源码快照：[`f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c`](https://github.com/paperclipai/paperclip/commit/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c)  
-> 报告范围：功能与领域模型、系统边界、工程成熟度、许可、ChaosPlus 复用点、缺口、目标架构和实施优先级。本文是调研与目标建议，不代表相关能力已经实现。
+> 报告范围：功能与领域模型、系统边界、工程成熟度、许可、ChaosPlus 复用点、缺口、目标架构和实施优先级。路线图能力是否已经实现，以紧随其后的实施状态和各阶段标记为准。
+
+> 实施状态（2026-08-13）：第 4 节保留的是立项时的基线证据。当前代码已按第 4.3 节的最终 owner 设计落地 `objective`、`requirement`、`task`、`testcase`、`testrun`、`defect` 和 `attachment`，前端已有 OKR、需求、任务、测试、缺陷五个真实入口；后续 Paperclip 吸收仍以第 6 节的自治执行、成本和治理路线为准。
 
 ## 1. 执行结论
 
@@ -15,16 +17,17 @@ ChaosPlus 已经拥有较强的执行底座：共享 IAM 与审计、AI Agent、
 
 建议按以下顺序吸收：
 
-1. **P0：任务执行一致性与可恢复性**：任务原子领取、执行租约、幂等 wakeup、任务与 run 的可靠绑定、失败恢复。
-2. **P0：成本账本与预算硬停止**：先形成可信账本，再实现告警和 hard-stop；不能只做 dashboard 图表。
-3. **P1：目标追溯、任务依赖、讨论和统一待办**：让每次执行知道“为什么做”，让阻塞和人工介入成为一等状态。
-4. **P1：Agent 组织模型与受控委派**：职责、汇报线、允许委派范围和退休交接；复用现有组织/IAM，不另建 company 权限系统。
-5. **P2：例行任务、配置修订和可移植模板**：在基础闭环稳定后再开放长期自治。
-6. **暂缓：Paperclip 的通用插件宿主、内置 IAM、完整 Skill Studio、公司导入导出**：与现有 owner 重叠大，且扩展和安全面过宽。
+1. **已完成的 P0 前置：Workspace 产品主干**：OKR、需求、任务、测试、缺陷已拆分为独立领域能力并形成端到端追溯；第 4 节保留实施前差距作为决策依据。
+2. **P0：任务执行一致性与可恢复性**：任务原子领取、执行租约、幂等 wakeup、任务与 run 的可靠绑定、失败恢复。
+3. **P0：成本账本与预算硬停止**：先形成可信账本，再实现告警和 hard-stop；不能只做 dashboard 图表。
+4. **P1：目标追溯、任务依赖、讨论和统一待办**：让每次执行知道“为什么做”，让阻塞和人工介入成为一等状态。
+5. **P1：Agent 组织模型与受控委派**：职责、汇报线、允许委派范围和退休交接；复用现有组织/IAM，不另建 company 权限系统。
+6. **P2：例行任务、配置修订和可移植模板**：在基础闭环稳定后再开放长期自治。
+7. **暂缓：Paperclip 的通用插件宿主、内置 IAM、完整 Skill Studio、公司导入导出**：与现有 owner 重叠大，且扩展和安全面过宽。
 
 ## 2. 调研方法与可信边界
 
-本报告没有只依据 README。上游证据包括固定 commit 下的 `README.md`、`docs/`、`server/src/routes`、`server/src/services`、`packages/db/src/schema`、adapter/plugin packages、测试和 release notes。ChaosPlus 证据来自生产代码、三方言 migration、组合根、runner 和真实前端消费者。
+本报告没有只依据 README。上游证据直接读取本地 clone `.local/paperclip`；该 worktree 保持在 `67001ec6eb96ae601aa27bc91d9b2415d665334a`，未切换分支，所有结论通过 `git show f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c:<path>` 固定到报告快照。证据范围包括该 commit 下的 `README.md`、`docs/`、`server/src/routes`、`server/src/services`、`packages/db/src/schema`、adapter/plugin packages、测试和 release notes。ChaosPlus 证据来自生产代码、三方言 migration、组合根、runner 和真实前端消费者。
 
 截至调研时 GitHub API 显示上游约 7.8 万 stars、1.4 万 forks、MIT 许可；仓库创建于 2026-03-02，`server`/`ui` package 版本为 `0.3.1`，源码和数据迁移仍高速变化。热度证明需求强，不等于接口、schema 或运维合同已经稳定。上游 README 中“Agent Employee Training”“Agentic OS”等四支柱同时包含已实现能力和产品方向，因此本文只把源码、schema、route 和测试能相互印证的能力列为“已验证”。
 
@@ -64,7 +67,7 @@ flowchart LR
 
 Paperclip 真正值得学习的是这个闭环里的不变量：同一任务不会被并发重复领取；wakeup 可合并且可恢复；预算判断位于执行前；每次执行都关联任务、Agent、责任人和成本；审批不是 UI 提示，而是服务端强制状态机。
 
-## 4. ChaosPlus 当前能力基线
+## 4. ChaosPlus 立项时能力基线
 
 ### 4.1 已有能力，应原位复用
 
@@ -75,7 +78,7 @@ Paperclip 真正值得学习的是这个闭环里的不变量：同一任务不�
 | `apps/server-ai/internal/modules/conversation/{channel,message}` | 人与 Agent 的持久会话、消息和实时通道 | 承载任务讨论/mention 的会话能力，避免再造评论传输 |
 | `apps/server-ai/internal/modules/workspace/objective` | Objective、Key Result、周期、状态、owner 与版本 | 继续作为目标 owner |
 | `apps/server-ai/internal/modules/workspace/requirement` | 层级 requirement、验收标准与审批状态 | 继续作为需求 owner |
-| `apps/server-ai/internal/modules/workspace/task` | task/test/bug、parent、requirement、assignee、workflow、workspace、进度和执行入口 | 继续作为工作项 owner，扩展领取/依赖/执行合同 |
+| `apps/server-ai/internal/modules/workspace/task` | task/test/bug 当前共用一张表、同一状态机；具备 parent、requirement、assignee、workflow、workspace、进度和执行入口 | task 继续作为任务 owner；test/bug 已证明生命周期不同，应迁移到 testcase/testrun/defect 叶模块 |
 | `apps/server-ai/internal/modules/workflow` | 版本化 workflow、静态 DAG、run/event、lease、恢复、重试、human approval、artifact validation | 继续作为编排与 run owner |
 | `apps/server-ai/internal/modules/machine` 与 `apps/runner` | machine 注册/heartbeat、runtime 发现、远程 spawn、Claude/Codex/Mastra/HTTP/script、costUsd 终态事件 | 继续作为执行平面；补充标准化 usage/cost 事件 |
 | `apps/admin-ai` | dashboard、workspace、Agent、machine、workflow editor、run detail、approval | 演进为统一运营工作台，不复制 Paperclip UI |
@@ -85,15 +88,53 @@ Paperclip 真正值得学习的是这个闭环里的不变量：同一任务不�
 | 缺口 | 当前证据 | 影响 |
 | --- | --- | --- |
 | 目标追溯未闭合 | objective 与 requirement/task 是独立聚合；task 可关联 requirement，但 requirement 没有 objective 关系 | run context 只有 task/requirement 标识，无法稳定注入目标 ancestry |
+| 测试与缺陷只有类型标签 | `workspace_tasks.kind` 虽有 `test/bug`，但共用任务字段和状态机；前端还会把 `test/bug` 错误映射到 requirement API | 无测试步骤/执行事实，也无缺陷严重度、复现、解决、验证和重开闭环 |
 | task 启动不是原子领取 | `task.Service.Execute` 先启动 workflow，再更新 task 为 `in_progress` | 并发请求可能重复启动；更新失败会产生孤立 run |
 | 缺少任务级执行租约 | workflow 有 run/worker lease，但 task 没有 checkout owner、lease、attempt 或 fencing token | 无法证明一个任务只有一个有效执行者 |
 | machine heartbeat 不等于 Agent wakeup | 现有 heartbeat 证明 runner 在线；没有 DB-backed Agent wakeup queue/coalescing/session continuation | Agent 不能可靠地按分配、评论、依赖解除或定时事件自主工作 |
-| 成本没有可信账本 | runner 能上报 `costUsd`，gateway event 能携带成本；前端 dashboard 的 `costTodayUsd` 固定为 `0` | 无法审计、归因、预警或 hard-stop |
+| 成本没有可信账本 | runner 能上报 `costUsd`，workflow stats 会扫描 event JSON 临时聚合；但 typed dashboard client 仍把 `costTodayUsd` 固定为 `0`，也没有幂等 usage/cost ledger | 临时统计不可审计、可靠归因、重放、更正、预警或 hard-stop |
 | 审批聚合过窄 | workflow 有节点审批；前端审批页通过轮询 run 并筛 `waiting_approval` | 无统一决策对象、SLA、责任人、升级和跨模块待办 |
 | 任务协作语义不足 | task 有 parent/assignee/channel，但无一等 blocker/dependency、comment attribution、read/inbox 状态 | 阻塞恢复和人机协作需要外部约定，无法自动唤醒 |
 | Agent 组织语义不足 | Agent 无 title、responsibility、reports-to、delegation policy | 多 Agent 只能平铺管理，无法安全委派 |
 | 例行任务仅有定义入口 | workflow trigger schema 出现 schedule/webhook，但未发现持久 routine/revision/catch-up/concurrency 执行 owner | 不能声明生产级周期自治 |
 | 业务活动视图缺失 | 共享安全 audit 存在，workflow events 存在，但没有面向 AI 业务的统一 durable activity projection | 操作者难以回答谁在何时因何做了什么 |
+
+### 4.3 Workspace 五块立项时能力核对与当前状态
+
+立项时的 `apps/server-ai/internal/modules/workspace` **不够完整**。当时左侧导航已有需求、任务、测试、缺陷、OKR 五个入口，但后端组合根只注册 `requirement`、`task`、`objective`、`attachment`。下表是当时用于确定最终 owner 的差距证据，不是当前实现状态。
+
+| 产品块 | 立项时后端 | 立项时前端 | 立项结论 |
+| --- | --- | --- | --- |
+| OKR | `objective` 已有 Objective、周期、Key Result、进度值、状态和版本 | 有独立 OKR 页面，但创建/更新合同未完整覆盖周期、KR 和 version | **部分具备**；补全真实 mutation，并建立 KR → Requirement 关系 |
+| 需求 | `requirement` 已有层级、描述、验收标准、审批状态和版本 | requirement 路由可访问，但请求字段与后端合同不完全一致 | **部分具备**；增加 KR 关系和完整编辑闭环 |
+| 任务 | `task` 已有 parent、requirement、assignee、工时、进度、workflow 和 execute | task 路由存在，但创建请求遗漏必需 `kind`，更新也未稳定携带 version | **主体存在**；收敛为 task-only，并修复 typed client |
+| 测试 | 只有 `workspace_tasks.kind='test'`，没有测试步骤或执行记录 | `/workspace/tests` 经 `workItemKind()` 被映射到 requirement API | **未具备**；新增 TestCase 与 TestRun，不再伪装 requirement/task |
+| 缺陷 | 只有 `workspace_tasks.kind='bug'`，没有 severity、复现、resolution、verification/reopen | `/workspace/bugs` 同样被映射到 requirement API | **未具备**；新增独立 Defect 状态机与来源追溯 |
+
+因此不能用一个 `work_items` 表继续扩字段。最小正确的最终 owner 是：
+
+- `workspace/objective`：Objective 与 Key Result。
+- `workspace/requirement`：Requirement 与 requirement-KR 关系。
+- `workspace/task`：仅任务和任务执行入口。
+- `workspace/testcase`：版本化测试定义与有序步骤。
+- `workspace/testrun`：每次不可覆盖的执行事实和结果。
+- `workspace/defect`：严重度、优先级、复现、解决、验证、关闭与重开。
+- `workspace/attachment`：继续复用现有受控对象存储，不拥有业务状态。
+
+主追溯链为 `Objective → Key Result → Requirement → Task / Test Case → Test Run → Defect`。Test Run 与 workflow run 可以关联，但二者不是同一概念：前者是测试业务事实，后者是执行引擎事实。
+
+截至 2026-08-13，五个产品入口与七个 owner 的当前状态如下：
+
+| 产品入口 | 当前 owner | 已实现合同 |
+| --- | --- | --- |
+| OKR | `workspace/objective` | Objective、稳定身份的 Key Result、周期、进度、状态、版本；被 Requirement 引用的 KR 不可移除 |
+| 需求 | `workspace/requirement` | 层级、验收标准、审批状态、KR 多对多关系、版本 |
+| 任务 | `workspace/task` | task-only、父任务、需求、负责人、工时、进度、workflow 执行 |
+| 测试 | `workspace/testcase` + `workspace/testrun` | 版本化用例与有序步骤；独立、不可覆盖的执行事实和结果 |
+| 缺陷 | `workspace/defect` | requirement/task/testcase/testrun 来源、严重度、复现、解决、验证、关闭与重开 |
+| 共用附件 | `workspace/attachment` | Objective、Requirement、Task、TestCase、Defect 及 Conversation 复用的受控对象存储、下载和删除生命周期 |
+
+因此，`workspace` 根包不是缺少业务实现的单体模块；它是七个 leaf owner 的组合点。后续不再新增统一 `work_items`/`issue` 写模型。
 
 ## 5. 建议吸收的最终领域模型
 
@@ -103,7 +144,7 @@ Paperclip 真正值得学习的是这个闭环里的不变量：同一任务不�
 | --- | --- | --- |
 | company | tenant + entity | 直接复用共享 IAM scope |
 | goal | workspace objective | 扩展 objective → requirement 的显式关系 |
-| issue | workspace task | 扩展状态、依赖、领取与讨论，不新建 issue |
+| issue | workspace task / testcase / defect | 按实际生命周期映射任务、测试和缺陷；共享查询可做 read model，不保留统一写模型 |
 | agent heartbeat | Agent wakeup/dispatch | 新增持久 wakeup 语义；machine heartbeat 保持原义 |
 | heartbeat run | workflow run + task execution attempt | workflow owner run；task owner attempt/lease |
 | org chart | organization directory + AI Agent reporting relation | 人类组织仍归 `apps/server`；AI 汇报关系归 agent；UI 做组合读模型 |
@@ -112,7 +153,17 @@ Paperclip 真正值得学习的是这个闭环里的不变量：同一任务不�
 | activity/inbox | AI activity projection + attention queue | 来源事件保持各模块所有，读取投影统一 |
 | routine | workspace routine leaf module | 触发 task/workflow，不直接执行 Agent |
 
-### 5.1 目标依赖与组合方向
+### 5.1 Paperclip 对 Workspace 的可复用边界
+
+固定快照的 `issues` schema 已验证 parent、goal、assignee、priority、checkout/execution run、execution lock、workspace、origin fingerprint 与 monitor 字段；这些适合借鉴到任务领取、幂等来源、执行隔离和恢复。`agent_wakeup_requests` 的 queue/status/coalesced count/idempotency key 适合借鉴 Agent wakeup；`cost_events` 的 task/goal/run/provider/model/token/cost 归因适合借鉴成本账本。
+
+但 Paperclip 的 `issue` 是通用执行工作项，固定源码没有 TestCase 步骤版本、TestRun 不可覆盖历史、Defect 严重度/解决/验证/重开等专属合同。因此：
+
+- 可直接吸收机制：goal/parent trace、原子 checkout/execution lock、wakeup coalescing/idempotency、execution workspace、cost attribution。
+- 不可直接吸收模型：用 `issue` 替代 ChaosPlus 的 Requirement、TestCase、TestRun 或 Defect。
+- 不复制实现技术：UUID、PostgreSQL-only、JSONB 状态、Paperclip company/IAM；全部映射到 ChaosPlus 的 `guid.ID`、三方言、typed enum、共享 IAM 与审计。
+
+### 5.2 目标依赖与组合方向
 
 ```mermaid
 flowchart TB
@@ -120,11 +171,19 @@ flowchart TB
     CP --> OBJ[workspace objective]
     CP --> REQ[workspace requirement]
     CP --> TASK[workspace task]
+    CP --> TC[workspace testcase]
+    CP --> TR[workspace testrun]
+    CP --> DEF[workspace defect]
     CP --> AGENT[conversation agent]
     CP --> WF[workflow]
     CP --> COST[usage ledger / budget]
     CP --> ATT[activity / attention projection]
-    OBJ --> REQ --> TASK
+    OBJ --> KR[Key Result]
+    KR --> REQ
+    REQ --> TASK
+    REQ --> TC --> TR
+    TASK --> DEF
+    TR --> DEF
     AGENT -->|assign / delegate| TASK
     TASK -->|narrow launch port| WF
     COST -->|pre-dispatch decision| WF
@@ -140,6 +199,16 @@ flowchart TB
 依赖只能通过窄 port 在 `apps/server-ai/internal/app` 组合。task 不读取 workflow 私有表，cost 不接管 runner，attention 不成为新的写入主库。统一待办和 dashboard 是 read model，不是跨模块业务逻辑中心。
 
 ## 6. 分阶段吸收路线图
+
+### Phase W：Workspace 五块闭环（P0 前置，2-3 个迭代）
+
+- 沿用 Objective/KR、Requirement、Task、Attachment owner；新增 `testcase`、`testrun`、`defect` leaf module。
+- Requirement owner 管理 KR 关系；跨 owner 引用通过 tenant/entity scoped reference port 验证，不查询对方私表。
+- 将历史 `workspace_tasks.kind=test|bug` 确定性迁入新 owner，保留 ID、scope、关联和审计；最终把 task schema 收敛为 task-only。
+- 前端五个入口分别消费真实 owner API，删除 `workItemKind()` 的错误映射，并补齐 version、周期、KR、步骤、运行、缺陷状态字段。
+- Task 执行继续复用 workflow；TestRun 可关联 workflow run；Defect 可关联 requirement/task/testcase/testrun，至少有一个来源。
+
+退出条件：五个入口的创建、查看、编辑与合法状态流均通过真实 Huma/SQLite/浏览器验收；三方言 migration 等价；Objective/KR 可追溯到失败 TestRun 与 Defect；旧 test/bug 数据迁移计数一致且无残留并行写模型。
 
 ### Phase 0：契约与度量基线（1 个迭代）
 
@@ -250,10 +319,10 @@ flowchart TB
 
 ## 11. 建议立项范围
 
-建议把第一期定义为 **“自治任务与成本治理”**，而不是“集成 Paperclip”：
+建议把第一期定义为 **“Workspace 闭环与自治任务治理”**，而不是“集成 Paperclip”：
 
-- 范围：Phase 0 + Phase 1，加最小 attention API/UI。
-- 业务结果：任务可安全地被 Agent 自主领取和恢复；每次运行可追溯到任务和成本；预算能真实阻止新执行；异常有统一人工入口。
+- 范围：Phase W + Phase 0；五块闭环验收后进入 Phase 1，并加最小 attention API/UI。
+- 业务结果：OKR、需求、任务、测试、缺陷形成真实追溯；任务可安全地被 Agent 自主领取和恢复；每次运行可追溯到目标、测试、缺陷和成本；预算能真实阻止新执行；异常有统一人工入口。
 - 非目标：org chart 全量 UI、Skill Studio、通用插件市场、company import/export、替换现有 workflow editor。
 - 立项前置：先完成 task/run 事务 ADR 与 usage/cost contract；这是后续所有自治能力的可靠性基础。
 
@@ -267,6 +336,9 @@ flowchart TB
 - [Heartbeat protocol](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/docs/guides/agent-developer/heartbeat-protocol.md)
 - [Costs and budgets](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/docs/guides/board-operator/costs-and-budgets.md)
 - [Execution policy](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/docs/guides/execution-policy.md)
+- [Issue schema](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/packages/db/src/schema/issues.ts)
+- [Agent wakeup request schema](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/packages/db/src/schema/agent_wakeup_requests.ts)
+- [Cost event schema](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/packages/db/src/schema/cost_events.ts)
 - [MIT License](https://github.com/paperclipai/paperclip/blob/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c/LICENSE)
 
 ### ChaosPlus
@@ -274,7 +346,7 @@ flowchart TB
 - `AGENTS.md`、`.rules/3.BACKEND.md`、`.rules/3.ARCH.md`
 - `apps/server-ai/internal/app/composition.go`
 - `apps/server-ai/internal/modules/conversation/agent`
-- `apps/server-ai/internal/modules/workspace/{objective,requirement,task}`
+- `apps/server-ai/internal/modules/workspace/{objective,requirement,task,testcase,testrun,defect,attachment}` 与 `apps/server-ai/internal/modules/workspace/module.go`
 - `apps/server-ai/internal/modules/workflow`
 - `apps/server-ai/internal/modules/machine`
 - `apps/runner/src`

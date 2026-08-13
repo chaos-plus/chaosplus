@@ -17,21 +17,29 @@ type BlobStore interface {
 	Delete(context.Context, string) error
 }
 
+type ResourceReferences interface {
+	Exists(context.Context, ResourceType, guid.ID) error
+}
+
 type Service struct {
 	repository Repository
 	blobs      BlobStore
+	resources  ResourceReferences
 	nextID     func() (guid.ID, error)
 }
 
-func NewService(repository Repository, blobs BlobStore, nextID func() (guid.ID, error)) *Service {
-	if repository == nil || blobs == nil || nextID == nil {
-		panic("attachment service requires repository, blob store, and id generator")
+func NewService(repository Repository, blobs BlobStore, resources ResourceReferences, nextID func() (guid.ID, error)) *Service {
+	if repository == nil || blobs == nil || resources == nil || nextID == nil {
+		panic("attachment service requires repository, blob store, resource references, and id generator")
 	}
-	return &Service{repository: repository, blobs: blobs, nextID: nextID}
+	return &Service{repository: repository, blobs: blobs, resources: resources, nextID: nextID}
 }
 
 func (s *Service) Upload(ctx context.Context, input UploadInput) (*Attachment, error) {
 	if err := validateUpload(&input); err != nil {
+		return nil, err
+	}
+	if err := s.resources.Exists(ctx, input.ResourceType, input.ResourceID); err != nil {
 		return nil, err
 	}
 	tenantID, entityID, principalID := authn.TenantIDFromContext(ctx), authn.EntityIDFromContext(ctx), authn.PrincipalIDFromContext(ctx)
