@@ -48,8 +48,30 @@ class SkillRuntimeTest(unittest.TestCase):
         link = discovery / name
         if link.exists() or link.is_symlink():
             link.unlink()
-        link.symlink_to(skill, target_is_directory=True)
+        try:
+            link.symlink_to(skill, target_is_directory=True)
+        except OSError:
+            self.materialize_git_symlink(link, skill)
         return skill
+
+    def materialize_git_symlink(self, link: Path, target: Path) -> None:
+        subprocess.run(["git", "init", "--quiet"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "core.symlinks", "false"], cwd=self.root, check=True)
+        relative_target = (Path("../..") / target.relative_to(self.root)).as_posix()
+        link.write_text(relative_target, encoding="utf-8")
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=self.root,
+            input=relative_target,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo", "120000", blob, link.relative_to(self.root).as_posix()],
+            cwd=self.root,
+            check=True,
+        )
 
     def create_repository(self) -> None:
         for path in (
@@ -131,6 +153,16 @@ class SkillRuntimeTest(unittest.TestCase):
         (self.root / ".agents" / "skills" / skill.name).unlink()
         errors = RUNTIME.validate_skills(self.skills)
         self.assertTrue(any("symbolic link" in error for error in errors))
+
+    def test_materialized_git_symlink_requires_exact_target_and_index_mode(self) -> None:
+        skill = self.create_skill()
+        link = self.root / ".agents" / "skills" / skill.name
+        link.unlink()
+        self.materialize_git_symlink(link, skill)
+        self.assertTrue(RUNTIME.is_canonical_skill_link(self.root, link, skill))
+
+        link.write_text("../../.claude/skills/dev-docs", encoding="utf-8")
+        self.assertFalse(RUNTIME.is_canonical_skill_link(self.root, link, skill))
 
     def test_validation_rejects_legacy_skill_root(self) -> None:
         self.create_skill()

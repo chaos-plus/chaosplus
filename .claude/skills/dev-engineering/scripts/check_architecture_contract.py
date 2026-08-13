@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,6 +80,35 @@ SQL_DIALECTS = {"sqlite", "mysql", "postgres"}
 TECHNICAL_FILENAME = re.compile(r"^(?:bun|huma|goose|sqlc|http)_")
 
 
+def is_canonical_skill_link(link: Path, target: Path) -> bool:
+    if link.is_symlink():
+        return link.resolve() == target.resolve()
+    if not link.is_file() or git_config_symlinks():
+        return False
+    expected = Path("../..") / target.relative_to(ROOT)
+    if link.read_text(encoding="utf-8").strip().replace("\\", "/") != expected.as_posix():
+        return False
+    result = subprocess.run(
+        ["git", "ls-files", "-s", "--", link.relative_to(ROOT).as_posix()],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.startswith("120000 ")
+
+
+def git_config_symlinks() -> bool:
+    result = subprocess.run(
+        ["git", "config", "--bool", "core.symlinks"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def main() -> int:
     errors: list[str] = []
     for path, required_fragments in RULE_CONTRACTS.items():
@@ -98,10 +128,8 @@ def main() -> int:
             errors.append(f"repository skill directory must use dev- prefix: {skill_dir.relative_to(ROOT)}")
             continue
         link = SKILL_LINKS / skill_dir.name
-        if not link.is_symlink():
+        if not is_canonical_skill_link(link, skill_dir):
             errors.append(f"Codex discovery symlink is missing: {link.relative_to(ROOT)}")
-        elif link.resolve() != skill_dir.resolve():
-            errors.append(f"Codex discovery symlink targets the wrong skill: {link.relative_to(ROOT)}")
 
     for path in FORBIDDEN_DIRS:
         if path.exists():

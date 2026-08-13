@@ -6,7 +6,7 @@
 
 - Go module：`github.com/chaos-plus/chaosplus`
 - Go 版本：`1.26.5`
-- Go package 目录数：60
+- Go package 目录数：67
 - 功能模块：audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
 - IAM SQL 方言：mysql, postgres, sqlite
 - HTTP 框架：基于 chi 的 Huma v2

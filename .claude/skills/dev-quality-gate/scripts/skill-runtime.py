@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -148,15 +149,41 @@ def validate_skill_discovery(repo_root: Path, skill_dirs: list[Path]) -> list[st
         if skill_dir.parent.resolve() != (repo_root / ".claude" / "skills").resolve():
             continue
         link = discovery_root / skill_dir.name
-        if not link.is_symlink():
+        if not is_canonical_skill_link(repo_root, link, skill_dir):
             errors.append(f"{link}: repository skill discovery entry must be a symbolic link")
-            continue
-        try:
-            if link.resolve(strict=True) != skill_dir.resolve(strict=True):
-                errors.append(f"{link}: symbolic link must target {skill_dir}")
-        except FileNotFoundError:
-            errors.append(f"{link}: symbolic link target does not exist")
     return errors
+
+
+def is_canonical_skill_link(repo_root: Path, link: Path, target: Path) -> bool:
+    if link.is_symlink():
+        try:
+            return link.resolve(strict=True) == target.resolve(strict=True)
+        except FileNotFoundError:
+            return False
+    if not link.is_file() or git_config_symlinks(repo_root):
+        return False
+    expected = Path("../..") / target.relative_to(repo_root)
+    if link.read_text(encoding="utf-8").strip().replace("\\", "/") != expected.as_posix():
+        return False
+    result = subprocess.run(
+        ["git", "ls-files", "-s", "--", link.relative_to(repo_root).as_posix()],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.startswith("120000 ")
+
+
+def git_config_symlinks(repo_root: Path) -> bool:
+    result = subprocess.run(
+        ["git", "config", "--bool", "core.symlinks"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def find_hard_coded_brand_terms(paths: list[Path], brand_terms: set[str]) -> list[str]:
