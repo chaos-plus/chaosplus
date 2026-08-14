@@ -129,7 +129,7 @@ func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 	// package-level generator is not yet installed. Lease a worker and install
 	// it here or EnsureBootstrapPrincipal fails with "default generator not
 	// initialized" and desktop first-launch (J1) can never create its admin.
-	if err := ensureGuidGenerator(ctx, runtimeDB); err != nil {
+	if err := ensureGUIDGenerator(ctx, runtimeDB); err != nil {
 		return fmt.Errorf("provision guid generator: %w", err)
 	}
 
@@ -158,11 +158,11 @@ func Provision(ctx context.Context, cfg app.Config) (runErr error) {
 	return nil
 }
 
-// ensureGuidGenerator installs the package-level guid generator against a
+// ensureGUIDGenerator installs the package-level guid generator against a
 // worker leased from the runtime database, if it is not already installed.
 // Provision runs before the application lifecycle starts the guid module, so
 // this is what makes bootstrap-provided ids (initial admin etc.) possible.
-func ensureGuidGenerator(ctx context.Context, db *bun.DB) error {
+func ensureGUIDGenerator(ctx context.Context, db *bun.DB) error {
 	if guid.Default() != nil {
 		return nil
 	}

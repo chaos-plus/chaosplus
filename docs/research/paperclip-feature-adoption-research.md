@@ -5,7 +5,7 @@
 > 固定源码快照：[`f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c`](https://github.com/paperclipai/paperclip/commit/f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c)  
 > 报告范围：功能与领域模型、系统边界、工程成熟度、许可、ChaosPlus 复用点、缺口、目标架构和实施优先级。路线图能力是否已经实现，以紧随其后的实施状态和各阶段标记为准。
 
-> 实施状态（2026-08-13）：第 4 节保留的是立项时的基线证据。当前代码已按第 4.3 节的最终 owner 设计落地 `objective`、`requirement`、`task`、`testcase`、`testrun`、`defect` 和 `attachment`，前端已有 OKR、需求、任务、测试、缺陷五个真实入口；后续 Paperclip 吸收仍以第 6 节的自治执行、成本和治理路线为准。
+> 实施状态（2026-08-14）：Phase G、R、W 均已完成实现收口，但都不能标记为验收完成。最新 Full race repository coverage 为 `apps/server` `15140/17519`（`86.420458%`）、`apps/server-ai` `1396/6056`（`23.051519%`），要求各自不低于 90%；R 仍缺固定官方 NATS 双实例与 live MySQL/PostgreSQL 证据；W 仍缺 live MySQL/PostgreSQL migration 和真实 IAM/browser 四视口闭环。后续 Paperclip 吸收以第 6 节和独立推进路线为准。
 
 ## 1. 执行结论
 
@@ -17,17 +17,29 @@ ChaosPlus 已经拥有较强的执行底座：共享 IAM 与审计、AI Agent、
 
 建议按以下顺序吸收：
 
-1. **已完成的 P0 前置：Workspace 产品主干**：OKR、需求、任务、测试、缺陷已拆分为独立领域能力并形成端到端追溯；第 4 节保留实施前差距作为决策依据。
+1. **实现完成、验收受阻的 P0 前置：Workspace 产品主干**：OKR、需求、任务、测试、缺陷已拆分为独立领域能力；真实三方言 migration、浏览器闭环和迁移计数证据补齐前，不视为验收完成。
 2. **P0：任务执行一致性与可恢复性**：任务原子领取、执行租约、幂等 wakeup、任务与 run 的可靠绑定、失败恢复。
 3. **P0：成本账本与预算硬停止**：先形成可信账本，再实现告警和 hard-stop；不能只做 dashboard 图表。
 4. **P1：目标追溯、任务依赖、讨论和统一待办**：让每次执行知道“为什么做”，让阻塞和人工介入成为一等状态。
 5. **P1：Agent 组织模型与受控委派**：职责、汇报线、允许委派范围和退休交接；复用现有组织/IAM，不另建 company 权限系统。
 6. **P2：例行任务、配置修订和可移植模板**：在基础闭环稳定后再开放长期自治。
-7. **暂缓：Paperclip 的通用插件宿主、内置 IAM、完整 Skill Studio、公司导入导出**：与现有 owner 重叠大，且扩展和安全面过宽。
+7. **新增独立路线：Machine 远程 Shell、Workflow 节点 SDK/目录与验证市场**：吸收 n8n 式低门槛发现/配置体验，但不复制 Paperclip 插件宿主或在控制面执行社区代码。
+8. **仍暂缓：Paperclip 的内置 IAM、完整 Skill Studio、公司导入导出**：与现有 owner 重叠大，且扩展和安全面过宽。
 
 ## 2. 调研方法与可信边界
 
-本报告没有只依据 README。上游证据直接读取本地 clone `.local/paperclip`；该 worktree 保持在 `67001ec6eb96ae601aa27bc91d9b2415d665334a`，未切换分支，所有结论通过 `git show f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c:<path>` 固定到报告快照。证据范围包括该 commit 下的 `README.md`、`docs/`、`server/src/routes`、`server/src/services`、`packages/db/src/schema`、adapter/plugin packages、测试和 release notes。ChaosPlus 证据来自生产代码、三方言 migration、组合根、runner 和真实前端消费者。
+本报告没有只依据 README。所有上游结论固定到 commit `f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c`，不依赖某个未提交的 `.local/paperclip` worktree 状态。可在干净工作区重建证据：
+
+```bash
+mkdir -p .local
+git clone --filter=blob:none https://github.com/paperclipai/paperclip.git .local/paperclip
+git -C .local/paperclip fetch origin f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c
+git -C .local/paperclip cat-file -e 'f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c^{commit}'
+git -C .local/paperclip show f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c:README.md
+git -C .local/paperclip show f0e6c0f5492ca62c2a8bc0bdf5e85e413965f09c:<path>
+```
+
+证据范围包括该 commit 下的 `README.md`、`docs/`、`server/src/routes`、`server/src/services`、`packages/db/src/schema`、adapter/plugin packages、测试和 release notes。ChaosPlus 证据来自生产代码、三方言 migration、组合根、runner 和真实前端消费者；`.local` 只作为可丢弃缓存，不属于交付证据。
 
 截至调研时 GitHub API 显示上游约 7.8 万 stars、1.4 万 forks、MIT 许可；仓库创建于 2026-03-02，`server`/`ui` package 版本为 `0.3.1`，源码和数据迁移仍高速变化。热度证明需求强，不等于接口、schema 或运维合同已经稳定。上游 README 中“Agent Employee Training”“Agentic OS”等四支柱同时包含已实现能力和产品方向，因此本文只把源码、schema、route 和测试能相互印证的能力列为“已验证”。
 
@@ -187,7 +199,8 @@ flowchart TB
     AGENT -->|assign / delegate| TASK
     TASK -->|narrow launch port| WF
     COST -->|pre-dispatch decision| WF
-    WF -->|machine picker / NATS| RUNNER[runner]
+    WF -->|RunnerLink| RG[control-plane runner gateway]
+    RG -->|authenticated WebSocket| RUNNER[runner]
     WF --> ATT
     TASK --> ATT
     COST --> ATT
@@ -200,7 +213,33 @@ flowchart TB
 
 ## 6. 分阶段吸收路线图
 
-### Phase W：Workspace 五块闭环（P0 前置，2-3 个迭代）
+完整的执行批次、依赖、责任边界、阻塞登记和验收矩阵见 [`docs/superpowers/plans/2026-08-14-paperclip-adoption-roadmap.md`](../superpowers/plans/2026-08-14-paperclip-adoption-roadmap.md)。
+
+### Phase G：工程基线收口（P0 门禁，1 个迭代）
+
+状态：**实现完成、Full 验收受阻（2026-08-14）**。production runner/workflow 测试后门和手写内部协议 responder 已移除，正式 script workflow 经控制面 Gateway、内部 transport adapter、Machine Hub、authenticated WebSocket、Bun runner 与 OS process 验收；runner 侧 NATS transport/SDK 已删除，协议类型归入 machine owner。workflow 依赖中立 `RunnerLink`，Machine Hub 依赖 machine-owned `ClusterTransport`；共享 onboarding token/route/runtime/lease/fencing 和 reply 二次围栏已实现。最新 Full gate 仅因两个 Go module coverage 低于 90% 失败；官方 NATS 双实例和 live database/browser 外部证据尚未关闭。
+
+- 固化测试替代物边界：项目自身的测试和自验证禁止 mock/fake/stub；`miniredis` 仅作为外部 Redis 的轻量真实实现用于隔离 Go 测试，不能替代真实 Redis 发布验收。
+- 删除 runner 的生产 mock executor、默认回退和能力宣告；所有运行时选择必须显式并对未知值 fail-fast。
+- 固化 NATS/Redis 基础设施 owner：开发与生产使用固定官方镜像，不创建 `apps/server-3rd` wrapper、daemon 或 miniserver。
+- runner 只认 authenticated WebSocket；控制面通过中立 `RunnerLink`/EventBus port 组合内部 adapter。集群验收必须证明跨实例调度、共享在线目录、单活动 connection lease 和 fencing，不能以本机 Hub map 代替。
+- 统一 Python 跨平台门禁、CI 与全仓 test-policy，固定版本自动安装 Go 静态工具，修复 README/文档站链接和受保护生产构建。
+- 固定 Paperclip commit 与证据重建命令，并把 Phase W 状态校正为“实现完成、验收受阻”。
+
+退出条件：architecture/schema contract、policy 单测与全仓扫描、两个 Go module 的 Full race 覆盖率均不低于 90%、runner typecheck/test、docs check、受保护生产 build 和 diff hygiene 全部通过；未运行的真实 Redis、MySQL/PostgreSQL、provider 与浏览器验收必须保留为显式阻塞。
+
+### Phase R：runner 协议与集群连接基线（实现完成、外部验收受阻）
+
+- runner 唯一配置保持 server URL、machine token 和 name，产品协议只使用 authenticated WebSocket；broker 地址、subject/topic 和 provider SDK 不进入 runner。
+- machine owner 定义 `ClusterTransport`、route/fence envelope 与共享 `ConnectionDirectory`；当前 NATS adapter 只位于 `internal/infra/runnertransport`，可由组合根替换。
+- onboarding token hash、runtime/scope、活动 route、lease 和 fencing token 已进入共享 Bun repository 与 SQLite/MySQL/PostgreSQL migration；本实例内存只保存实际 WebSocket handle。
+- dispatch、event 和 reply 均检查当前 route/fence，takeover 后的旧 reply、stale/乱序 event 被拒绝；SQLite 与 focused race 已通过。
+
+退出条件仍未满足：必须在固定官方 NATS 上运行至少两个真实控制面连接/实例，覆盖 runner@A → workflow@B、重复连接、崩溃、lease 过期接管和旧消息拒绝，并实际运行 MySQL/PostgreSQL lifecycle。
+
+### Phase W：Workspace 五块闭环（P0 前置，2-3 个迭代；实现完成、验收受阻）
+
+本地已通过 SQLite up/down/re-up、legacy task/test/bug 迁移计数、枚举约束，以及真实 Huma/TCP/Sonyflake 的 Objective/KR → Requirement → Task → TestCase/TestRun → Defect 追溯、状态流和版本冲突。live MySQL/PostgreSQL 与真实 IAM/browser 375/768/1024/1440 仍是退出阻塞。
 
 - 沿用 Objective/KR、Requirement、Task、Attachment owner；新增 `testcase`、`testrun`、`defect` leaf module。
 - Requirement owner 管理 KR 关系；跨 owner 引用通过 tenant/entity scoped reference port 验证，不查询对方私表。
@@ -255,13 +294,37 @@ flowchart TB
 
 退出条件：重复 webhook/调度不重复产生工作；错过调度的行为符合 policy；导入导出 round-trip 且 secret scrub 有自动化证明。
 
+### Phase M：Web Machine 跨平台远程 Shell（平台轨道，1-2 个迭代）
+
+- Machine 详情新增交互终端；使用 xterm.js、POSIX PTY/Windows ConPTY 和独立流式 WebSocket，不把 `run-cmd` 包装成终端。
+- machine module 负责 verified claims、tenant/entity、权限、短期 lease 和审计；runner 负责受限 shell profile、workspace root 与进程树。
+- 默认不记录输入输出正文；具备背压、并发/时长/流量限制和确定性断线清理。
+
+退出条件：真实 Windows/macOS/Linux runner 与浏览器 E2E 通过，越权、cwd 逃逸、secret 泄漏、慢消费者和断线路径全部拒绝或收敛。
+
+### Phase N：Workflow 节点 SDK 与 Catalog（生态轨道，2 个迭代）
+
+- 声明式 composite node 展开为核心 WorkflowDef；可执行节点使用 runner-side 签名、digest-pinned、能力受限 WASI component。
+- 包使用 OCI 1.1、SemVer、JSON Schema、Sigstore/SLSA 与 SBOM；workflow pin 精确 digest。
+- editor 改为服务端 catalog/schema 驱动，首版禁止第三方 UI JavaScript 和控制面内插件执行。
+
+退出条件：离线安装、schema 表单、能力拒绝、签名/SBOM、版本升级/回滚/撤销与真实 runner 执行通过。
+
+### Phase X：社区节点与验证包市场（生态轨道，2 个迭代）
+
+- 建立发布者身份、自动/人工审核、兼容矩阵、安全公告和 signed revocation。
+- 工作流包携带真实 run 生成的可核验 receipt；支持公共目录、离线安装与企业私有 registry。
+- 付费、分成和企业策略在免费目录与安全治理稳定后开放。
+
+退出条件：发布→审核→发现→安装→真实执行→升级/撤销闭环通过；恶意包、越权能力和不兼容升级被服务端/runner 拒绝。
+
 ## 7. 不建议照搬的部分
 
 1. **不嵌入 Paperclip Node server 或直接复用其数据库。** 它使用 Express、Drizzle、PostgreSQL UUID/timestamp/JSONB，并集中承载 IAM、业务和执行；这违反 ChaosPlus 的 Go module、Sonyflake `BIGINT`、UTC Unix ms、Bun/Goose、三方言和 owner 边界。
 2. **不复制 company membership、Agent API key 或 auth session。** ChaosPlus 已有更完整的 tenant/entity IAM、OIDC/OAuth、session、organization、audit 与 deny-by-default authorization。
 3. **不把 machine heartbeat 改名或扩成 Agent heartbeat。** 两者故障语义不同：前者是节点存活，后者是业务工作调度。应使用独立 wakeup queue 和 execution attempt。
 4. **不先做漂亮的成本 dashboard。** 没有幂等账本、定价版本、未知价格、退款/更正和预算并发合同，图表会制造错误信任。
-5. **不先引入通用插件宿主。** 当前已有 signed WASM claim plugin 和固定 runner executor；业务插件的权限、数据、secret、UI 和升级面需要独立 ADR 后才能扩大。
+5. **不引入控制面通用插件宿主。** JWT claim plugin 继续独立；workflow 节点按 Phase N/X 使用声明式 composite 或 runner-side 受控 WASI component，并在实现前完成供应链、能力、secret、UI、升级与回滚 ADR。
 6. **不照搬 Paperclip 的 UUID、自由文本 enum、JSONB 聚合和单方言 schema。** 所有新聚合必须遵循仓库 ID、类型、审计、并发、删除和三方言约束。
 7. **不把 activity log 当安全 audit。** 业务时间线可重建和投影；高风险 IAM/secret/budget policy 变更必须继续使用事务内共享安全审计。
 
@@ -312,7 +375,8 @@ flowchart TB
 - 先跑 architecture/schema contract 和三个方言 migration 生命周期测试。
 - 对 checkout、lease、wakeup、cost ledger、budget hard-stop 做并发、崩溃恢复、重复投递、乱序和时钟边界测试。
 - 用真实 shared IAM claims 验证跨 tenant/entity/Agent 的拒绝路径，并验证审计写失败回滚高风险 mutation。
-- 用真实 NATS、runner 和至少一个 Claude/Codex 或可计量 provider 完成 task → wakeup → run → cost → approval → artifact 的 E2E。
+- 用真实 runner authenticated WebSocket、控制面内部消息 adapter 和至少一个 Claude/Codex 或可计量 provider 完成 task → wakeup → run → cost → approval → artifact 的 E2E。
+- 用至少两个真实控制面实例验证 runner@A → workflow@B、重复连接接管、lease 过期、fencing、重复投递和旧事件拒绝。
 - 前端通过 lint、typecheck、真实测试和生产 build；在 375/768/1024/1440 宽度检查 dashboard、attention、task detail、budget 和 approval。
 - 验证服务重启、runner 断线、provider quota、审批超时、预算耗尽和数据库短暂不可用后的恢复。
 - 达不到真实 provider、MySQL/PostgreSQL、object storage 或浏览器环境时，必须记录精确残余阻塞，不能声明生产就绪。
@@ -323,7 +387,7 @@ flowchart TB
 
 - 范围：Phase W + Phase 0；五块闭环验收后进入 Phase 1，并加最小 attention API/UI。
 - 业务结果：OKR、需求、任务、测试、缺陷形成真实追溯；任务可安全地被 Agent 自主领取和恢复；每次运行可追溯到目标、测试、缺陷和成本；预算能真实阻止新执行；异常有统一人工入口。
-- 非目标：org chart 全量 UI、Skill Studio、通用插件市场、company import/export、替换现有 workflow editor。
+- 非目标：org chart 全量 UI、Skill Studio、company import/export、替换现有 workflow editor；节点生态按 Phase N/X 演进现有 editor，不纳入第一期 Workspace/自治任务治理。
 - 立项前置：先完成 task/run 事务 ADR 与 usage/cost contract；这是后续所有自治能力的可靠性基础。
 
 ## 12. 主要来源

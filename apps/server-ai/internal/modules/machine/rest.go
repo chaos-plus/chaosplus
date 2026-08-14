@@ -21,13 +21,11 @@ var Actions = []authz.Action{
 type entityInput struct{}
 
 type machineInput struct {
-	entityInput
 	ID coreid.ParamID `path:"id"`
 }
 
 type machineTokenInput struct {
-	entityInput
-	ID coreid.ParamID `path:"id"`
+	ID   coreid.ParamID `path:"id"`
 	Body struct {
 		Token string `json:"token" minLength:"1" maxLength:"512"`
 	}
@@ -130,15 +128,15 @@ func (m *Module) listMachines(ctx context.Context, _ *entityInput) (*bodyRespons
 	}
 	out := make([]machineSummary, 0, len(items))
 	for _, item := range items {
-		name := m.hub.MachineName(item.ID)
+		name := m.hub.MachineNameContext(ctx, item.ID)
 		if name == "" {
 			name = item.ID.String()
 		}
 		runtimes := []string{}
-		if m.hub.IsConnected(item.ID) {
-			runtimes = m.hub.MachineRuntimes(item.ID)
+		if m.hub.IsConnectedContext(ctx, item.ID) {
+			runtimes = m.hub.MachineRuntimesContext(ctx, item.ID)
 		}
-		out = append(out, machineSummary{ID: item.ID, Name: name, Address: item.Address, Status: item.Status, Online: m.hub.IsConnected(item.ID), LastHeartbeatAt: item.LastHeartbeatAt, AgentCount: counts[item.ID], Runtimes: runtimes})
+		out = append(out, machineSummary{ID: item.ID, Name: name, Address: item.Address, Status: item.Status, Online: m.hub.IsConnectedContext(ctx, item.ID), LastHeartbeatAt: item.LastHeartbeatAt, AgentCount: counts[item.ID], Runtimes: runtimes})
 	}
 	return &bodyResponse[[]machineSummary]{Body: out}, nil
 }
@@ -152,7 +150,7 @@ func (m *Module) getMachine(ctx context.Context, input *machineInput) (*bodyResp
 		if item.ID != coreid.ID(input.ID) {
 			continue
 		}
-		name := m.hub.MachineName(item.ID)
+		name := m.hub.MachineNameContext(ctx, item.ID)
 		if name == "" {
 			name = item.ID.String()
 		}
@@ -163,7 +161,7 @@ func (m *Module) getMachine(ctx context.Context, input *machineInput) (*bodyResp
 				return nil, machineAPIError(err)
 			}
 		}
-		return &bodyResponse[machineDetail]{Body: machineDetail{ID: item.ID, Name: name, Address: item.Address, Status: item.Status, Online: m.hub.IsConnected(item.ID), OS: item.OS, RegisteredAt: item.RegisteredAt, LastHeartbeatAt: item.LastHeartbeatAt, Runtimes: m.hub.MachineRuntimes(item.ID), Agents: agents}}, nil
+		return &bodyResponse[machineDetail]{Body: machineDetail{ID: item.ID, Name: name, Address: item.Address, Status: item.Status, Online: m.hub.IsConnectedContext(ctx, item.ID), OS: item.OS, RegisteredAt: item.RegisteredAt, LastHeartbeatAt: item.LastHeartbeatAt, Runtimes: m.hub.MachineRuntimesContext(ctx, item.ID), Agents: agents}}, nil
 	}
 	return nil, huma.Error404NotFound("machine.not_found")
 }

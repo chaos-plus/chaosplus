@@ -129,9 +129,9 @@ SQLite、MySQL、PostgreSQL migration 必须保持相同约束、索引和 casca
 
 发布前运行：
 
-```powershell
+```bash
 go test -race ./internal/modules/provisioning ./internal/app
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope all -Full
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope all --full
 ```
 
 三数据库兼容声明必须列出实际连接并完成的 migration up/down/up/down-to-zero；未连接的 dialect 只能声明静态 SQL 与构建检查通过，不能声称已实测。

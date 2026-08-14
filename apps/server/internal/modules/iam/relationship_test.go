@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
-	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	iamdomain "github.com/chaos-plus/chaosplus/internal/modules/iam/domain"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
 	"github.com/stretchr/testify/assert"
@@ -388,7 +388,7 @@ func TestRelationshipValidationRejectsInvalidFactsCyclesAndDepth(t *testing.T) {
 	}
 	_, err = service.ListRelationships(t.Context(), testID("tenant"), iamdomain.RelationshipFilter{ResourceType: "bad type"})
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidArgument)
-	
+
 	wrongType := iamdomain.Relationship{TenantID: testID("tenant"), SubjectType: "principal", SubjectID: testID("principal"), Relation: "viewer", ResourceType: "company", ResourceID: a.ID}
 	_, _, err = service.PutRelationship(t.Context(), wrongType)
 	assert.ErrorIs(t, err, iamdomain.ErrInvalidRelationship)
@@ -421,7 +421,10 @@ func TestRelationshipValidationRejectsInvalidFactsCyclesAndDepth(t *testing.T) {
 		VALUES (?,?,?,'Active Position','active',0,1,?,?),
 		       (?,?,?,'Disabled Position','disabled',0,1,?,?)`, testID("tenant"), testID("active-position"), "active", now, now, testID("tenant"), testID("disabled-position"), "disabled", now, now)
 	require.NoError(t, err)
-	for _, subject := range []struct{ subjectType string; subjectID guid.ID }{{"group", testID("active-group")}, {"position", testID("active-position")}} {
+	for _, subject := range []struct {
+		subjectType string
+		subjectID   guid.ID
+	}{{"group", testID("active-group")}, {"position", testID("active-position")}} {
 		_, changed, putErr := service.PutRelationship(t.Context(), iamdomain.Relationship{
 			TenantID: testID("tenant"), SubjectType: subject.subjectType, SubjectID: subject.subjectID, SubjectRelation: "member",
 			Relation: "viewer", ResourceType: "store", ResourceID: a.ID,
@@ -429,7 +432,10 @@ func TestRelationshipValidationRejectsInvalidFactsCyclesAndDepth(t *testing.T) {
 		require.NoError(t, putErr)
 		assert.True(t, changed)
 	}
-	for _, subject := range []struct{ subjectType string; subjectID guid.ID }{{"group", testID("disabled-group")}, {"position", testID("disabled-position")}} {
+	for _, subject := range []struct {
+		subjectType string
+		subjectID   guid.ID
+	}{{"group", testID("disabled-group")}, {"position", testID("disabled-position")}} {
 		_, _, err = service.PutRelationship(t.Context(), iamdomain.Relationship{
 			TenantID: testID("tenant"), SubjectType: subject.subjectType, SubjectID: subject.subjectID, SubjectRelation: "member",
 			Relation: "viewer", ResourceType: "store", ResourceID: b.ID,

@@ -50,7 +50,7 @@ func TestDepartmentHTTPWorkflow(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, api.Post("/iam/departments", tenant, map[string]any{"parent_id": wireID("missing"), "name": "Unknown"}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/departments", tenant, map[string]any{"name": ""}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+child.ID.String(), authz.TenantHeader + ": " + wireID("tenant-b")).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/departments/"+child.ID.String(), authz.TenantHeader+": "+wireID("tenant-b")).Code)
 }
 
 func TestOrganizationErrorMapping(t *testing.T) {

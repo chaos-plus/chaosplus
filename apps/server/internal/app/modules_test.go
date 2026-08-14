@@ -2,21 +2,28 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"testing"
-	"time"
-
 	"github.com/chaos-plus/chaosplus/internal/core/extension/auditx"
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/modules/audit"
+	"github.com/chaos-plus/chaosplus/internal/modules/federation"
 	"github.com/chaos-plus/chaosplus/internal/modules/governance"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/organization"
+	"github.com/chaos-plus/chaosplus/internal/modules/provisioning"
+	"github.com/chaos-plus/chaosplus/pkg/i18n"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
 )
 
 // seedGuardTenant builds a tenant whose only administrator is reachable through
@@ -150,4 +157,124 @@ func TestRegistrationPrincipalCreatorMapsIdentityErrors(t *testing.T) {
 	require.ErrorIs(t, err, authnext.ErrRegistrationConflict)
 	_, err = registrationPrincipalCreator(t.Context(), db, "invalid", "password-hash", "User", now, newTestIDGenerator())
 	require.ErrorIs(t, err, authnext.ErrInvalidRegistration)
+}
+
+// placeholderMark matches a run of two or more '?' characters, which is how
+// untranslated placeholder strings appear in locale files (e.g. "??????").
+var placeholderMark = regexp.MustCompile(`\?\?`)
+
+// localeFiles returns every embedded locale JSON under the repo's i18n/locales
+// directories (pkg and all modules), keyed by bundle directory then locale.
+func localeFiles(t *testing.T) map[string]map[string]map[string]string {
+	t.Helper()
+	// Tests run with the package directory as cwd; the repo root is two levels up.
+	root := "../../"
+	bundles := make(map[string]map[string]map[string]string)
+	err := filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".json") ||
+			!strings.Contains(path, string(filepath.Separator)+"i18n"+string(filepath.Separator)+"locales") {
+			return err
+		}
+		base := filepath.Dir(path)
+		locale := strings.TrimSuffix(filepath.Base(path), ".json")
+		if bundles[base] == nil {
+			bundles[base] = make(map[string]map[string]string)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var msgs map[string]string
+		if err := json.Unmarshal(data, &msgs); err != nil {
+			t.Errorf("invalid JSON in %s: %v", path, err)
+			return nil
+		}
+		bundles[base][locale] = msgs
+		return nil
+	})
+	require.NoError(t, err)
+	return bundles
+}
+
+// TestLocaleBundlesHaveNoPlaceholders guards against untranslated '?' runs in
+// any locale file, which surface to clients as raw question marks.
+func TestLocaleBundlesHaveNoPlaceholders(t *testing.T) {
+	for base, locales := range localeFiles(t) {
+		for locale, msgs := range locales {
+			for key, value := range msgs {
+				if placeholderMark.MatchString(value) {
+					t.Errorf("%s [%s] key %q contains untranslated placeholder: %q", base, locale, key, value)
+				}
+			}
+		}
+	}
+}
+
+// TestLocaleBundlesAreAlignedAcrossLanguages verifies every bundle defines the
+// same key set in en-US, zh-CN, and ms-MY so a request in any supported locale
+// resolves every message without falling back to the raw key.
+func TestLocaleBundlesAreAlignedAcrossLanguages(t *testing.T) {
+	for base, locales := range localeFiles(t) {
+		en, ok := locales["en-US"]
+		if !ok {
+			continue
+		}
+		enKeys := make(map[string]bool, len(en))
+		for k := range en {
+			enKeys[k] = true
+		}
+		for locale, msgs := range locales {
+			if locale == "en-US" {
+				continue
+			}
+			for key := range enKeys {
+				if msgs[key] == "" {
+					t.Errorf("%s [%s] is missing key %q present in en-US", base, locale, key)
+				}
+			}
+			for key := range msgs {
+				if !enKeys[key] {
+					t.Errorf("%s [%s] has key %q missing from en-US", base, locale, key)
+				}
+			}
+		}
+	}
+}
+
+// TestRegisteredLocalesResolveKeyMessages verifies that once the global i18n
+// instance has been initialized and the module bundles registered (mirroring
+// the bootstrap ordering), error keys used by handlers resolve to a real
+// translated message instead of falling back to the raw key.
+func TestRegisteredLocalesResolveKeyMessages(t *testing.T) {
+	if err := i18n.Init("en-US", "../../pkg/i18n/locales"); err != nil {
+		t.Fatalf("init i18n: %v", err)
+	}
+	for _, register := range []func() error{
+		audit.RegisterI18n,
+		federation.RegisterI18n,
+		provisioning.RegisterI18n,
+	} {
+		if err := register(); err != nil {
+			t.Fatalf("register locales: %v", err)
+		}
+	}
+
+	for _, locale := range []string{"en-US", "zh-CN", "ms-MY"} {
+		i18n.SetLocale(locale)
+		for _, key := range []string{
+			"federation_provider_disabled",
+			"federation_saml_invalid_request",
+			"federation_saml_sp_not_found",
+			"scim_target_disabled",
+			"scim_target_not_found",
+			"audit_retention_invalid",
+			"not_found",
+		} {
+			if got := i18n.T(key); got == key {
+				t.Errorf("[%s] key %q fell back to the raw key (no translation)", locale, key)
+			} else if placeholderMark.MatchString(got) {
+				t.Errorf("[%s] key %q resolved to a placeholder: %q", locale, key, got)
+			}
+		}
+	}
 }

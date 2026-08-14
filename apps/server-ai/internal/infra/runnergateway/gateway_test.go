@@ -2,189 +2,120 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnertransport"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/machine"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/nats-io/nats.go"
 )
 
-// startEmbedded starts an in-memory NATS server (no external broker needed).
-func startEmbedded(t *testing.T) *nats.Conn {
-	t.Helper()
-	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true}
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		t.Fatalf("nats server: %v", err)
+func TestGatewayRejectsDuplicateOutOfOrderAndStaleFencedEvents(t *testing.T) {
+	url := strings.TrimSpace(os.Getenv("TEST_NATS_URL"))
+	if url == "" {
+		t.Skip("set TEST_NATS_URL to a real NATS service")
 	}
-	go srv.Start()
-	if !srv.ReadyForConnections(2 * time.Second) {
-		t.Fatal("nats server not ready")
-	}
-	t.Cleanup(srv.Shutdown)
-
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
-	return nc
-}
-
-// fakeRunner emulates the daemon side: answers commands on its .cmd subject and
-// publishes events on its .evt subject.
-func fakeRunner(t *testing.T, nc *nats.Conn, runnerID string) chan string {
-	t.Helper()
-	cmdSubj := "chaos.runner." + runnerID + ".cmd"
-	evtSubj := "chaos.runner." + runnerID + ".evt"
-	spawns := make(chan string, 8)
-
-	_, err := nc.Subscribe(cmdSubj, func(m *nats.Msg) {
-		var cmd runnerCmd
-		if err := json.Unmarshal(m.Data, &cmd); err != nil {
-			_ = m.Respond([]byte(`{"ok":false}`))
-			return
-		}
-		switch cmd.Type {
-		case "spawn":
-			spawns <- cmd.Spawn.SpawnID
-			_ = nc.Publish(evtSubj, mustJSON(t, map[string]any{"type": "spawn-started", "spawnId": cmd.Spawn.SpawnID}))
-			_ = m.Respond([]byte(`{"ok":true}`))
-		case "kill":
-			_ = nc.Publish(evtSubj, mustJSON(t, map[string]any{"type": "spawn-done", "spawnId": cmd.SpawnID, "ok": false}))
-			_ = m.Respond([]byte(`{"ok":true}`))
-		default:
-			_ = m.Respond([]byte(`{"ok":true}`))
-		}
-	})
-	if err != nil {
-		t.Fatalf("fake runner subscribe: %v", err)
-	}
-	return spawns
-}
-
-func mustJSON(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
+	subscriberConnection, err := nats.Connect(url, nats.Name("gateway-instance-b-test"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
-}
-
-func TestGatewaySpawnEventKill(t *testing.T) {
-	nc := startEmbedded(t)
-	g := New(nc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := g.Start(ctx); err != nil {
-		t.Fatalf("start gateway: %v", err)
-	}
-
-	spawns := fakeRunner(t, nc, "runner-a")
-
-	// register → should be tracked
-	if _, err := nc.Request("chaos.runner.register", mustJSON(t, map[string]any{"runnerId": "runner-a"}), time.Second); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	if got := g.RegisteredRunners(); len(got) != 1 || got[0] != "runner-a" {
-		t.Fatalf("RegisteredRunners = %v, want [runner-a]", got)
-	}
-
-	// spawn → runner receives it, event flows back
-	if err := g.Spawn(ctx, "runner-a", Spawn{SpawnID: "sp1", RunID: "r1", NodeID: "n1", Attempt: 1, ExecutorType: "mock", Prompt: "hi", Cwd: "/tmp"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	select {
-	case id := <-spawns:
-		if id != "sp1" {
-			t.Fatalf("runner got spawn %q, want sp1", id)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("runner did not receive spawn")
-	}
-	select {
-	case ev := <-g.Events():
-		if ev.RunnerID != "runner-a" || ev.Type != "spawn-started" {
-			t.Fatalf("event = %+v, want runner-a spawn-started", ev)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("gateway did not receive spawn-started event")
-	}
-
-	// kill → runner replies ok
-	if err := g.Kill(ctx, "runner-a", "sp1"); err != nil {
-		t.Fatalf("kill: %v", err)
-	}
-}
-
-func TestGatewaySpawnToUnknownRunnerFails(t *testing.T) {
-	nc := startEmbedded(t)
-	g := New(nc)
-	ctx := context.Background()
-	// no fake runner on "ghost" → request times out / no responder
-	err := g.Spawn(ctx, "ghost", Spawn{SpawnID: "spX", Prompt: "hi", Cwd: "/"})
-	if err == nil {
-		t.Fatal("expected error for unknown runner")
-	}
-}
-
-func TestGatewayStartAcceptsContextWithoutDeadline(t *testing.T) {
-	nc := startEmbedded(t)
-	g := New(nc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := g.Start(ctx); err != nil {
-		t.Fatalf("start gateway with application lifecycle context: %v", err)
-	}
-}
-
-// TestLiveSpawnAgainstRealDaemon is a cross-end smoke test (Go server-ai ↔
-// TS daemon) against the shared NATS. Gated by CONTROL_SMOKE=1 like the server's
-// TestRemoteSpiceDBSmoke. Requires a daemon registered as runner <RUNNER_ID>.
-func TestLiveSpawnAgainstRealDaemon(t *testing.T) {
-	if os.Getenv("CONTROL_SMOKE") == "" {
-		t.Skip("set CONTROL_SMOKE=1 to run against the shared NATS")
-	}
-	url := envOrSmoke("CONTROL_NATS_URL", "nats://10.0.0.100:4222")
-	runnerID := envOrSmoke("RUNNER_ID", "cptest")
-	nc, err := nats.Connect(url)
+	t.Cleanup(subscriberConnection.Close)
+	publisherConnection, err := nats.Connect(url, nats.Name("hub-instance-a-test"))
 	if err != nil {
-		t.Fatalf("connect %s: %v", url, err)
+		t.Fatal(err)
 	}
-	t.Cleanup(nc.Close)
+	t.Cleanup(publisherConnection.Close)
 
-	g := New(nc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := g.Start(ctx); err != nil {
-		t.Fatalf("start gateway: %v", err)
+	database, err := (&bunx.Datasource{Type: "sqlite", Dsn: filepath.Join(t.TempDir(), "gateway.db"), Writable: true}).Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := machine.Migrate(t.Context(), database); err != nil {
+		t.Fatal(err)
+	}
+	directory := machine.NewRepository(database)
+	claimsContext := authn.WithClaims(context.Background(), &authn.Claims{TenantID: 11, EntityID: 21, PrincipalID: 31})
+	routeA, err := directory.AcquireRoute(claimsContext, 41, 51, time.Minute)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if err := g.Spawn(ctx, runnerID, Spawn{
-		SpawnID: "live1", RunID: "lr1", NodeID: "n1", Attempt: 1,
-		ExecutorType: "mock", Prompt: "live cross-end", Cwd: "/tmp",
-	}); err != nil {
-		t.Fatalf("spawn: %v", err)
+	gateway := New(runnertransport.NewNATS(subscriberConnection))
+	gateway.SetDirectory(directory)
+	workerContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := gateway.Start(workerContext); err != nil {
+		t.Fatal(err)
 	}
-	deadline := time.After(5 * time.Second)
-	for {
-		select {
-		case ev := <-g.Events():
-			if ev.RunnerID == runnerID && ev.Type == "spawn-done" {
-				return // cross-end round-trip succeeded
-			}
-		case <-deadline:
-			t.Fatal("daemon did not report spawn-done")
+	received := make(chan int, 8)
+	gateway.OnEvent(func(event RunnerEvent) { received <- event.Seq })
+	publisher := runnertransport.NewNATS(publisherConnection)
+	for _, sequence := range []int64{2, 1, 2, 3} {
+		if err := publisher.PublishEvent(t.Context(), machine.EventEnvelope{Route: routeA, Event: machine.Event{Seq: sequence, Type: "heartbeat"}}); err != nil {
+			t.Fatal(err)
 		}
 	}
-}
-
-func envOrSmoke(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	for _, expected := range []int{2, 3} {
+		select {
+		case actual := <-received:
+			if actual != expected {
+				t.Fatalf("accepted sequence = %d, want %d", actual, expected)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for sequence %d", expected)
+		}
 	}
-	return def
+	if err := directory.ReleaseRoute(claimsContext, routeA); err != nil {
+		t.Fatal(err)
+	}
+	routeB, err := directory.AcquireRoute(claimsContext, 41, 52, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishEvent(t.Context(), machine.EventEnvelope{Route: routeA, Event: machine.Event{Seq: 4, Type: "heartbeat"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishEvent(t.Context(), machine.EventEnvelope{Route: routeB, Event: machine.Event{Seq: 1, Type: "heartbeat"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case actual := <-received:
+		if actual != 1 {
+			t.Fatalf("takeover sequence = %d, want 1", actual)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for takeover event")
+	}
+	select {
+	case unexpected := <-received:
+		t.Fatalf("stale or duplicate event was delivered: %d", unexpected)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	commands, err := publisher.SubscribeCommands(t.Context(), routeB, func(_ machine.CommandEnvelope, respond machine.ReplyFunc) {
+		if err := directory.ReleaseRoute(claimsContext, routeB); err != nil {
+			t.Errorf("release route B during command: %v", err)
+			return
+		}
+		if _, err := directory.AcquireRoute(claimsContext, 41, 53, time.Minute); err != nil {
+			t.Errorf("acquire takeover route during command: %v", err)
+			return
+		}
+		_ = respond(machine.ReplyEnvelope{Route: routeB, Reply: machine.Reply{OK: true}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = commands.Close() })
+	_, err = gateway.RunCmd(claimsContext, routeB.MachineID.String(), "spawn-1", "echo stale", 1000)
+	if err == nil || !errors.Is(err, machine.ErrRouteStale) && !strings.Contains(err.Error(), "fenced") {
+		t.Fatalf("reply from superseded route = %v, want fenced rejection", err)
+	}
 }

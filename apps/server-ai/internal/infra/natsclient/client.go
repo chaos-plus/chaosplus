@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnergateway"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnertransport"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/machine"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/secretx"
 	"github.com/nats-io/nats.go"
 )
@@ -23,10 +25,11 @@ type Config struct {
 }
 
 type Client struct {
-	primary *nats.Conn
-	bridge  *nats.Conn
-	gateway *gateway.Gateway
-	cancel  context.CancelFunc
+	primary   *nats.Conn
+	bridge    *nats.Conn
+	transport *runnertransport.NATS
+	gateway   *gateway.Gateway
+	cancel    context.CancelFunc
 }
 
 func Open(config Config) (*Client, error) {
@@ -72,12 +75,14 @@ func Open(config Config) (*Client, error) {
 		primary.Close()
 		return nil, fmt.Errorf("connect NATS runner bridge: %w", err)
 	}
-	return &Client{primary: primary, bridge: bridge, gateway: gateway.New(primary)}, nil
+	transport := runnertransport.NewNATS(bridge)
+	return &Client{primary: primary, bridge: bridge, transport: transport, gateway: gateway.New(transport)}, nil
 }
 
-func (c *Client) Primary() *nats.Conn       { return c.primary }
-func (c *Client) Bridge() *nats.Conn        { return c.bridge }
-func (c *Client) Gateway() *gateway.Gateway { return c.gateway }
+func (c *Client) Primary() *nats.Conn                       { return c.primary }
+func (c *Client) Bridge() *nats.Conn                        { return c.bridge }
+func (c *Client) RunnerTransport() machine.ClusterTransport { return c.transport }
+func (c *Client) Gateway() *gateway.Gateway                 { return c.gateway }
 
 func (c *Client) Start(ctx context.Context) error {
 	if c.cancel != nil {

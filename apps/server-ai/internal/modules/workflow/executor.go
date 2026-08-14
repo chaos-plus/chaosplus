@@ -38,23 +38,3 @@ type Executor interface {
 	// resolution: OK (approved) or rejected with structured Feedback (PRD §13).
 	Approve(ctx context.Context, node *Node) (Decision, error)
 }
-
-// MockExecutor is a deterministic executor for tests and the M1 example.
-type MockExecutor struct {
-	RunAgentFn func(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error)
-}
-
-func (m *MockExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
-	if m.RunAgentFn != nil {
-		return m.RunAgentFn(ctx, node, input)
-	}
-	out, _ := json.Marshal(map[string]any{"ok": true, "node": node.ID})
-	return AgentResult{Output: out}, nil
-}
-
-func (m *MockExecutor) Approve(ctx context.Context, node *Node) (Decision, error) {
-	_ = node
-	return Decision{OK: true}, nil
-}
-
-var _ Executor = (*MockExecutor)(nil)

@@ -6,12 +6,13 @@ import { AgentSession } from "./session";
 export interface CreateAgentInput {
   name?: string;
   kind?: AgentKind;
-  runtime?: ExecutorType;
+  runtime: ExecutorType;
   cwd?: string;
   systemPrompt?: string;
   model?: string;
   provider?: string;
   apiKey?: string;
+  env?: Record<string, string>;
   allowedTools?: string[];
   maxTurns?: number;
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
@@ -31,7 +32,7 @@ export class AgentManager {
   }
 
   create(input: CreateAgentInput): AgentSession {
-    const runtime = input.runtime ?? "mock";
+    const runtime = input.runtime;
     pickBackend(runtime); // validate at the boundary, not at first run
     const session = new AgentSession({
       id: randomUUID(),
@@ -43,6 +44,7 @@ export class AgentManager {
       model: input.model,
       provider: input.provider,
       apiKey: input.apiKey,
+      env: input.env,
       allowedTools: input.allowedTools,
       maxTurns: input.maxTurns,
       permissionMode: input.permissionMode,

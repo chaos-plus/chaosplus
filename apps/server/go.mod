@@ -1,6 +1,6 @@
 module github.com/chaos-plus/chaosplus
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/beevik/etree v1.6.0

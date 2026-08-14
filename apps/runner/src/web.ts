@@ -63,11 +63,14 @@ export function startWeb(manager: AgentManager, opts: { port?: number } = {}) {
       if (path === "/api/agents" && req.method === "POST") {
         const b = await readBody(req);
         if (!b.name) return json({ error: "name is required" }, 400);
+        if (typeof b.runtime !== "string" || !b.runtime.trim()) {
+          return json({ error: "runtime is required" }, 400);
+        }
         try {
           const agent = manager.create({
             name: b.name,
             kind: b.kind ?? "executor",
-            runtime: b.runtime ?? "mock",
+            runtime: b.runtime,
             systemPrompt: b.systemPrompt,
             model: b.model,
             provider: b.provider,
@@ -256,7 +259,6 @@ const HTML = `<!doctype html>
       <option value="claude">CLI · claude</option>
       <option value="codex">CLI · codex</option>
       <option value="mastra">LLM · mastra (API)</option>
-      <option value="mock">LLM · mock</option>
     </select>
     <input id="f-model" placeholder="模型（如 claude-sonnet-4-5，可选）" />
     <input id="f-provider" placeholder="provider（如 anthropic / 自定义 baseUrl，可选）" />

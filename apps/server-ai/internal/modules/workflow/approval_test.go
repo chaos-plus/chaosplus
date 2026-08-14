@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -29,7 +28,7 @@ func TestApprovalBrokerWaitResolve(t *testing.T) {
 }
 
 func TestApprovalExecutorTimeoutPolicies(t *testing.T) {
-	base := &MockExecutor{}
+	base := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "approval-timeout")
 	pause := NewApprovalExecutor(base, NewApprovalBroker())
 	_, err := pause.Approve(context.Background(), &Node{ID: "pause", HumanApproval: &HumanApprovalSpec{TimeoutMs: 10, OnTimeout: "pause"}})
 	if !errors.Is(err, ErrApprovalTimedOut) {
@@ -120,13 +119,13 @@ func TestApprovalBrokerPersistenceFailureDoesNotReleaseGate(t *testing.T) {
 
 func TestApprovalExecutorDelegates(t *testing.T) {
 	b := NewApprovalBroker()
-	base := &MockExecutor{RunAgentFn: func(_ context.Context, _ *Node, _ json.RawMessage) (AgentResult, error) {
-		return AgentResult{Output: json.RawMessage(`{"agent":"ran"}`)}, nil
-	}}
+	base := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "approval-delegate")
 	ae := NewApprovalExecutor(base, b)
 
 	// RunAgent 委托 base。
-	out, err := ae.RunAgent(context.Background(), &Node{ID: "a"}, nil)
+	out, err := ae.RunAgent(context.Background(), &Node{ID: "a", Type: NodeAgent, Agent: &ExecutorAgentSpec{
+		ID: "a", Role: "automation", Executor: "script", Script: `printf '{"agent":"ran"}' > output.json`,
+	}}, nil)
 	if err != nil || string(out.Output) != `{"agent":"ran"}` {
 		t.Fatalf("RunAgent delegate: %s %v", string(out.Output), err)
 	}

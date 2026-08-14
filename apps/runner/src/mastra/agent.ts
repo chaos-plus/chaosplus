@@ -13,9 +13,9 @@ import { pickBackend } from "../backends";
 const runExecutor = createTool({
   id: "run-executor",
   description:
-    "Run one coding-agent session on a backend (claude/codex/mock) and return its output.",
+    "Run one coding-agent session on a backend (claude/codex) and return its output.",
   inputSchema: z.object({
-    runtime: z.enum(["claude", "codex", "mock"]),
+    runtime: z.enum(["claude", "codex"]),
     prompt: z.string(),
     cwd: z.string(),
   }),
@@ -61,7 +61,7 @@ export function createDaemonAgent(opts: DaemonAgentOptions = {}) {
     name: "chaos.plus runner",
     instructions:
       opts.instructions ??
-      "You are the chaos.plus execution runner. Use the run-executor tool to run coding-agent tasks on claude, codex, or mock backends.",
+      "You are the chaos.plus execution runner. Use the run-executor tool to run coding-agent tasks on claude or codex backends.",
     model,
     tools: { runExecutor },
   });

@@ -12,7 +12,7 @@ import (
 
 type ArtifactReader interface {
 	ReadArtifact(context.Context, string, string, string) ([]byte, error)
-	RegisteredRunners() []string
+	RegisteredRunners(context.Context) []string
 }
 
 type ReconcileReport struct {
@@ -88,7 +88,7 @@ func (s *Service) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		return report, err
 	}
 	online := make(map[string]bool)
-	for _, id := range s.reader.RegisteredRunners() {
+	for _, id := range s.reader.RegisteredRunners(ctx) {
 		online[id] = true
 	}
 	for _, artifact := range artifacts {

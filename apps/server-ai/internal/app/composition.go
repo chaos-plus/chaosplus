@@ -59,16 +59,22 @@ func buildModules(config Config, dependencies sharedapp.ModuleDependencies) ([]a
 		return nil, err
 	}
 
-	hub := machine.NewHub(client.Bridge(), machine.NewTokenStore(), nil, dependencies.NextID, dependencies.OriginPolicy)
+	holderID, err := dependencies.NextID()
+	if err != nil {
+		_ = client.Stop(context.Background())
+		return nil, fmt.Errorf("generate machine route holder id: %w", err)
+	}
+	hub := machine.NewHub(client.RunnerTransport(), machine.NewTokenStore(), nil, dependencies.NextID, holderID, dependencies.OriginPolicy)
 	// A runner registers over the machine WS bridge; surface it to the run
 	// gateway so run launch can discover and dispatch to connected daemons,
 	// and drop it on disconnect so zombies are never dispatch targets.
 	hub.SetRunnerMarker(client.Gateway().MarkRunner, client.Gateway().UnmarkRunner)
 	machineModule := machine.NewModule(dependencies.Writer, hub, dependencies.Authorization)
+	client.Gateway().SetDirectory(machineModule.Repository())
 	agentModule := agent.NewModule(dependencies.Writer, dependencies.NextID, dependencies.Authorization)
 	machineModule.SetAgentDirectory(agentModule.Directory())
 	channelModule := channel.NewModule(dependencies.Writer, dependencies.NextID, dependencies.Authorization, agentModule.Service())
-	link := &workflow.NatsRunnerLink{G: client.Gateway()}
+	link := &workflow.GatewayRunnerLink{G: client.Gateway()}
 	artifactModule := artifact.NewModule(dependencies.Writer, dependencies.NextID, link, artifactScopeDirectory{dependencies.Writer}, config.Reconcile.Interval, dependencies.Authorization)
 	workflowModule := workflow.NewModule(
 		dependencies.Writer,
@@ -155,13 +161,13 @@ func (d artifactScopeDirectory) ActiveArtifactScopes(ctx context.Context) ([]aut
 }
 
 func machinePicker(hub *machine.Hub) workflow.MachinePicker {
-	return func(executorType string) string {
-		for _, rawID := range hub.RegisteredRunners() {
+	return func(ctx context.Context, executorType string) string {
+		for _, rawID := range hub.RegisteredRunnersContext(ctx) {
 			id, err := guid.Parse(rawID)
 			if err != nil {
 				continue
 			}
-			for _, runtime := range hub.MachineRuntimes(id) {
+			for _, runtime := range hub.MachineRuntimesContext(ctx, id) {
 				if runtime == executorType {
 					return rawID
 				}

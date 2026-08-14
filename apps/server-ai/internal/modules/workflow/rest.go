@@ -24,11 +24,9 @@ var Actions = []authz.Action{
 
 type workflowEntityInput struct{}
 type runIDInput struct {
-	workflowEntityInput
 	ID guid.ParamID `path:"id"`
 }
 type runApprovalInput struct {
-	workflowEntityInput
 	ID   guid.ParamID `path:"id"`
 	Node string       `path:"node" minLength:"1" maxLength:"255"`
 	Body struct {
@@ -38,15 +36,12 @@ type runApprovalInput struct {
 	}
 }
 type launchRunInput struct {
-	workflowEntityInput
 	Body LaunchRequest
 }
 type workflowIDInput struct {
-	workflowEntityInput
 	ID guid.ParamID `path:"id"`
 }
 type createWorkflowInput struct {
-	workflowEntityInput
 	Body struct {
 		Key      string          `json:"key" minLength:"1" maxLength:"255"`
 		Revision int64           `json:"revision" minimum:"1"`

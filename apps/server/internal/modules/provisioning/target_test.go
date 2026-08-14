@@ -34,7 +34,7 @@ type scimProviderRequest struct {
 	Body    string
 }
 
-type fakeSCIMProvider struct {
+type scimProviderEndpoint struct {
 	mu       sync.Mutex
 	requests []scimProviderRequest
 	status   int
@@ -47,7 +47,7 @@ type fakeSCIMProvider struct {
 // SyncTarget nor listTargetResources was ever executed.
 func TestSyncTargetPushesEveryMappedResource(t *testing.T) {
 	env := newProvisioningEnvironment(t)
-	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider, providerServer := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
 
@@ -85,9 +85,9 @@ func TestSyncTargetPushesEveryMappedResource(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func newFakeSCIMProvider(t *testing.T, status int, body string) (*fakeSCIMProvider, *httptest.Server) {
+func newSCIMProviderEndpoint(t *testing.T, status int, body string) (*scimProviderEndpoint, *httptest.Server) {
 	t.Helper()
-	provider := &fakeSCIMProvider{status: status, body: body}
+	provider := &scimProviderEndpoint{status: status, body: body}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -112,7 +112,7 @@ func newFakeSCIMProvider(t *testing.T, status int, body string) (*fakeSCIMProvid
 	return provider, server
 }
 
-func (p *fakeSCIMProvider) last(t *testing.T) scimProviderRequest {
+func (p *scimProviderEndpoint) last(t *testing.T) scimProviderRequest {
 	t.Helper()
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -120,7 +120,7 @@ func (p *fakeSCIMProvider) last(t *testing.T) scimProviderRequest {
 	return p.requests[len(p.requests)-1]
 }
 
-func (p *fakeSCIMProvider) count() int {
+func (p *scimProviderEndpoint) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.requests)
@@ -217,7 +217,7 @@ func TestTargetRequiresEncryptionKey(t *testing.T) {
 
 func TestPushUserLifecycle(t *testing.T) {
 	env := newProvisioningEnvironment(t)
-	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider, providerServer := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
 
@@ -249,7 +249,7 @@ func TestPushUserLifecycle(t *testing.T) {
 
 func TestPushGroupMapsOnlyPushedMembers(t *testing.T) {
 	env := newProvisioningEnvironment(t)
-	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider, providerServer := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
 
@@ -286,7 +286,7 @@ func TestPushGroupMapsOnlyPushedMembers(t *testing.T) {
 
 func TestDeprovisionAndRepush(t *testing.T) {
 	env := newProvisioningEnvironment(t)
-	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider, providerServer := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
 
@@ -317,7 +317,7 @@ func TestPushRemoteFailures(t *testing.T) {
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-alice", "alice", "alice@example.test"))
 	require.NoError(t, err)
 
-	_, server500 := newFakeSCIMProvider(t, http.StatusInternalServerError, "remote exploded")
+	_, server500 := newSCIMProviderEndpoint(t, http.StatusInternalServerError, "remote exploded")
 	target500, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Failing", server500.URL, "token")
 	require.NoError(t, err)
 	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(target500.Target.ID), ResourceUser, parseGUID(user.ID))
@@ -331,7 +331,7 @@ func TestPushRemoteFailures(t *testing.T) {
 	_, err = env.service.PushResource(ctx, testID("tenant-a"), parseGUID(targetClosed.Target.ID), ResourceUser, parseGUID(user.ID))
 	assert.ErrorIs(t, err, ErrRemoteUnavailable)
 
-	providerOK, serverOK := newFakeSCIMProvider(t, http.StatusOK, "")
+	providerOK, serverOK := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	providerOK.echo = true
 	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", serverOK.URL, "token")
 	require.NoError(t, err)
@@ -455,7 +455,7 @@ func TestReplaceTargetNameConflict(t *testing.T) {
 func TestPushRemoteDetailTruncation(t *testing.T) {
 	env := newProvisioningEnvironment(t)
 	ctx := t.Context()
-	_, server := newFakeSCIMProvider(t, http.StatusBadGateway, strings.Repeat("x", 600))
+	_, server := newSCIMProviderEndpoint(t, http.StatusBadGateway, strings.Repeat("x", 600))
 	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Verbose", server.URL, "token")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(ctx, env.auth, activeUserInput("ext-long", "long", "long@example.test"))
@@ -468,7 +468,7 @@ func TestPushRemoteDetailTruncation(t *testing.T) {
 
 func TestDeprovisionRemoteFailures(t *testing.T) {
 	env := newProvisioningEnvironment(t)
-	provider, server := newFakeSCIMProvider(t, http.StatusOK, "")
+	provider, server := newSCIMProviderEndpoint(t, http.StatusOK, "")
 	provider.echo = true
 	ctx := t.Context()
 	target, err := env.service.CreateTarget(ctx, testID("tenant-a"), "Okta", server.URL, "token")
@@ -503,7 +503,7 @@ func TestDeprovisionRemoteFailures(t *testing.T) {
 	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)), ErrRemoteUnavailable)
 
 	// Remote rejection on deprovision.
-	_, server500 := newFakeSCIMProvider(t, http.StatusInternalServerError, "rejected")
+	_, server500 := newSCIMProviderEndpoint(t, http.StatusInternalServerError, "rejected")
 	_, err = env.db.NewUpdate().Table("iam_scim_targets").Set("base_url = ?", server500.URL).Where("id = ?", target.Target.ID).Exec(ctx)
 	require.NoError(t, err)
 	assert.ErrorIs(t, env.service.DeprovisionResource(ctx, testID("tenant-a"), parseGUID(target.Target.ID), ResourceUser, parseGUID(user.ID)), ErrRemoteResponse)

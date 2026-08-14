@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-				"testing"
+	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/policyx"
@@ -620,12 +620,12 @@ type entityRowForTest struct {
 	TenantID      guid.ID  `bun:"tenant_id"`
 	ID            guid.ID  `bun:"id"`
 	ParentID      *guid.ID `bun:"parent_id"`
-	Type          string  `bun:"type"`
-	Name          string  `bun:"name"`
-	Status        string  `bun:"status"`
-	Metadata      string  `bun:"metadata"`
-	CreatedAt     int64   `bun:"created_at"`
-	UpdatedAt     int64   `bun:"updated_at"`
+	Type          string   `bun:"type"`
+	Name          string   `bun:"name"`
+	Status        string   `bun:"status"`
+	Metadata      string   `bun:"metadata"`
+	CreatedAt     int64    `bun:"created_at"`
+	UpdatedAt     int64    `bun:"updated_at"`
 }
 
 func entityTestRow(tenantID, id, parentID guid.ID, entityType string) entityRowForTest {
@@ -641,9 +641,9 @@ type roleBindingForTest struct {
 	TenantID      guid.ID `bun:"tenant_id"`
 	RoleID        guid.ID `bun:"role_id"`
 	PrincipalID   guid.ID `bun:"principal_id"`
-	ScopeType     string `bun:"scope_type"`
+	ScopeType     string  `bun:"scope_type"`
 	ScopeID       guid.ID `bun:"scope_id"`
-	Effect        string `bun:"effect"`
-	ExpiresAt     int64  `bun:"expires_at"`
-	CreatedAt     int64  `bun:"created_at"`
+	Effect        string  `bun:"effect"`
+	ExpiresAt     int64   `bun:"expires_at"`
+	CreatedAt     int64   `bun:"created_at"`
 }

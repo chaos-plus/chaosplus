@@ -20,13 +20,11 @@ var Actions = []authz.Action{
 type artifactEntityInput struct{}
 
 type listArtifactsInput struct {
-	artifactEntityInput
 	ProjectID guid.ParamID `query:"projectId" required:"false"`
-	Status    string  `query:"status" enum:"valid,stale,invalid,orphaned" required:"false"`
+	Status    string       `query:"status" enum:"valid,stale,invalid,orphaned" required:"false"`
 }
 
 type artifactIDInput struct {
-	artifactEntityInput
 	ID guid.ParamID `path:"id"`
 }
 

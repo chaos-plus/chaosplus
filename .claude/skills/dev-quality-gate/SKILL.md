@@ -33,27 +33,40 @@ python3 .claude/skills/dev-quality-gate/scripts/skill-runtime.py refresh
 ## 强制门禁
 
 - 保留用户已有修改，遵循仓库模式。
-- 拒绝 `internal/app` 下 YAML、无同名生产文件的 Go 测试、以及用 mock/fake/stub 等替代真实依赖的测试。
+- 拒绝 `internal/app` 下 YAML、无同名生产文件的 Go 测试、任何产品代码或测试中的 mock/fake/stub 等内部测试替代物，以及生产 Go 文件对 `miniredis` 的引用；只有隔离 `*_test.go` 可用 `miniredis` 做外部 Redis 的本地快速反馈，且不能替代真实 Redis 发布验收。
 - 共享持久化要求 SQLite、MySQL、PostgreSQL 等价；明确哪些 live dialect 实际运行过。
 - 完整验收要求真实 Go coverage 不低于 90%。
 - OpenAPI operation ID、summary、tags、响应、认证、tenant/entity 授权必须准确。
 - 前端必须通过 lint、typecheck、真实测试、生产构建、响应式浏览器检查和部署检查。
 - 文档必须通过同步、内部链接、导航、Mermaid 和生产构建。
+- 远程 Shell 必须在真实 Windows ConPTY、macOS/Linux PTY、真实 runner 与浏览器上验证；workflow 节点包必须验证签名/digest/SBOM、能力拒绝、版本 pin、撤销与真实执行，不能用内置替代节点验收。
 - 严禁声称未运行的功能、数据库、workflow、浏览器或部署已通过。
 
 工作中运行 path-aware gate：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1
+```text
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py
 ```
 
 发布或生产就绪声明前运行：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope all -Full
+```text
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope all --full
 ```
 
+脚本只使用 Python 标准库并支持 Windows、macOS 和 Linux；Windows 可用
+`py -3` 替代 `python3`。后端静态工具缺失或版本不符时，门禁按固定版本自动
+安装 `staticcheck`、`golangci-lint` 和 Full 模式所需的 `govulncheck`。
+
 严禁为了通过而删除检查、排除生产 package、压制 warning、缩小 coverage 或降低阈值。
+
+## 受控 WIP 快照
+
+完整门禁失败时默认禁止提交和推送。只有用户明确要求保存或共享当前未完成工作，
+才执行 `.rules/3.TEST.md` 的 WIP 例外：先通过不可豁免检查，确认非保护、非默认、
+非 release 开发分支，再使用 `WIP:` 标题和包含精确 `Failed-Gates`、`Unrun-Gates`
+及 not-ready 声明的正文提交。不得 force push、tag、release、自动合并、降低门禁，
+也不得把 WIP 状态描述为验收通过。
 
 ## 受控学习
 

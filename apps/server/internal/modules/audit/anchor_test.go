@@ -536,7 +536,7 @@ func TestAuditAnchorHTTPDisabled(t *testing.T) {
 	require.NoError(t, iam.Migrate(t.Context(), db))
 	_, api := humatest.New(t)
 	RegisterREST(api, NewService(db, newTestIDGenerator()), authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	response := api.Post("/iam/audit-anchor", authz.TenantHeader + ": " + wireID("tenant"))
+	response := api.Post("/iam/audit-anchor", authz.TenantHeader+": "+wireID("tenant"))
 	assert.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "audit_anchor_not_enabled")
 }

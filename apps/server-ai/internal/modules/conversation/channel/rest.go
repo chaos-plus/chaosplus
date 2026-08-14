@@ -17,40 +17,32 @@ var Actions = []authz.Action{
 	{Resource: "conversation_channel", Verb: "delete", Scope: "entity", AllowedRelations: []string{"owner"}, DataScoped: true},
 }
 
-type entityInput struct{}
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type listInput struct {
-	entityInput
 	ProjectID guid.ParamID `query:"projectId" required:"false"`
 }
 type createInput struct {
-	entityInput
 	Body ChannelCreateInput
 }
 type updateInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body ChannelUpdateInput
 }
 type deleteInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
-	Version int64 `query:"version" minimum:"1"`
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type memberInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body AddMemberInput
 }
 type removeMemberInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID       guid.ParamID `path:"id"`
 	MemberID guid.ParamID `path:"memberId"`
-	Kind     MemberKind `path:"kind" enum:"human,agent"`
-	Version  int64      `query:"version" minimum:"1"`
+	Kind     MemberKind   `path:"kind" enum:"human,agent"`
+	Version  int64        `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
 type ok struct {

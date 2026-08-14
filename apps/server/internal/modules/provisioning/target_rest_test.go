@@ -70,7 +70,7 @@ func TestTargetManagementHTTPWorkflow(t *testing.T) {
 
 	// Create a local user and push it through the API against a real HTTP
 	// SCIM provider endpoint.
-	provider, providerServer := newFakeSCIMProvider(t, http.StatusOK, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"id":"remote-api-user","userName":"api-alice"}`)
+	provider, providerServer := newSCIMProviderEndpoint(t, http.StatusOK, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"id":"remote-api-user","userName":"api-alice"}`)
 	pushTarget, err := env.service.CreateTarget(t.Context(), testID("tenant-a"), "Okta API", providerServer.URL, "api-token")
 	require.NoError(t, err)
 	user, err := env.service.CreateUser(t.Context(), env.auth, activeUserInput("ext-api-alice", "api-alice", "api-alice@example.test"))

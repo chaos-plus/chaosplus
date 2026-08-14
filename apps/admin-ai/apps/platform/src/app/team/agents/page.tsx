@@ -27,7 +27,7 @@ const EMPTY_FORM = {
   defaultChannels: "",
 }
 
-/** 运行时即供应商(二选一):claude→anthropic, codex→openai, mock→空。 */
+/** 运行时即供应商：claude→anthropic，codex→openai。 */
 const RUNTIME_PROVIDER: Record<string, string> = { claude: "anthropic", codex: "openai" }
 
 function fail(action: string, e: unknown) {

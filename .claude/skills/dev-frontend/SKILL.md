@@ -28,6 +28,8 @@ description: 开发、评审、测试、优化和部署 Dev 管理前端。涉�
 - tenant/entity 上下文可见、稳定且不暗示跨租户访问。
 - mutation 必须有 pending、success、validation、authorization、empty、retry 状态。
 - 操作型界面优先紧凑表格和表单，避免营销页式装饰、嵌套卡片和过度圆角。
+- Machine 远程 Shell 使用成熟 terminal renderer，完整支持 IME/Unicode、键盘、resize、连接/退出状态、无障碍名称和背压提示；前端不拼接 shell 命令或持有 runner token。
+- Workflow 节点库由服务端已安装 catalog 与 JSON Schema 驱动；不得在浏览器执行市场代码或允许插件注入同源 DOM。安装、能力、签名、版本和升级风险必须可见。
 - 熟悉动作使用图标按钮，歧义动作带标签；具备可见 focus、语义 HTML、关联 label 和合理触控区域。
 - 桌面与移动端文字不得溢出，固定格式控件使用稳定尺寸，加载状态不得引起布局跳动。
 
@@ -35,15 +37,15 @@ description: 开发、评审、测试、优化和部署 Dev 管理前端。涉�
 
 - API client 测试使用真实 TCP listener。
 - 认证、路由、Cookie、mutation 使用真实后端和浏览器。
-- 禁止 mock、fake、stub、fixture interception 和测试专用应用分支。
+- 当前项目自身的测试和自验证禁止 mock、fake、stub、fixture interception 和测试专用应用分支；必须使用真实内部实现、真实 listener 和真实浏览器验证。
 - 同时验证失败 envelope 与非 2xx，不只验证成功 JSON。
 - 检查桌面/移动截图的溢出、重叠、不可读、空白和 focus。
 - lint warning 视为失败；构建后检查生产 bundle。
 
 运行：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope frontend
+```text
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope frontend
 ```
 
-发布前运行完整门禁。只有有复现和验证证据的通用失败才写入 `references/lessons.md`，严禁因单页偏好污染通用规则或降低检查。
+发布前运行完整门禁；Windows 使用 `py -3` 启动同一脚本。只有有复现和验证证据的通用失败才写入 `references/lessons.md`，严禁因单页偏好污染通用规则或降低检查。

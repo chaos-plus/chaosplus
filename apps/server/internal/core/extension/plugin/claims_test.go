@@ -11,16 +11,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) { return guid.ID(next.Add(1)), nil }
+}
 
 var claimsWASM = []byte{
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,

@@ -71,7 +71,7 @@ func TestSAMLServiceProviderHTTPWorkflow(t *testing.T) {
 	other := newSAMLSPServer(t)
 	updateBody, err := json.Marshal(samlSPBody{Name: "portal-v2", EntityID: other.entityID, MetadataXML: other.metadataXML(), Status: ProviderDisabled})
 	require.NoError(t, err)
-	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/saml/service-providers/" + registered.ID.String(), wireID("tenant-a"), []byte(updateBody), nil)
+	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/saml/service-providers/"+registered.ID.String(), wireID("tenant-a"), []byte(updateBody), nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	var updated SAMLServiceProvider
@@ -79,9 +79,9 @@ func TestSAMLServiceProviderHTTPWorkflow(t *testing.T) {
 	assert.Equal(t, "portal-v2", updated.Name)
 	assert.Equal(t, ProviderDisabled, updated.Status)
 
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/saml/service-providers/" + registered.ID.String(), wireID("tenant-a"), nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/saml/service-providers/"+registered.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/saml/service-providers/" + registered.ID.String(), wireID("tenant-a"), nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/saml/service-providers/"+registered.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusNotFound, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("en-US", "federation_saml_sp_not_found"), envelope.Message)

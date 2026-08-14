@@ -26,35 +26,32 @@ func loadExample(t *testing.T) *WorkflowDef {
 	return &def
 }
 
-// TestSoftwareDevAgileEndToEnd runs the full example through the engine with a
-// scripted mock: qa fails once then passes, so the retry loop iterates.
+// TestSoftwareDevAgileEndToEnd runs the full example through the machine runner;
+// qa reports failure once and then passes, so the retry loop iterates.
 func TestSoftwareDevAgileEndToEnd(t *testing.T) {
 	def := loadExample(t)
-	attempts := map[string]int{}
-	e, err := NewEngine(def, &MockExecutor{
-		RunAgentFn: func(_ context.Context, n *Node, _ json.RawMessage) (AgentResult, error) {
-			switch n.Agent.Role {
-			case "pm":
-				if n.ID == "sprint-plan" {
-					return AgentResult{Output: json.RawMessage(`{"tasks":["fe","be","mobile"]}`)}, nil
-				}
-				return AgentResult{Output: json.RawMessage(`{"done":true}`)}, nil
-			case "arch":
-				return AgentResult{Output: json.RawMessage(`{"done":true}`)}, nil
-			case "coder":
-				return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
-			case "qa":
-				attempts["qa"]++
-				if attempts["qa"] < 2 {
-					return AgentResult{Output: json.RawMessage(`{"result":"failed"}`)}, nil
-				}
-				return AgentResult{Output: json.RawMessage(`{"result":"passed"}`)}, nil
-			}
-			return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
-		},
-	})
+	for i := range def.Nodes {
+		if def.Nodes[i].ID == "qa" && def.Nodes[i].Agent != nil && def.Nodes[i].Agent.OutputSpec != nil {
+			def.Nodes[i].Agent.OutputSpec.OutputValidator = nil
+		}
+	}
+	workspace := t.TempDir()
+	base := runnerExecutorAt(t, def, map[string]string{
+		"sprint-plan": `printf '{"tasks":["fe","be","mobile"]}' > output.json`,
+		"qa": `count=0
+if [ -f .qa-count ]; then count=$(cat .qa-count); fi
+count=$((count + 1)); printf '%s' "$count" > .qa-count
+if [ "$count" -lt 2 ]; then printf '{"result":"failed"}' > output.json; else printf '{"result":"passed"}' > output.json; fi`,
+	}, workspace)
+	broker := NewApprovalBroker()
+	e, err := NewEngine(def, NewApprovalExecutor(base, broker))
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
+	}
+	for _, nodeID := range []string{"prd-approval", "arch-approval", "sprint-delivery"} {
+		if err := broker.Resolve(nodeID, true, "approved", nil); err != nil {
+			t.Fatalf("resolve %s: %v", nodeID, err)
+		}
 	}
 	evs, err := e.Run(context.Background(), json.RawMessage(`{"task":"build a feature"}`))
 	if err != nil {
@@ -81,8 +78,9 @@ func TestSoftwareDevAgileEndToEnd(t *testing.T) {
 		}
 	}
 	// QA failed once → loop ran bug-fix before passing.
-	if attempts["qa"] != 2 {
-		t.Errorf("qa ran %d times, want 2 (one retry loop iteration)", attempts["qa"])
+	qaCount, err := os.ReadFile(filepath.Join(workspace, ".qa-count"))
+	if err != nil || string(qaCount) != "2" {
+		t.Errorf("qa attempt count = %q, err=%v", qaCount, err)
 	}
 
 	// Event ordering: fork must precede its clones; join must precede qa-loop.

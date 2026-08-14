@@ -61,7 +61,7 @@ func TestGroupMemberWindowNormalization(t *testing.T) {
 
 	for _, item := range []struct {
 		tenant, group, principal guid.ID
-		window                  GroupMemberWindow
+		window                   GroupMemberWindow
 	}{
 		{0, testID("group"), testID("principal"), GroupMemberWindow{}},
 		{testID("tenant"), 0, testID("principal"), GroupMemberWindow{}},

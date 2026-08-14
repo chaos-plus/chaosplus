@@ -146,6 +146,13 @@ func validateNodeFields(wfID, id string, n *Node) error {
 		if n.Agent.Executor == "" {
 			return fmt.Errorf("workflow %s: node %q (agent) missing executor", wfID, id)
 		}
+		if n.Agent.Executor == "script" {
+			if strings.TrimSpace(n.Agent.Script) == "" {
+				return fmt.Errorf("workflow %s: node %q script executor requires a non-empty script", wfID, id)
+			}
+		} else if n.Agent.Script != "" {
+			return fmt.Errorf("workflow %s: node %q script is only valid for the script executor", wfID, id)
+		}
 		// These fields are part of the public contract but the current runner
 		// protocol cannot enforce them yet. Reject them at authoring time instead
 		// of silently weakening an approved agent spec.

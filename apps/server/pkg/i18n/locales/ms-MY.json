@@ -16,6 +16,7 @@
   "geoip_no_client_ip": "Alamat IPv4 pelanggan tidak dapat dikenal pasti. Berikan alamat pelanggan yang sah dan cuba lagi.",
   "geoip_not_found": "Data geolokasi untuk alamat IP ini tidak ditemui. Semak alamat atau cuba penyedia lain.",
   "guid_not_ready": "Penjana ID belum tersedia. Cuba lagi selepas perkhidmatan selesai dimulakan.",
+  "not_ready": "Perkhidmatan belum tersedia. Cuba lagi selepas permulaan selesai.",
   "request_body_required": "Badan permintaan diperlukan.",
   "request_body_timeout": "Masa membaca badan permintaan telah tamat. Cuba lagi.",
   "request_body_unreadable": "Badan permintaan tidak dapat dibaca.",

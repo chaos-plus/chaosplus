@@ -266,4 +266,4 @@ internal/modules/iam/sql/{sqlite,mysql,postgres}/
 - Principal 禁用同步撤销 session/refresh；
 - SQLite 真实文件并发写，以及可达时的 MySQL/PostgreSQL contract suite。
 
-测试必须使用生产 constructor、真实数据库和真实 HTTP listener，不得使用 mock、fake、stub、miniredis 或拦截 fixture。
+上述 IAM 验收必须使用生产 constructor、真实数据库、真实 Redis（涉及 Redis 时）和真实 HTTP listener，不得使用 mock、fake、stub 或拦截 fixture。隔离的 `*_test.go` 可用 `miniredis` 做本地快速反馈，但其结果不计入上述集成、协议、安全、E2E 或 Release 验收。

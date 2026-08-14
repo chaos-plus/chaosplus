@@ -19,21 +19,14 @@ var Actions = []authz.Action{
 	{Resource: "conversation_message", Verb: "view", Scope: "entity", AllowedRelations: []string{"owner", "editor", "viewer"}, DataScoped: true},
 }
 
-type entityInput struct{}
-type channelInput struct {
-	entityInput
-	ChannelID guid.ParamID `path:"id"`
-}
 type listInput struct {
-	entityInput
 	ChannelID guid.ParamID `path:"id"`
-	AfterSeq int64 `query:"afterSeq" minimum:"0"`
-	Limit    int   `query:"limit" minimum:"1" maximum:"500" default:"100"`
+	AfterSeq  int64        `query:"afterSeq" minimum:"0"`
+	Limit     int          `query:"limit" minimum:"1" maximum:"500" default:"100"`
 }
 type createInput struct {
-	entityInput
 	ChannelID guid.ParamID `path:"id"`
-	Body MessageCreateInput
+	Body      MessageCreateInput
 }
 type body[T any] struct{ Body T }
 

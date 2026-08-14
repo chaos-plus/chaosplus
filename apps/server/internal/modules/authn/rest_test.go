@@ -6,11 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +34,28 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 )
+
+func testID(value string) guid.ID {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	id, err := guid.Parse(strconv.FormatUint(hash.Sum64()>>1, 10))
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func parseGUID(value string) guid.ID {
+	id, _ := guid.Parse(value)
+	return id
+}
+
+func guidString(value guid.ID) string { return value.String() }
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) { return guid.ID(next.Add(1)), nil }
+}
 
 func TestAuthenticationHTTPFlow(t *testing.T) {
 	db, web, principalID := newAuthenticationService(t)

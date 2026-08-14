@@ -1,12 +1,12 @@
 # chaos.plus
-## 通用自治工作流运行时 —— PRD 定稿
+## 通用自治工作流运行时 —— PRD v2.1
 
-> **不可豁免的设计基线：** 所有产品、架构、接口、数据、安全、部署、运维、UI、UX、UE 与测试设计，必须采用对应场景下最正规、具备全球工程共识、广泛采用且基于标准的通用方案；优先使用官方规范与组件、成熟协议、可互操作的常规模型及持续维护的主流库。严禁将 demo/示例方案、产品链路中的 mock 或 fake 服务、临时实现、权宜捷径、无必要的偏门或私有方案、仅本地成立的假设以及未经验证的 fallback 纳入设计或交付。测试替身仅允许存在于隔离的自动化测试中，不得进入运行时代码，也不得代替集成、协议、迁移、安全、无障碍、性能或端到端验收。若对应问题尚无公认通用方案，必须先提交并评审 ADR，对主流候选方案及其互操作性、安全、运维、迁移、回滚和验证进行完整裁决，未经裁决不得实现。
-### Product Requirements Document — v2.0 (Final)
+> **不可豁免的设计基线：** 所有产品、架构、接口、数据、安全、部署、运维、UI、UX、UE 与测试设计，必须采用对应场景下最正规、具备全球工程共识、广泛采用且基于标准的通用方案；优先使用官方规范与组件、成熟协议、可互操作的常规模型及持续维护的主流库。严禁将 demo/示例方案、产品链路中的 mock/fake/stub 服务、临时实现、权宜捷径、无必要的偏门或私有方案、仅本地成立的假设以及未经验证的 fallback 纳入设计或交付。项目自身的测试、自验证与交付验收必须运行真实内部实现；外部依赖可使用明确放行的协议真实轻量实现，当前只放行隔离 Go 测试中的 `miniredis`，且不能替代真实 Redis 发布验收。若对应问题尚无公认通用方案，必须先提交并评审 ADR，对主流候选方案及其互操作性、安全、运维、迁移、回滚和验证进行完整裁决，未经裁决不得实现。
+### Product Requirements Document — v2.1
 
-版本：2.0｜状态：**定稿**｜生成日期：2026-08-01
+版本：2.1｜状态：**定稿**｜更新日期：2026-08-14
 
-> **文档沿革**：本文档是唯一权威规格，**自包含**——所有被采纳的历史内容均已内联，不引用任何仓库外或已佚失的文档。由 `PRD6.md`（架构规格）与 `chaosplus.md`（产品功能树）合并、裁决冲突后融合而成，两份源文档为仓库内仅存的历史输入，保留不动；更早的 PRD1–PRD5 与 RFC 文档已佚失（见 §24）。所有待决项（C1–C9、R1、R4、C8）已于 2026-08-01 裁决，决议记录见附录 C。
+> **文档沿革**：本文档是唯一权威规格，**自包含**——所有被采纳的历史内容均已内联，不引用任何仓库外或已佚失的文档。v2.1 在 v2.0 基线上新增 Web Machine 跨平台远程 Shell 与 workflow 节点包/市场裁决，并收紧真实测试基线；决议记录见附录 C。
 >
 > **命名（C8 决议）**：产品、引擎、品牌统一为 **chaos.plus**；代码标识符/目录/CLI 用 `chaosplus`（如 `.chaosplus/` 目录、`chaosplus` CLI、`machine-runner@chaos.plus` npm 包、`api.chaos.plus` 域名）。历史文档中的 "Myrmidon" 一律指本产品。
 
@@ -140,7 +140,7 @@ chaos.plus 是一个**通用自治工作流运行时**。用户声明「期望�
 │   • Digital-human Agents 长期成员（数字人）                             │
 │   • API Server           gRPC / WebSocket + REST 网关 + AuthProvider    │
 └──────▲────────────────────────────────────▲───────────────────────────┘
-       │ 网络协议（客户端/IM）                │ 网络协议（控制面 ↔ runner）
+       │ 网络协议（客户端/IM）                │ authenticated WebSocket
        │                                      │ localhost | 局域网 | 云
 ┌──────┴───────────┐            ┌─────────────┴──────────────────────────┐
 │ Human 成员        │            │ Machine Runner（永远 LOCAL，1..N 跨机） │
@@ -173,7 +173,7 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 | Runner = Go 静态二进制 (C4) | runner = TS/Bun | Mastra agent runtime 集成更快；Go 重写无 v1 用户收益 |
 | Admin = Next.js (C4/C9) | Vite SPA | 单页管理后台无需 SSR/ISR；shadcn/ui + tailwind 未变 |
 | DB 查询生成器（原 C9） | Goose migration + Bun ORM/查询/事务 | 与 `apps/server/internal/modules` 保持一致；不使用查询代码生成器 |
-| API gateway（原 C2） | Huma REST + WebSocket；runner 消息走 NATS | 按 `apps/server` 的 module-owned REST 注册模式实现，不虚构未交付的 gateway |
+| API gateway（原 C2） | Huma REST + WebSocket；runner 使用 authenticated WebSocket | 按 `apps/server` 的 module-owned REST 注册模式实现；集群消息总线仅为控制面内部 adapter |
 
 | 因素 | 判断 |
 |------|------|
@@ -190,9 +190,9 @@ DSL/SDK：TS npm 包（可选，产出 WorkflowDef JSON）   引擎只认 JSON
 
 **契约源单一化：** WorkflowDef schema、网络协议类型，统一用 protobuf / JSON Schema 定义，**codegen 出 Go 结构体 + TS 类型**，两端类型安全。
 
-**API 协议分层（C2 修订）：** 对外 API 使用按业务 module 注册的 **Huma REST**，实时流使用 WebSocket；控制面与 runner 的命令/事件传输使用 NATS。列表接口只接受各资源显式声明并校验的 query 参数，**server-ai 不使用 RSQL，也不使用 grpc-gateway**。契约由 Huma/OpenAPI、JSON Schema 与共享事件类型共同约束，不维护虚构的 proto 实现。
+**API 协议分层（C2 修订）：** 对外 API 使用按业务 module 注册的 **Huma REST**，实时流使用 WebSocket；runner 只通过标准 authenticated WebSocket 收发命令、事件与心跳，配置面仅包含 server URL、machine token 和 name，不出现 broker、subject 或 topic。列表接口只接受各资源显式声明并校验的 query 参数，**server-ai 不使用 RSQL，也不使用 grpc-gateway**。契约由 Huma/OpenAPI、JSON Schema 与共享事件类型共同约束，不维护虚构的 proto 实现。
 
-**消息传输（C3 决议）：** ConversationHub 的事件日志是唯一真相（P1/P2）。**NATS 仅作为 cloud / self-hosted profile 的传输/扇出层实现**（WebSocket/TCP）；desktop profile 进程内直连，不引入 NATS 硬依赖（P8）。
+**消息传输（C3 修订）：** ConversationHub 的事件日志是唯一真相（P1/P2）。控制面业务只依赖 transport-neutral `EventBus` / `RunnerLink` port；cloud/self-hosted 当前可使用固定官方 NATS 作为内部集群 adapter，未来也可增加满足相同可靠性、鉴权、背压和可观测合同的其他实现。任何 adapter 名称、地址和凭据都不得泄漏为 runner 产品协议；desktop profile 可使用进程内 adapter。
 
 **DB 工具链（C9 修订）：** SQLite-first；所有环境统一由 **Goose** 执行 migration，由 **Bun** 负责 ORM、查询和事务。`*bun.DB` 只在 `internal/app` 组合根创建并注入 module；每个 module 独立内嵌 `sql/<dialect>`、维护自己的 Goose version table 和 Repository。**项目不使用 sqlc**，也不允许共享业务 `Store`。
 
@@ -249,6 +249,19 @@ Account → Instance(Org) → Project → Workspace
 - 未经确认的临时 machine 不出现在列表。
 - 列表项 + 过滤筛选。
 - 详情 Tab：**关键信息** / **运行时**（该机可用执行器 runtime 检测结果，§18 `meta` 表）/ **agent 列表**（该机托管的数字人：基本信息、实时状态、操作按钮；搜索过滤）。
+
+**实施状态（2026-08-14，非发布验收）：** runner 已保持 authenticated WebSocket-only，控制面已实现 machine-owned 中立 cluster transport port、共享 onboarding token/route/runtime/lease/fencing repository 和三方言 migration；进程内只缓存本实例 WebSocket handle。SQLite lifecycle、围栏和 focused race 已通过。固定官方 NATS 双实例、live MySQL/PostgreSQL、真实 IAM/browser 闭环尚未运行，因此该状态不能解释为 cluster-ready 或生产验收完成。
+
+#### 5.3.2 Web 远程 Shell（v2+）
+
+Machine 详情提供跨 Windows、macOS、Linux 的交互式远程终端，用于已授权用户诊断和维护已确认 runner。该能力不是 workflow 节点，也不是 `run-cmd` 的 UI 包装。
+
+- 浏览器使用 xterm.js；runner 使用 POSIX PTY 或 Windows ConPTY，支持交互程序、Unicode/IME、Ctrl-C、窗口 resize 和明确 exit code。
+- 浏览器到控制面、runner 到控制面使用独立的流式 WebSocket 数据通道，具备背压、帧/速率/带宽/并发/空闲/总时长限制，不阻塞 runner heartbeat 与 workflow 控制命令。
+- `machine.shell.open|write|close` 分权，服务端按 verified claims、tenant/entity、machine owner 和 online/confirmed 状态 deny-by-default；每个会话使用短期、一次性、只存 hash 的 lease token。
+- runner 只允许 operator 配置的 shell 与 workspace root；拒绝客户端任意 executable、cwd 逃逸、环境变量注入和 runner/control token 继承。
+- 审计 open/resize/close/exit/拒绝、principal、machine、时间、字节数和终态；默认不持久化原始输入输出，避免 secret 与业务数据落日志。
+- 断线或 lease 到期终止 PTY 进程树并清理资源；不自动重新附着旧会话。真实 Windows ConPTY、macOS/Linux PTY 与浏览器 E2E 是发布门禁。
 
 ### 5.4 Runner Preview Gateway（随机唯一域名反向隧道）
 
@@ -327,6 +340,7 @@ interface ExecutorAgentSpec {
 
   // —— 能力硬边界（代码层强制）——
   systemPrompt: string;               // 注入为 CLAUDE.md / 角色宪法
+  script?: string;                    // 仅 executor=script；runner 执行的显式源码，非脚本 runtime 禁止携带
   allowedTools: string[];
   forbiddenActions: string[];         // 明确禁止（如 git push --force、DROP TABLE）
   allowedMCPTools: string[];          // MCP 工具白名单
@@ -760,7 +774,7 @@ CREATE TABLE preview_audit_events ( seq INTEGER PRIMARY KEY AUTOINCREMENT, previ
 
 ### 17.1 协议（含 C2 决议）
 
-- **控制面 ↔ runner**：命令/事件走 NATS，machine 接入及实时交互走 WebSocket；Preview 数据面由官方 FRP 提供。desktop 跑 localhost，self-hosted/cloud 跨网。
+- **控制面 ↔ runner**：machine 接入、命令、事件和心跳统一走 authenticated WebSocket；runner 不连接或配置 NATS、EMQX 等 broker。控制面实例之间通过中立 `RunnerLink`/事件总线 port 路由，当前 NATS 只是一种内部 adapter；Preview 数据面由官方 FRP 提供。
 - **对外开放 API**：各业务 module 通过 Huma 注册 REST/OpenAPI；列表查询使用显式、白名单化 query 参数。server-ai 不使用 RSQL、sqlc 或 grpc-gateway。
 - **控制面 = 唯一写者**；CLI/客户端/runner/外部工具不得直接写 StateStore（只读查询可）。一切变更经协议。
 - **AG-UI 对齐**（§29.4）：客户端协议设计时对齐 AG-UI 的流式状态同步与 HITL 语义（或提供兼容适配层）。
@@ -783,7 +797,7 @@ CREATE TABLE preview_audit_events ( seq INTEGER PRIMARY KEY AUTOINCREMENT, previ
 | 租户 | 单租户 | 单/少租户 | 多租户 |
 | Auth | 本地 token | 本地/简单 | SSO/RBAC |
 | Runner | 内置 1 + 局域网 | 本地池 | 用户本地机 |
-| 消息扇出 | 进程内 | 进程内 / NATS | NATS |
+| 控制面内部消息 adapter | 进程内 | 进程内 / NATS | NATS（可替换，不暴露给 runner）|
 | 离线 | 全内嵌，自包含可离线 | 可离线 | 在线 |
 
 **桌面壳职责**：监管内嵌 Go 进程（server-ai + runner 二进制）、端口、崩溃、升级；不硬依赖任何 cloud 专有服务（保离线——§29.5 Vibe Kanban/Bloop 教训：local-first 是被市场验证的护城河）。
@@ -804,10 +818,12 @@ CREATE TABLE preview_audit_events ( seq INTEGER PRIMARY KEY AUTOINCREMENT, previ
 ## 18. 多运行时执行器
 
 ```
-ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'mock' | string
+ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'script' | 'http' | string
 ```
 
 开放枚举（Multica 已验证 14+ CLI 生态：Copilot CLI / Cursor Agent / Trae 等均可后续以适配器加入）。每个适配器：启动进程、注入上下文、监听心跳、读取输出，映射原生退出码到标准语义。**标准目录**（`.chaosplus/runs/{run_id}/{node_id}/{attempt}/{context,output,logs}`、`continue.md`、`exit_code`）、**心跳协议**（15s）、**退出语义**（0 完成 / 1 失败重试 / 2 上下文不足 pause / 3 主动放弃 pause）均为本规范定义；**七层上下文管理**见 §18.1。Runtime 自动检测可用 runtime 并写 `meta` 表（machine 详情「运行时」Tab 的数据源）。
+
+`script` runtime 的 WorkflowDef 必须显式提供 `agent.script`，该字段作为脚本源码原样送至 runner 的正式 script backend；节点输入以只读子进程环境变量 `CHAOSPLUS_INPUT_JSON` 提供，内容为本次节点 JSON scope。runner 的管理快照和普通日志不得回显该环境。`systemPrompt` 始终保留角色宪法语义，不得兼作脚本或测试注入通道。非 `script` runtime 携带 `agent.script`、或 `script` runtime 缺少源码时，定义校验必须 fail-fast。
 
 ### 18.1 七层上下文管理（自包含定义）
 
@@ -835,7 +851,7 @@ ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'm
 - **Checksum 策略**：见 §12 已述。
 - **Run 版本隔离**：`workflow_def_snapshot` 保证在飞 run 不受定义变更影响。
 - **非文件 artifact**：`external_state` 类型自动进 `needs_review`，人工确认。
-- **测试基础设施**：Mock Executor（fixture）、Mock Reviewer（模拟人工审批）、Fake Clock、World Reconstruction Test。
+- **测试基础设施**：正式 runner + script/HTTP/LLM executor、真实 approval API/浏览器、真实时钟边界控制、World Reconstruction Test；内部组件不得使用测试替代物。
 - **Runtime GC**：按保留策略归档/删除旧事件、orphan snapshot、dead validation；`chaosplus gc [--dry-run]`。
 
 ---
@@ -848,7 +864,7 @@ ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'm
 | 团队版（SaaS）| $20–50/人/月 | cloud profile：云端控制面、团队共享、Web Review、备份 |
 | 企业版 | 按需 | SSO、审计、RBAC、私有部署 |
 
-核心 AI 执行费用由用户自己的 API key 承担。后续可加模板/连接器市场分成（市场方向草案见 §30，已冻结待 v2 再议）。
+核心 AI 执行费用由用户自己的 API key 承担。后续可增加节点/验证包市场分成；市场按 §30 的安全与社区治理阶段推进。
 
 ---
 
@@ -859,9 +875,9 @@ ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'm
 | 里程碑 | 内容 | 可运行闸门 |
 |---|---|---|
 | **V1-M0 骨架** | monorepo、`/schema` codegen、Go 控制面+runner 骨架、网络协议、SQLite StateStore、本地 ArtifactStore、事件日志、CLI、runner 接入流程（§5.3.1 含 5 分钟 token）| runner 经完整接入流程连上控制面，事件落库 |
-| **V1-M1 静态执行核** | `workflow-def.schema.json` + 加载/校验（X-3 裁决：schema 与校验属引擎能力，M1 交付；`software-dev-agile` 示例定义文件同期落库）、DAG 引擎、节点类型、执行器经 runner spawn（先 mock）、artifact 生命周期+验证器、Reconciliation、有界自治、World Reconstruction Test 进 CI | `software-dev-agile` 用 mock 端到端跑通 |
+| **V1-M1 静态执行核** | `workflow-def.schema.json` + 加载/校验（X-3 裁决：schema 与校验属引擎能力，M1 交付；`software-dev-agile` 示例定义文件同期落库）、DAG 引擎、节点类型、执行器经真实 runner spawn、artifact 生命周期+验证器、Reconciliation、有界自治、World Reconstruction Test 进 CI | `software-dev-agile` 通过真实 runner + script backend 端到端跑通 |
 | **V1-M2 最小协作面** | 最小 web UI（Next.js：machine 管理 §5.3、数字人管理 §6.2、仪表盘最小版、个人中心最小版）、项目 channel（# ALL）聊天、@mention 路由、数字人（workflow-only + 最小记忆 §6.3）、审批回灌聊天、响应式导航（桌面顶部/手机底部）| 聊天里 @数字人触发工作流并完成一次人工审批/合并 |
-| **V1-M3 真执行器** | claude-code 适配器 + 第二执行器（`pi --rpc` 或 codex）+ mock 常备（R7）；作者面工具链（编辑器 `$schema` 联想集成）；局域网 runner；NFR 压测（附录 E.1 口径）| 真实执行器端到端跑通 software-dev 工作流，产出经 validator 裁决；NFR 目标值校准完成 |
+| **V1-M3 真执行器** | claude-code 适配器 + 第二执行器（`pi --rpc` 或 codex）+ 正式 script/http 基线（R7）；作者面工具链（编辑器 `$schema` 联想集成）；局域网 runner；NFR 压测（附录 E.1 口径）| 真实执行器端到端跑通 software-dev 工作流，产出经 validator 裁决；NFR 目标值校准完成 |
 
 ### 21.2 v2+ 快速跟进 backlog（按需求牵引排期，功能定义见对应章节）
 
@@ -882,7 +898,7 @@ ExecutorType = 'claude-code' | 'codex' | 'opencode' | 'kimi' | 'gemini-cli' | 'm
 | 定时任务 UI（提醒人类）| §7.2 |
 | 完整 i18n（繁中/英）、5 套主题全量 | 附录 A |
 | 其余领域模板打磨（novel-writing 等）| §7.5 |
-| 市场（验证包市场）| §30（冻结再议）|
+| 节点/验证包市场 | §30（v2+ 分期）|
 
 ---
 
@@ -1038,7 +1054,7 @@ artifact：审核记录 / 处置结果。validator：策略合规检查（自动
 | **R4** ✅ **已决 (2026-08-01)** | ICP 定义 | **多项目独立开发者 / 2–5 人小团队技术负责人**（§1.5）；端到端旅程 J1–J10 为 v1 验收基线 |
 | **R5** | **法律最小集**：开源许可证未定；产物 IP/自治动作责任 ToS 缺；cloud profile 的数据驻留与 **GDPR 删除权 vs append-only**（crypto-shredding，cloud 上线即 v2 问题）；SOC2；v1 无 OS 级沙箱 | 未决。落地前定许可证 + ToS；删除权方案前移；cloud profile 前补 SOC2/沙箱 |
 | **R6** | **商业计划层缺失**：无 GTM、无单位经济、无商业里程碑 | 未决。补「商业里程碑」（首个真实工作流→首个外部自托管用户→首个付费）与 §21 并列 |
-| **R7** | **外部依赖风险**：命脉绑在外部执行器 CLI（claude-code 等）的行为/定价/可用性 | 缓解中：多执行器抽象（§18）；V1-M3 要求 ≥2 个可用执行器 + mock 常备 |
+| **R7** | **外部依赖风险**：命脉绑在外部执行器 CLI（claude-code 等）的行为/定价/可用性 | 缓解中：多执行器抽象（§18）；V1-M3 要求 ≥2 个可用 AI executor，并以正式 script/http backend 验证内部执行链 |
 
 ---
 
@@ -1099,7 +1115,7 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 
 ## 30. 市场（Marketplace）方向草案
 
-> *状态：**已冻结，v2 再议**（2026-08-01 决策：「市场再说吧」）。保留设计结论备用。*
+> *状态：**已解冻并纳入 v2+ 路线**（2026-08-14 决策）。先交付节点 SDK/本地目录和验证包，再开放社区市场与商业能力。*
 
 ### 30.1 四种候选形态的调研结论（2026-08）
 
@@ -1109,9 +1125,19 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 | **Skill 市场** | Claude Skills 生态、MCP 目录（Smithery/mcp.so）已泛滥；**ClawHavoc 事件（2026-02）：无审核社区市场确认 341 个恶意 skill** | ❌ 不做独立市场；skill 是包的组成部分，安全审核是机会 |
 | **Agent 市场** | GPT Store、Coze 商店、AWS AgentCore Marketplace，巨头主场 | ❌ 不正面做 |
 | **Session/轨迹市场** | 已存在：Sell Traces 等按条卖 agent 轨迹给实验室做 RL 训练（eval ~$8.4/条、RL ~$22/条、代码基准 ~$75/条）；Letta trajectory / Harbor ATIF 已有标准格式 | ⚠️ 原始直卖有隐私/IP 问题且已有玩家；session 的正确用法见 30.2 |
-| **模板/工作流市场** | n8n 模板库 9,400+（近月新增 78% 为 agent 模板）；Profound、AI Hive（verified installs + 人工评审为卖点）| ✅ 赛道成立，竞争焦点已转向**验证与信任**——本产品独有能力 |
+| **节点/模板/工作流市场** | n8n 社区节点与模板显著降低入门成本；竞争焦点转向可发现性、兼容性、供应链和验证信任 | ✅ 分层建设节点包与验证工作流包，不复制 n8n 的控制面内 npm 执行模型 |
 
-### 30.2 设计结论：「验证包市场」（Verified Workflow Pack Marketplace）
+### 30.2 设计结论：节点包 + 验证工作流包
+
+**节点包（Node Package）**降低作者门槛：
+
+- 第一层是声明式 composite node：JSON Schema 配置 + 图标/文案 + 到核心 WorkflowDef 节点的确定性展开，不运行第三方代码。
+- 第二层是 executable node：签名、digest-pinned、能力受限的 WASI component，只在 runner 沙箱执行；社区代码不得进入 server/server-ai 或浏览器同源进程。
+- 包使用 OCI 1.1 artifact、SemVer、JSON Schema 2020-12，附 Sigstore/SLSA provenance、SPDX/CycloneDX SBOM 和 capability manifest。
+- workflow 持久化精确 package/version/digest；升级并存、显式迁移、可回滚。secret 只传引用，文件/网络/进程权限默认拒绝并由用户审批。
+- 节点库由服务端已安装 catalog 驱动，属性面板由 schema 生成；首版不允许第三方 UI JavaScript，后续如开放必须使用隔离 iframe 和独立 origin。
+
+**验证工作流包（Verified Workflow Pack）**承载可复用流程与可信证据：
 
 **一个市场、一种商品：**
 
@@ -1123,10 +1149,11 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 - **安全审核一等公民**（ClawHavoc 教训）：上架须过 spec 静态审核 + 沙箱试跑；**凭证由控制面签名，不由卖家自报**（P1 纪律延伸到市场）。
 - **凭证脱敏**：只含事件类型序列、checksum、validator 结论与统计，不含 artifact 内容/代码/密钥。
 
-### 30.3 次级变现与分期（冻结备用）
+### 30.3 分期与社区治理
 
 - 轨迹数据变现（opt-in 脱敏导出，ATIF/Letta trajectory 格式）为副产品。
-- 分期：市场 v0（包格式 + 签名凭证 + 免费目录）→ v1（付费分成 + 卖家信誉 + 审核流水线，随 cloud）→ v2（轨迹变现、企业私有市场）。
+- 分期：节点生态 v0（manifest/SDK、声明式 composite、本地 OCI 安装）→ v1（WASI executable、签名/SBOM/能力审核、免费目录）→ 市场 v1（verified pack、信誉、撤销、兼容矩阵）→ 市场 v2（付费分成、企业私有 registry、可选轨迹变现）。
+- 社区贡献必须有发布者身份、来源证明、自动/人工审核、恶意样本检测、撤销与安全公告；安装量不能替代信任证据。
 - 依赖：R3 定结算合规；R5 定 IP 条款；凭证签名依赖事件日志 + §17.2 token 体系。
 
 ---
@@ -1170,7 +1197,7 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 ### A.3 服务端与消息（产品视角）
 
 - **接口 API**：Golang；各 module 注册 Huma REST/OpenAPI，列表使用显式 query 参数且不支持 RSQL；Goose 管 migration，Bun 管 ORM/查询/事务，各 module 独立拥有 SQL 与 Repository。
-- **消息**：NATS（WebSocket/TCP）仅 cloud/self-hosted 传输层（C3 决议）；desktop 进程内直连。
+- **消息**：runner wire protocol 固定为 authenticated WebSocket；控制面内部消息使用中立 port，cloud/self-hosted 当前以官方 NATS adapter 实现，desktop 可进程内直连。
 
 ### A.4 machine 侧（产品视角）
 
@@ -1192,7 +1219,7 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 | **DMS** | 智能体间私信 | 数字人之间的对话，特殊 channel 投影（§6.2.2）|
 | **Artifact** | 产物 | 世界状态的唯一真相载体（§10）|
 | **WorkflowDef** | 工作流定义 | JSON 唯一真相，画布/聊天/AI 皆作者期投影（§7）|
-| **Pack / Receipt** | 工作流包 / 验证凭证 | 市场商品与其签名执行证据（§30，冻结）|
+| **Node Package / Pack / Receipt** | 节点包 / 工作流包 / 验证凭证 | 节点复用单元、市场商品与其签名执行证据（§30）|
 
 ---
 
@@ -1203,15 +1230,17 @@ Vibe Kanban 背后公司 Bloop 于 2026 初倒闭，项目转社区维护、云�
 | **C8** | 命名 | **统一用 chaos.plus**（产品/引擎/品牌）；代码标识符用 `chaosplus` |
 | **R1** | v1 范围 | **软件开发楔子**：执行核 + software-dev 模板 + 最小 web UI（machine/agent 管理、聊天审批）；其余降 v2+（§1.4/§21）|
 | **C1** | 实例/项目关系 | 数据层一实例多项目；desktop UI 默认 1:1 简化呈现 |
-| **C2** | API 协议 | 对外 Huma REST/OpenAPI + WebSocket；runner 传输用 NATS；显式 query 参数，不使用 RSQL/grpc-gateway |
-| **C3** | 消息中间件 | NATS 仅 cloud/self-hosted 传输层；desktop 进程内直连；事件日志唯一真相 |
+| **C2** | API 协议 | 对外 Huma REST/OpenAPI + WebSocket；runner 唯一协议为 authenticated WebSocket；显式 query 参数，不使用 RSQL/grpc-gateway |
+| **C3** | 消息中间件 | 控制面只依赖中立 EventBus/RunnerLink port；NATS 是当前 cloud/self-hosted 内部 adapter，desktop 可进程内；事件日志唯一真相 |
 | **C4** | 前端框架 | Next.js + ShadCN + tailwindcss，静态导出由桌面壳承载 |
 | **C5** | 协作区/在线文件 | 需求/任务/缺陷/测试 = 工作流 artifact 视图（v2+）；OKR/绩效/洞察与在线编辑另议；在线文件 v2 先 artifact 预览 |
 | **C6** | 预览区 | 自托管官方 FRP：生产独立 `frps` 官方镜像、runner 监管官方 `frpc`；IAM-aware Gateway 在公网入口，禁用 Cloudflare Tunnel，v2+ |
 | **C7** | 工作流可视化 | 遵循 P7：JSON 唯一真相，画布是投影；非 n8n 双向模式 |
 | **C9** | DB 工具链 | SQLite-first；所有环境 Goose migration + Bun ORM/查询/事务；module-owned SQL/Repository，不使用 sqlc |
 | **R4** | ICP | 多项目独立开发者 / 小团队技术负责人；旅程 J1–J10 为 v1 验收基线（§1.5）|
-| **市场** | §30 | 冻结，v2 再议 |
+| **C10** | Web Machine 远程 Shell | 采用 xterm.js + POSIX PTY/Windows ConPTY + 分离流式 WS；共享 IAM、短期 lease、审计、默认不录制正文（§5.3.2）|
+| **C11** | Workflow 节点生态与市场 | 声明式 composite 优先；可执行节点为 runner-side 签名 WASI 组件；OCI/SemVer/JSON Schema/Sigstore/SBOM；禁止控制面加载社区代码（§30）|
+| **市场** | §30 | 解冻，按节点生态 v0/v1、验证市场 v1/v2 分期 |
 | **X-1** | 双「唯一真相」矛盾 | `events` 表是全系统唯一真相；channel 日志为其投影，`channel_messages` 可删除重建（§9.1/§16）|
 | **X-2** | 数字人托管位置矛盾 | 数字人进程由绑定的 runner 托管，控制面只做路由调度；desktop 用内置本地 runner（§6.2）|
 | **X-3** | 作者面排期矛盾 | workflow schema + 加载校验属引擎能力，M1 交付；作者面工具链 M3（§21.1）|
@@ -1261,7 +1290,7 @@ expired(刷新命令按钮→回idle重新计时)      confirmed(创建成功)  
 
 ## 附录 E：非功能需求与 v1 验收标准
 
-### E.1 非功能需求（目标值，V1-M3 压测校准；压测口径：mock 执行器 10 并发 run × 100 节点，测延迟/恢复/资源三组指标）
+### E.1 非功能需求（目标值，V1-M3 压测校准；压测口径：正式 runner + script executor 10 并发 run × 100 节点，测延迟/恢复/资源三组指标）
 
 | 类别 | 目标 |
 |---|---|
@@ -1277,6 +1306,7 @@ expired(刷新命令按钮→回idle重新计时)      confirmed(创建成功)  
 | 功能 | 验收标准 |
 |---|---|
 | Machine 接入 | token 过期后「确认」不可点且原 token 拒绝连接；已连接但超时未确认 → 自动断开；确认后 token 长期有效且 runner 断线可重连 |
+| Machine 集群路由 | runner 连接实例 A 时实例 B 可调度；同一 machine 仅一个有效 connection lease；重连增加 fencing token 并使旧连接确定性失效；重复命令不双执行 |
 | 数字人注销 | 正常注销产出交接文档 artifact（入库可查）且连接 token 失效；强制注销必经红色二次确认；两种注销后 agent 不再出现在活跃列表 |
 | 聊天审批 | 审批卡片「通过/拒绝」写入 `validation_results` + 事件日志；拒绝未填 `category/detail` 无法提交；结构化反馈注入该节点下次执行上下文 |
 | 有界自治 | 重试耗尽进入 `pause_for_human` 且对应 channel 收到通知；文件变化比例 < 0.08 触发暂停；join 分支失败按其重试策略处理 |
@@ -1292,7 +1322,9 @@ expired(刷新命令按钮→回idle重新计时)      confirmed(创建成功)  
 
 ### F.1 网络协议（/schema 契约骨架）
 
-**RunnerGateway（控制面 ↔ runner；runner 为客户端）**
+**RunnerGateway 逻辑合同（控制面 ↔ runner；runner 为 authenticated WebSocket 客户端）**
+
+下列 service/oneof 仅表达 transport-neutral 消息语义，当前 wire mapping 是 versioned JSON WebSocket frame，不表示 runner 使用 gRPC、NATS、MQTT 或任何具体 broker SDK。控制面集群 adapter 必须在 composition root 后实现同一合同。
 
 ```proto
 service RunnerGateway {

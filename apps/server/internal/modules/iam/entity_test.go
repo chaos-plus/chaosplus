@@ -163,14 +163,14 @@ func TestEntityRoleBindingsAuthorizationAndDeletionGuards(t *testing.T) {
 
 	revision, err := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, err)
-	binding, changed, err := service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
+	binding, changed, err := service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID, testID("principal"), iamdomain.BindingAllow, time.Time{})
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, parent.ID, binding.EntityID)
 	revisionAfterAllow, err := repo.policyRevision(ctx, testID("tenant"))
 	require.NoError(t, err)
 	assert.Equal(t, revision+1, revisionAfterAllow)
-	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), parent.ID, allowRole.ID, testID("principal"), iamdomain.BindingAllow, time.Time{})
 	require.NoError(t, err)
 	assert.False(t, changed)
 	revisionAfterNoop, err := repo.policyRevision(ctx, testID("tenant"))
@@ -181,7 +181,7 @@ func TestEntityRoleBindingsAuthorizationAndDeletionGuards(t *testing.T) {
 	allowed, err := authorizer.CheckEntity(ctx, testID("tenant"), child.ID, "store_view", testID("principal"))
 	require.NoError(t, err)
 	assert.True(t, allowed)
-	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID , testID("principal"), iamdomain.BindingDeny, time.Time{})
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID, testID("principal"), iamdomain.BindingDeny, time.Time{})
 	require.NoError(t, err)
 	assert.True(t, changed)
 	allowed, err = authorizer.CheckEntity(ctx, testID("tenant"), child.ID, "store_view", testID("principal"))
@@ -190,7 +190,7 @@ func TestEntityRoleBindingsAuthorizationAndDeletionGuards(t *testing.T) {
 	assert.ErrorIs(t, service.DeleteEntity(ctx, testID("tenant"), child.ID), iamdomain.ErrEntityHasBindings)
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
-	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID , testID("principal"), iamdomain.BindingAllow, expiresAt)
+	_, changed, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, denyRole.ID, testID("principal"), iamdomain.BindingAllow, expiresAt)
 	require.NoError(t, err)
 	assert.True(t, changed)
 	authorizer.now = func() time.Time { return expiresAt.Add(time.Second) }
@@ -209,13 +209,13 @@ func TestEntityRoleBindingsAuthorizationAndDeletionGuards(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, changed)
 
-	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("missing") , testID("principal"), iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, testID("missing"), testID("principal"), iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, ErrRoleNotFound)
 	_, err = service.SetTenantMemberStatus(ctx, testID("tenant"), testID("principal"), MemberDisabled)
 	require.NoError(t, err)
-	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Time{})
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID, testID("principal"), iamdomain.BindingAllow, time.Time{})
 	assert.ErrorIs(t, err, ErrMemberInactive)
-	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID , testID("principal"), iamdomain.BindingAllow, time.Now().UTC().Add(-time.Second))
+	_, _, err = service.PutEntityRoleBinding(ctx, testID("tenant"), child.ID, allowRole.ID, testID("principal"), iamdomain.BindingAllow, time.Now().UTC().Add(-time.Second))
 	assert.ErrorIs(t, err, ErrInvalidArgument)
 }
 

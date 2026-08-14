@@ -265,8 +265,8 @@ func TestPrincipalValidationAndDatabaseFailures(t *testing.T) {
 	service := newIdentityService(db)
 
 	for _, input := range []struct {
-		tenant                                         guid.ID
-		login, password, display, email                string
+		tenant                          guid.ID
+		login, password, display, email string
 	}{
 		{login: "alice", password: "correct horse battery staple"},
 		{tenant: testID("tenant"), password: "correct horse battery staple"},

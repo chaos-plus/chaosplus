@@ -373,7 +373,7 @@ func (e *Engine) execute(ctx context.Context, id string) error {
 			e.mark(id, StatusPausedForHuman, nil, err.Error())
 			return nil
 		}
-		// n8n-style onError: "continue" passes a stub output downstream
+		// n8n-style onError: "continue" passes a fallback output downstream
 		// instead of failing the run. Node output = {"error":..., "nodeId":..., "continued":true}.
 		if st.node.OnError == "continue" {
 			out, _ := json.Marshal(map[string]any{"error": err.Error(), "nodeId": id, "continued": true})

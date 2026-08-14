@@ -4,11 +4,11 @@ import (
 	"hash/fnv"
 	"strconv"
 
-	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"net/http"
 	"strings"
 	"testing"
@@ -361,7 +361,7 @@ func TestIAMManagementHTTPAuditFailureRollsBack(t *testing.T) {
 		WHEN NEW.event_type = 'role_created' BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`)
 	require.NoError(t, err)
 
-	response := api.Post("/iam/roles", authorization.header, authz.TenantHeader+": " + wireID("tenant"), map[string]any{"name": "Must Roll Back"})
+	response := api.Post("/iam/roles", authorization.header, authz.TenantHeader+": "+wireID("tenant"), map[string]any{"name": "Must Roll Back"})
 	assert.Equal(t, http.StatusInternalServerError, response.Code, response.Body.String())
 	roles, err := db.NewSelect().Table("iam_roles").Where("tenant_id = ? AND name = ?", wireGUID("tenant"), "Must Roll Back").Count(t.Context())
 	require.NoError(t, err)
@@ -373,13 +373,13 @@ func TestIAMManagementHTTPAuditFailureRollsBack(t *testing.T) {
 
 func TestIAMManagementHTTPFailures(t *testing.T) {
 	db, api, authorization := newIAMAPI(t)
-	authorizationHeader, tenant := authorization.header, authz.TenantHeader+": " + wireID("tenant")
+	authorizationHeader, tenant := authorization.header, authz.TenantHeader+": "+wireID("tenant")
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": ""}).Code)
 	assert.Equal(t, http.StatusConflict, api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": "Administrator"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/" + wireID("missing"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/" + wireID("missing"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/entities/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/entities/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/"+wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/entities/"+wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/entities/"+wireID("missing"), authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Post("/iam/entities", authorizationHeader, tenant, map[string]any{"parent_id": wireGUID("missing"), "type": "store", "name": "Missing parent"}).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Post("/iam/entities", authorizationHeader, tenant, map[string]any{"type": "Company", "name": "Invalid"}).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/entities/"+wireID("missing")+"/role-bindings", authorizationHeader, tenant).Code)
@@ -393,13 +393,13 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 		(tenant_id,id,name,name_key,group_type,description,status,sort_order,version,created_at,updated_at)
 		VALUES (?,?,?,'disabled','static','','disabled',0,1,?,?)`, wireGUID("tenant"), wireGUID("disabled-group"), "Disabled", now, now)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/" + wireID("missing"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusConflict, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/" + wireID("disabled-group"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/dynamic/" + wireID("disabled-group"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/members/" + wireID("missing"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/menus/" + wireID("missing"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/roles/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/"+wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusConflict, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/group/"+wireID("disabled-group"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/"+wireID("administrator")+"/directory-bindings/dynamic/"+wireID("disabled-group"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/members/"+wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/menus/"+wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/roles/"+wireID("missing"), authorizationHeader, tenant, map[string]any{"name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing"), authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/permissions", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/permission-grants", authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/permissions/user_view", authorizationHeader, tenant).Code)
@@ -409,11 +409,11 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/roles/"+wireID("missing")+"/members", authorizationHeader, tenant).Code)
 	// The escalation guard resolves the role before the member, so a missing
 	// role now reports 404 instead of leaking a membership conflict.
-	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/members/" + wireID("subject"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing")+"/members/" + wireID("subject"), authorizationHeader, tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/members/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"display_name": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/menus/" + wireID("missing"), authorizationHeader, tenant, map[string]any{"label": "Missing"}).Code)
-	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/menus/" + wireID("missing"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Put("/iam/roles/"+wireID("missing")+"/members/"+wireID("subject"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/roles/"+wireID("missing")+"/members/"+wireID("subject"), authorizationHeader, tenant).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/members/"+wireID("missing"), authorizationHeader, tenant, map[string]any{"display_name": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Patch("/iam/menus/"+wireID("missing"), authorizationHeader, tenant, map[string]any{"label": "Missing"}).Code)
+	assert.Equal(t, http.StatusNotFound, api.Delete("/iam/menus/"+wireID("missing"), authorizationHeader, tenant).Code)
 	assert.Equal(t, http.StatusUnprocessableEntity, api.Put("/iam/roles/"+wireID("administrator")+"/permissions/not_declared", authorizationHeader, tenant).Code)
 	emptyRole := api.Post("/iam/roles", authorizationHeader, tenant, map[string]any{"name": "No Permissions"})
 	require.Equal(t, http.StatusCreated, emptyRole.Code, emptyRole.Body.String())
@@ -428,7 +428,7 @@ func TestIAMManagementHTTPFailures(t *testing.T) {
 func wireID(value string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(value))
-	return strconv.FormatInt(int64(h.Sum64()>>1), 10)
+	return strconv.FormatUint(h.Sum64()>>1, 10)
 }
 
 func wireGUID(value string) guid.ID {

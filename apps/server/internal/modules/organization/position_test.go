@@ -53,7 +53,7 @@ func TestPositionMemberWindowNormalization(t *testing.T) {
 
 	for _, item := range []struct {
 		tenant, position, principal guid.ID
-		window                     PositionMemberWindow
+		window                      PositionMemberWindow
 	}{
 		{0, testID("position"), testID("principal"), PositionMemberWindow{}},
 		{testID("tenant"), 0, testID("principal"), PositionMemberWindow{}},

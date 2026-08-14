@@ -15,7 +15,7 @@ func TestWorldReconstruction(t *testing.T) {
 	repository, ctx := newTestRepository(t)
 
 	// Seed a run definition plus a complete event log for it.
-	defJSON := `{"id":"wf","version":"1","name":"wf","nodes":[{"id":"trigger","type":"trigger","trigger":{"source":"manual"}},{"id":"gen","type":"agent","agent":{"id":"gen","role":"demo","executor":"mock","systemPrompt":"x"}}],"edges":[{"from":"trigger","to":"gen","condition":"success"}]}`
+	defJSON := `{"id":"wf","version":"1","name":"wf","nodes":[{"id":"trigger","type":"trigger","trigger":{"source":"manual"}},{"id":"gen","type":"agent","agent":{"id":"gen","role":"demo","executor":"claude","systemPrompt":"x"}}],"edges":[{"from":"trigger","to":"gen","condition":"success"}]}`
 	if err := repository.SaveRunDefinition(ctx, RunDef{ID: 41, ProjectID: 51, DefJSON: defJSON, ContextJSON: `{"task":"t"}`, Workspace: "/tmp/work"}); err != nil {
 		t.Fatal(err)
 	}

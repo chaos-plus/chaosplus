@@ -4,13 +4,13 @@
 
 **Goal:** runner↔控制面传输改为 WS+token(PRD §5.3.1 接入流程),NATS 内部化;claude/codex CLI 自动检测。外部只暴露控制面 HTTP/WS。
 
-**Architecture:** runner 新增 `WsDaemonTransport`(与 `NatsDaemonTransport` 同接口:`connect/register/publish/close`),serve.ts 只换实现 + 解析 `--server/--token/--name`。控制面新增 `internal/machine` 包:WS hub(runner WS 接入,`runnerID↔conn`)+ TokenStore(5min 一次性→长期)+ MachineStore(machine_runners 表)。`RunnerExecutor` 依赖抽象成 `RunnerLink` 接口,本特性实现 WS-backed(hub)。NATS runner 链路保留但默认 WS。
+**Architecture:** runner 只实现 `machine/WsDaemonTransport`，中立 command/event contract 归 `machine/protocol.ts`，启动参数仅 `--server/--token/--name`。WebSocket 是稳定的 runner wire protocol；workflow 只依赖 `RunnerLink`，内部 cluster bus adapter 由 composition root 注入且不暴露给 runner，可由 NATS、MQTT 或其他满足合同的实现提供。多实例最终态使用共享 token/connection directory、单活动 lease 与 fencing。
 
 **Tech Stack:** Go 控制面(gorilla/websocket 已引入)、TS runner(bun 自带 WebSocket)、SQLite(bunx/goosex 既有)。
 
 ## Global Constraints
 
-- runner 侧传输实现**与 NatsDaemonTransport 同接口**,serve.ts 改动最小化。
+- runner 侧只保留中立 `DaemonTransport` contract 和 WebSocket 实现，不保留 broker transport。
 - 命令/事件契约复用现有 `RunnerCommand`/`RunnerEvent`(TS)与 `Spawn`/`RunnerEvent`(Go)类型。
 - 执行器 Agent 环境不注入 token(§17.2)。
 - 心跳 15s;接入 token 300s(±5s)。
@@ -31,10 +31,11 @@
 - Create: `apps/runner/src/machine/client.ts`
 - Create: `apps/runner/src/machine/client.test.ts`
 - Modify: `apps/runner/src/serve.ts`(CLI 解析 + 换传输)
-- Modify: `apps/runner/src/nats/transport.ts`(导出 `DaemonTransport` 接口,供复用)
+- Create: `apps/runner/src/machine/protocol.ts`（拥有 `DaemonTransport`/`RunnerCommand`/`RunnerEvent`）
+- Delete: `apps/runner/src/nats/` 与 runner `nats` dependency
 
 **Interfaces:**
-- `DaemonTransport`(从 NatsDaemonTransport 提取):
+- `DaemonTransport`（归 machine protocol owner）:
   ```ts
   interface DaemonTransport {
     connect(handler: (cmd: RunnerCommand, reply: (ok: boolean, data?: unknown) => void) => Promise<void> | void): Promise<void>;
@@ -49,7 +50,7 @@
   - runner→控制 event:`{type:"event", event:<RunnerEvent>}`
   - 控制→runner ping:`{type:"ping"}` → runner `{type:"pong"}`
 
-- [ ] **Step 1: 写失败测试**(client.test.ts,bun 自带 WebSocket server 作伪控制面)
+- [ ] **Step 1: 写失败测试**：由真实 server-ai machine hub/HTTP listener 与真实 runner client 组成跨进程 harness，禁止自建控制面对端。
   测试用例:
   1. `connect` 后收到 `spawn` cmd 时 handler 被调用,`reply(true,{x:1})` 发送回 `{type:"reply",reqId,...}`。
   2. `publish({type:"heartbeat",ts:1})` 发送 `{type:"event",event:{...}}`。
@@ -59,7 +60,7 @@
 - [ ] **Step 3: 实现 client.ts**(见下)
 
 ```ts
-import type { RunnerCommand, RunnerEvent } from "../nats/transport";
+import type { RunnerCommand, RunnerEvent } from "./protocol";
 
 export type WsReply = (ok: boolean, data?: unknown) => void;
 
@@ -100,10 +101,10 @@ export class WsDaemonTransport {
 ```
 - [ ] **Step 4: 运行确认通过**
   Run: `cd apps/runner && bun test src/machine/` → PASS;`bun run typecheck` 干净。
-- [ ] **Step 5: serve.ts 换传输**(解析 `--server/--token/--name`;保留既有命令处理逻辑,换 `WsDaemonTransport`;移除 `DAEMON_NATS_URL` 路径)
+- [ ] **Step 5: serve.ts 换传输**(解析 `--server/--token/--name`;保留既有命令处理逻辑,换 `WsDaemonTransport`;删除 NATS transport/dependency 与 `DAEMON_NATS_URL` 路径)
   Run: `cd apps/runner && bun run typecheck && bun test` 全绿。
 - [ ] **Step 6: Commit**
-  Run: `git add apps/runner/src/machine apps/runner/src/serve.ts apps/runner/src/nats/transport.ts && git commit -m "feat(runner): WS runner transport + --server/--token CLI"`
+  Run: `git add apps/runner/src/machine apps/runner/src/serve.ts apps/runner/package.json && git commit -m "feat(runner): WS runner transport + --server/--token CLI"`
 
 ---
 
@@ -150,7 +151,7 @@ func (s *MachineStore) List(ctx) ([]Machine, error)
 func (s *MachineStore) Heartbeat(ctx, id string) error
 func (s *MachineStore) Remove(ctx, id string) error
 ```
-- 状态机:一次性 token 已连未确认 = `pending`(内存);confirm → 入库 `confirmed` + 长期 token;cancel/timeout → Invalidate + 断开;pending 不出现在 List。
+- Baseline 状态机:一次性 token 已连未确认 = `pending`;confirm → `confirmed` + 长期 token;cancel/timeout → Invalidate + 断开;pending 不出现在 List。原 Task 3 的进程内 pending 实现只满足单实例基线，已被 Phase R 的共享 onboarding repository 目标取代。
 
 - [ ] **Step 1: 写失败测试** — token:Issue 300s、Validate 接受未过期/长期/拒绝过期与伪造、MakeLongTerm 后可重连、Invalidate 后失效。store:Confirm→List、Heartbeat、Remove、重复 Confirm 幂等。
 - [ ] **Step 2: 失败** → Step 3: 实现 token.go/store.go(+迁移) → Step 4: 通过 + `-race` → Step 5: 全绿 → Step 6: commit `feat(machine): token issuance + machine store (§5.3.1)`
@@ -204,10 +205,10 @@ type RunnerLink interface {
 }
 // machine 包:WS 实现。SpawnAndWaitOpts 经 conn 发 cmd + 等 spawn-done(复用 gateway idle/max 逻辑)。
 ```
-- `RunnerExecutor.link RunnerLink`(替换 `g *gateway.Gateway`);`NewRunnerExecutor` 接 link。既有 NATS gateway 加一个适配器满足接口(保留)。
+- `RunnerExecutor.link RunnerLink`(替换具体 gateway);`NewRunnerExecutor` 接 link。`GatewayRunnerLink` 适配当前控制面 gateway，provider 名称不进入业务 port。
 
-- [ ] **Step 1: 写失败测试** — runnerlink_test.go:mock hub 验证 SpawnAndWaitOpts 发 cmd/等 spawn-done 返回、idle timeout;ReadArtifact/RunCmd 往返。
-- [ ] **Step 2: 失败** → Step 3: 抽象接口 + 改 runner_executor.go + WS link → Step 4: 通过 + `-race` + 既有 workflow 测试绿(NATS 适配器保留)→ Step 5: commit `feat(machine): RunnerLink WS-backed executor`
+- [ ] **Step 1: 写失败测试** — 启动真实 hub、gateway、runner 与 script backend，验证 SpawnAndWaitOpts、spawn-done、idle timeout、ReadArtifact/RunCmd 往返。
+- [ ] **Step 2: 失败** → Step 3: 抽象接口 + 改 runner_executor.go + gateway adapter → Step 4: 通过 + `-race` + 既有 workflow 测试绿 → Step 5: commit `feat(machine): RunnerLink WS-backed executor`
 
 ---
 
@@ -231,7 +232,7 @@ GET  /api/machines                    → [{id,name,address,status,lastHeartbeat
 - UI:machines 区。添加向导:POST tokens → 显示命令 `bun run src/serve.ts --server <host> --token <t>` + 倒计时 300s(确认/取消/刷新;未连接不可确认;超时禁用)。列表:在线/离线 + 最近心跳。确认 → 进列表。
 - main.go:装配 machine hub/store,传入 server.NewHandler 与 RunManager(RunnerLink)。
 
-- [ ] **Step 1: 写失败测试**(machines_test.go):POST tokens → token;GET machines 空;伪 runner 连 WS(该 token)→ confirm → GET machines 有 1 条在线;DELETE → 消失;confirm 幂等;过期 token → Validate 拒绝。
+- [ ] **Step 1: 写失败测试**(machines_test.go):POST tokens → token;GET machines 空;真实 runner 进程用该 token 连 WS → confirm → GET machines 有 1 条在线;DELETE → 消失;confirm 幂等;过期 token → Validate 拒绝。
 - [ ] **Step 2: 失败** → Step 3: 实现路由 + hub 装配 + UI → Step 4: 通过 + `-race` → Step 5: `go build ./...` 全绿 → Step 6: commit `feat(server): machine onboarding endpoints + UI`
 
 ---
@@ -250,4 +251,5 @@ GET  /api/machines                    → [{id,name,address,status,lastHeartbeat
 - **Spec 覆盖**:§2 传输 → Task1/4/5;§3 接入流程 → Task3/4/6;§4.1 CLI 自动检测 → Task2;§4.2 存储 → Task3 迁移;§4.3/§6 UI+API → Task6;§7 验收 → Task7。
 - **接口一致性**:`DaemonTransport`(TS)与 `RunnerLink`(Go)均从既有实现提取;契约复用 `RunnerCommand/RunnerEvent/Spawn`。`hashToken`=sha256;`AccessToken.ExpiresAt`=time.Time。
 - **占位**:Task1/3/4 标注「按协议/按 gateway 逻辑回填」处为复用既有代码,无 TBD;执行以实际文件为准。
-- **偏差**:machine 详情「托管 agent」列表 defer;NATS runner 链路保留不删(默认 WS);会话 Bearer token 不在本轮。
+- **偏差**:machine 详情「托管 agent」列表 defer；会话 Bearer token 不在本轮。
+- **2026-08-14 集群修订**:runner NATS 链路已删除；WebSocket 保持唯一公开 runner wire protocol，控制面内部 adapter 保持 transport-neutral；共享 onboarding token、runtime/scope directory、connection lease/fencing 和双实例真实 E2E 转入 Phase R，在完成前不得声明集群可用。

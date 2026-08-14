@@ -24,21 +24,6 @@ import (
 //go:embed .migrations/sql/*/*.sql
 var legacyMigrations embed.FS
 
-type Dependencies struct {
-	Database           *bun.DB
-	NextID             func() (guid.ID, error)
-	Authorization      *authz.Registrar
-	WorkflowLauncher   task.WorkflowLauncher
-	Events             task.EventSink
-	Blobs              attachment.BlobStore
-	ConversationExists func(context.Context, guid.ID) error
-}
-
-type Modules struct {
-	Items       []any
-	Attachments *attachment.Module
-}
-
 type legacyMigration struct{ db *bun.DB }
 
 func newLegacyMigration(db *bun.DB) *legacyMigration { return &legacyMigration{db: db} }
@@ -52,6 +37,32 @@ func (m *legacyMigration) Migrate(ctx context.Context) error {
 		return fmt.Errorf("resolve workspace legacy migrations: %w", err)
 	}
 	return goosex.Run(ctx, m.db.DB, migrations, m.db.Dialect().Name().String(), "goose_ai_workspace")
+}
+
+func (m *legacyMigration) MigrateDownTo(ctx context.Context, version int64) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("workspace legacy migration requires database")
+	}
+	migrations, err := fs.Sub(legacyMigrations, ".migrations")
+	if err != nil {
+		return fmt.Errorf("resolve workspace legacy migrations: %w", err)
+	}
+	return goosex.DownTo(ctx, m.db.DB, migrations, m.db.Dialect().Name().String(), "goose_ai_workspace", version)
+}
+
+type Dependencies struct {
+	Database           *bun.DB
+	NextID             func() (guid.ID, error)
+	Authorization      *authz.Registrar
+	WorkflowLauncher   task.WorkflowLauncher
+	Events             task.EventSink
+	Blobs              attachment.BlobStore
+	ConversationExists func(context.Context, guid.ID) error
+}
+
+type Modules struct {
+	Items       []any
+	Attachments *attachment.Module
 }
 
 func NewModules(dependencies Dependencies) (*Modules, error) {

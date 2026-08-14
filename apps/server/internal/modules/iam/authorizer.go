@@ -154,7 +154,7 @@ func (a *Authorizer) CheckBulk(ctx context.Context, tenantID guid.ID, permission
 // parameter-only filter. ResourceIDs and DeniedIDs contain concrete entity IDs,
 // so business repositories never need per-row authorization calls.
 func (a *Authorizer) Constraint(ctx context.Context, tenantID guid.ID, permission string, subject guid.ID) (authz.DataConstraint, error) {
-	if err := validateAuthorizationRequest(tenantID, 0, permission, subject); err != nil {
+	if err := validateAuthorizationRequest(tenantID, permission, subject); err != nil {
 		return authz.DataConstraint{}, err
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
@@ -205,7 +205,7 @@ func (a *Authorizer) Constraint(ctx context.Context, tenantID guid.ID, permissio
 // ExplainEntity returns the persisted matches and reason from the same
 // evaluation used by CheckEntity.
 func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID guid.ID, permission string, subject guid.ID) (authz.Explanation, error) {
-	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil {
+	if err := validateEntityAuthorizationRequest(tenantID, entityID, permission, subject); err != nil {
 		return authz.Explanation{}, err
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
@@ -220,7 +220,7 @@ func (a *Authorizer) ExplainEntity(ctx context.Context, tenantID, entityID guid.
 }
 
 func (a *Authorizer) ExplainResource(ctx context.Context, tenantID, entityID guid.ID, resourceType string, resourceID guid.ID, permission string, subject guid.ID) (authz.Explanation, error) {
-	if err := validateAuthorizationRequest(tenantID, entityID, permission, subject); err != nil || resourceType == "" || resourceID.Zero() || len(resourceType) > 64 {
+	if err := validateEntityAuthorizationRequest(tenantID, entityID, permission, subject); err != nil || resourceType == "" || resourceID.Zero() || len(resourceType) > 64 {
 		return authz.Explanation{}, fmt.Errorf("%w: invalid business resource authorization request", iamdomain.ErrInvalidArgument)
 	}
 	trusted := policyx.TrustedFromContext(ctx, a.now())
@@ -604,11 +604,18 @@ func requestedPermissions(permissions ...string) ([]string, error) {
 	return requested, nil
 }
 
-func validateAuthorizationRequest(tenantID, entityID guid.ID, permission string, subject guid.ID) error {
+func validateAuthorizationRequest(tenantID guid.ID, permission string, subject guid.ID) error {
 	if tenantID.Zero() || permission == "" || subject.Zero() || len(permission) > 128 {
 		return fmt.Errorf("%w: tenant, permission, and subject are required", iamdomain.ErrInvalidArgument)
 	}
 	return nil
+}
+
+func validateEntityAuthorizationRequest(tenantID, entityID guid.ID, permission string, subject guid.ID) error {
+	if entityID.Zero() {
+		return fmt.Errorf("%w: entity is required", iamdomain.ErrInvalidArgument)
+	}
+	return validateAuthorizationRequest(tenantID, permission, subject)
 }
 
 func tenantCapabilities(grants []tenantGrant, permission string) (requested, administrator bool) {

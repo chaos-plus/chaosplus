@@ -60,7 +60,7 @@ func TestPositionHTTPWorkflow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/positions/"+position.ID.String()+"/members/"+wireID("principal/a"), tenant).Code)
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/positions/"+position.ID.String()+"?version=2", tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/positions/"+position.ID.String(), tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/positions/"+position.ID.String(), authz.TenantHeader + ": " + wireID("tenant-b")).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/positions/"+position.ID.String(), authz.TenantHeader+": "+wireID("tenant-b")).Code)
 }
 
 func TestPositionHTTPEmptyCollectionsAndErrors(t *testing.T) {

@@ -29,14 +29,16 @@ description: Chaosplus 仓库级技能路由、自主学习边界和验收流程
 
 按当前 Git 变更自动选择范围：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1
+```bash
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py
 ```
 
 发布前执行全量闸门：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope all -Full
+```bash
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope all --full
 ```
 
-完整验收要求真实 Go 覆盖率至少 90%，并明确报告尚未实际连接的数据库、浏览器或外部运行环境。
+同一 Python 标准库脚本支持 Windows、macOS 和 Linux；Windows 使用 `py -3`。
+缺失的 Go 静态工具由门禁按固定版本自动安装。完整验收要求真实 Go 覆盖率至少
+90%，并明确报告尚未实际连接的数据库、浏览器或外部运行环境。

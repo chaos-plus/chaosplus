@@ -342,7 +342,7 @@ func TestFederationLoginPublicClientAndDenials(t *testing.T) {
 	_, err = env.service.CompleteLogin(ctx, stateProvider.ID, "code", "wrong-state", "cp_federation_state="+stateValue, callback)
 	assert.ErrorIs(t, err, ErrOIDCState)
 
-	_, err = env.service.StartLogin(ctx, stateProvider.ID, "https://app.example/", "/federation/" + stateProvider.ID.String()+"/callback")
+	_, err = env.service.StartLogin(ctx, stateProvider.ID, "https://app.example/", "/federation/"+stateProvider.ID.String()+"/callback")
 	assert.ErrorIs(t, err, ErrInvalidProvider)
 
 	corrupted := env.createProvider(t, env.providerInput("Corrupted", env.idp.issuer+"/corrupted"))

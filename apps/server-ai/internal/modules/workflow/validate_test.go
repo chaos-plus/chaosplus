@@ -76,6 +76,25 @@ func TestValidateFailsClosedForUnsupportedAgentConstraints(t *testing.T) {
 	}
 }
 
+func TestValidateScriptExecutorContract(t *testing.T) {
+	def := testApprovalDef()
+	agent := def.Nodes[2].Agent
+	agent.Executor = "script"
+	if err := def.Validate(); err == nil || !strings.Contains(err.Error(), "requires a non-empty script") {
+		t.Fatalf("script executor without source must fail, got %v", err)
+	}
+
+	agent.Script = `printf '{"ok":true}' > output.json`
+	if err := def.Validate(); err != nil {
+		t.Fatalf("script executor with source must validate: %v", err)
+	}
+
+	agent.Executor = "claude"
+	if err := def.Validate(); err == nil || !strings.Contains(err.Error(), "only valid for the script executor") {
+		t.Fatalf("non-script executor carrying script source must fail, got %v", err)
+	}
+}
+
 func TestValidateRejectsSubworkflowAtSubmission(t *testing.T) {
 	def := &WorkflowDef{ID: "parent", Version: "1", Nodes: []Node{{
 		ID: "child", Type: NodeSubworkflow, Subworkflow: &SubworkflowSpec{Ref: "workflow:child"},
@@ -92,7 +111,7 @@ func testApprovalDef() *WorkflowDef {
 		Nodes: []Node{
 			{ID: "t0", Type: NodeTrigger, Trigger: &TriggerSpec{Source: "manual"}},
 			{ID: "ap", Type: NodeHumanApproval, HumanApproval: &HumanApprovalSpec{Approvers: Approvers{Any: true}, TimeoutMs: 60000, OnTimeout: "pause", OnReject: "pause"}},
-			{ID: "a0", Type: NodeAgent, Agent: &ExecutorAgentSpec{Executor: "mock", SystemPrompt: "x"}},
+			{ID: "a0", Type: NodeAgent, Agent: &ExecutorAgentSpec{Executor: "claude", SystemPrompt: "x"}},
 		},
 		Edges: []Edge{
 			{From: "t0", To: "ap", Condition: EdgeSuccess},

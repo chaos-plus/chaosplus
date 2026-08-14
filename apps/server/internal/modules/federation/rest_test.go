@@ -100,7 +100,7 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	assert.Equal(t, localized("zh-CN", "federation_provider_issuer_exists"), envelope.Message)
 	assert.NotEqual(t, "federation_provider_issuer_exists", envelope.Message)
 
-	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), []byte("{\"name\":\"Broken\",\"issuer\":\"https://broken.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\"" + wireID("missing") + "\",\"status\":\"active\"}"), nil)
+	response = adminRequest(t, client, http.MethodPost, server.URL+"/iam/identity-providers", wireID("tenant-a"), []byte("{\"name\":\"Broken\",\"issuer\":\"https://broken.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\""+wireID("missing")+"\",\"status\":\"active\"}"), nil)
 	assert.Equal(t, http.StatusConflict, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("en-US", "federation_provider_role_missing"), envelope.Message)
@@ -110,7 +110,7 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	decodeHTTPBody(t, response, &envelope)
 	assert.Equal(t, localized("en-US", "federation_invalid_request"), envelope.Message)
 
-	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), []byte("{\"name\":\"GitLab Renamed\",\"provider_type\":\"oidc\",\"issuer\":\"https://gitlab.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\"" + wireID("role-a") + "\",\"status\":\"active\"}"), nil)
+	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/"+provider.ID.String(), wireID("tenant-a"), []byte("{\"name\":\"GitLab Renamed\",\"provider_type\":\"oidc\",\"issuer\":\"https://gitlab.example\",\"client_id\":\"app\",\"auto_provision\":true,\"default_role_id\":\""+wireID("role-a")+"\",\"status\":\"active\"}"), nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	require.NoError(t, json.Unmarshal(envelope.Data, &provider))
@@ -119,7 +119,7 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	response = adminRequest(t, client, http.MethodPut, server.URL+"/iam/identity-providers/"+wireID("missing"), wireID("tenant-a"), []byte(`{"name":"X","issuer":"https://other.example","client_id":"app","auto_provision":true,"status":"active"}`), nil)
 	assert.Equal(t, http.StatusNotFound, response.StatusCode)
 
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/"+provider.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	decodeHTTPBody(t, response, &envelope)
 	assert.Contains(t, string(envelope.Data), `"deleted":true`)
@@ -130,7 +130,7 @@ func TestFederationManagementHTTPWorkflow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(envelope.Data, &providers))
 	assert.Empty(t, providers)
 
-	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/" + provider.ID.String(), wireID("tenant-a"), nil, nil)
+	response = adminRequest(t, client, http.MethodDelete, server.URL+"/iam/identity-providers/"+provider.ID.String(), wireID("tenant-a"), nil, nil)
 	assert.Equal(t, http.StatusNotFound, response.StatusCode)
 }
 
@@ -157,7 +157,7 @@ func TestFederationBrowserLoginHTTPFlow(t *testing.T) {
 	parsedLocation, err := url.Parse(location)
 	require.NoError(t, err)
 	assert.Equal(t, env.idp.issuer+"/authorize", parsedLocation.Scheme+"://"+parsedLocation.Host+parsedLocation.Path)
-	assert.Equal(t, server.URL+"/federation/" + provider.ID.String()+"/callback", parsedLocation.Query().Get("redirect_uri"))
+	assert.Equal(t, server.URL+"/federation/"+provider.ID.String()+"/callback", parsedLocation.Query().Get("redirect_uri"))
 	var stateCookie *http.Cookie
 	for _, cookie := range response.Cookies() {
 		if cookie.Name == stateCookieName {

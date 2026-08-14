@@ -1,4 +1,4 @@
-import type { DaemonTransport, RunnerCommand, RunnerEvent } from "../nats/transport";
+import type { DaemonTransport, RunnerCommand, RunnerEvent } from "./protocol";
 
 export type WsReply = (ok: boolean, data?: unknown) => void;
 
@@ -69,7 +69,8 @@ export class WsDaemonTransport implements DaemonTransport {
       cmd?: RunnerCommand;
     };
     if (msg.type === "cmd" && msg.cmd) {
-      const reply: WsReply = (ok, data) => this.send({ type: "reply", reqId: msg.reqId, ok, data });
+      const reply: WsReply = (ok, data) =>
+        this.send({ type: "reply", reqId: msg.reqId, ok, data });
       try {
         await handler(msg.cmd, reply);
       } catch (e) {

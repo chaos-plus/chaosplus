@@ -1,5 +1,6 @@
-// Package gateway implements the server-ai side of the daemon ↔
-// server-ai NATS contract (PRD §17.1/C3, F.1 RunnerGateway).
+// Package gateway implements the control-plane's runner command/event adapter.
+// Its NATS subjects are internal cluster transport details; runners connect only
+// through the authenticated machine WebSocket protocol.
 package gateway
 
 import (
@@ -11,56 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go"
-)
-
-// Subject scheme — mirrors apps/runner/src/nats/transport.ts.
-const (
-	registerSubject   = "chaos.runner.register"
-	cmdSubjectFmt     = "chaos.runner.%s.cmd"
-	evtSubjectFmt     = "chaos.runner.%s.evt"
-	activationTimeout = 5 * time.Second
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/machine"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
 // Spawn mirrors the daemon's SpawnCommand (AgentTask + run identity).
-type Spawn struct {
-	RunID        string   `json:"runId"`
-	NodeID       string   `json:"nodeId"`
-	Attempt      int      `json:"attempt"`
-	SpawnID      string   `json:"spawnId"`
-	ExecutorType string   `json:"executorType"`
-	Prompt       string   `json:"prompt"`
-	Cwd          string   `json:"cwd"`
-	SystemPrompt string   `json:"systemPrompt,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Provider     string   `json:"provider,omitempty"`
-	APIKey       string   `json:"apiKey,omitempty"`
-	AllowedTools []string `json:"allowedTools,omitempty"`
-	MaxTurns     int      `json:"maxTurns,omitempty"`
-}
-
-type runnerCmd struct {
-	Type      string `json:"type"`
-	Spawn     *Spawn `json:"spawn,omitempty"`
-	SpawnID   string `json:"spawnId,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	APIKey    string `json:"apiKey,omitempty"`
-	Path      string `json:"path,omitempty"`
-	Cmd       string `json:"cmd,omitempty"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
-}
-
-type runnerReply struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	Data  struct {
-		Content  string `json:"content"`
-		Error    string `json:"error,omitempty"`
-		ExitCode int    `json:"exitCode,omitempty"`
-		Stdout   string `json:"stdout,omitempty"`
-		Stderr   string `json:"stderr,omitempty"`
-	} `json:"data,omitempty"`
-}
+type Spawn = machine.Spawn
+type runnerCmd = machine.Command
+type runnerReply = machine.Reply
 
 // RunnerEvent is a raw event payload published by a runner.
 type RunnerEvent struct {
@@ -72,13 +31,15 @@ type RunnerEvent struct {
 
 // Gateway sends commands to runners and collects their events over NATS.
 type Gateway struct {
-	nc       *nats.Conn
-	events   chan RunnerEvent
-	onEvent  func(RunnerEvent) // optional sink (e.g. event-log persistence)
-	mu       sync.Mutex
-	onRunner map[string]struct{} // runners seen via register
-	lastSeen map[string]time.Time
-	waiters  map[string]*spawnWaiter // (runnerID,spawnID) -> exclusive delivery
+	transport machine.ClusterTransport
+	directory machine.RouteDirectory
+	events    chan RunnerEvent
+	onEvent   func(RunnerEvent) // optional sink (e.g. event-log persistence)
+	mu        sync.Mutex
+	onRunner  map[string]struct{} // runners seen via register
+	lastSeen  map[string]time.Time
+	waiters   map[string]*spawnWaiter // (runnerID,spawnID) -> exclusive delivery
+	eventSeq  map[string]int64
 }
 
 type spawnWaiter struct {
@@ -89,61 +50,68 @@ type spawnWaiter struct {
 // OnEvent registers a sink invoked for every runner event (in addition to
 // Events() channel delivery).
 func (g *Gateway) OnEvent(fn func(RunnerEvent)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.onEvent = fn
 }
 
-func New(nc *nats.Conn) *Gateway {
+func New(transport machine.ClusterTransport) *Gateway {
+	if transport == nil {
+		panic("runner gateway requires cluster transport")
+	}
 	return &Gateway{
-		nc:       nc,
-		events:   make(chan RunnerEvent, 256),
-		onRunner: make(map[string]struct{}),
-		lastSeen: make(map[string]time.Time),
-		waiters:  make(map[string]*spawnWaiter),
+		transport: transport,
+		events:    make(chan RunnerEvent, 256),
+		onRunner:  make(map[string]struct{}),
+		lastSeen:  make(map[string]time.Time),
+		waiters:   make(map[string]*spawnWaiter),
+		eventSeq:  make(map[string]int64),
 	}
 }
 
-// Start subscribes to runner registrations and every runner's event subject.
-// It returns after the server acknowledges the subscriptions; cancellation
-// removes them during application shutdown.
-func (g *Gateway) Start(ctx context.Context) error {
-	reg, err := g.nc.Subscribe(registerSubject, func(m *nats.Msg) {
-		var req struct {
-			RunnerID string            `json:"runnerId"`
-			Meta     map[string]string `json:"meta"`
-		}
-		if err := json.Unmarshal(m.Data, &req); err != nil {
-			_ = m.Respond([]byte(`{"ok":false,"error":"bad register payload"}`))
-			return
-		}
-		g.mu.Lock()
-		g.onRunner[req.RunnerID] = struct{}{}
-		g.lastSeen[req.RunnerID] = time.Now()
-		g.mu.Unlock()
-		_ = m.Respond([]byte(`{"ok":true}`))
-	})
-	if err != nil {
-		return fmt.Errorf("subscribe register: %w", err)
+func (g *Gateway) SetDirectory(directory machine.RouteDirectory) {
+	if directory == nil {
+		panic("runner gateway requires route directory")
 	}
+	g.mu.Lock()
+	g.directory = directory
+	g.mu.Unlock()
+}
 
-	evt, err := g.nc.Subscribe("chaos.runner.*.evt", func(m *nats.Msg) {
-		parts := splitSubject(m.Subject)
-		if len(parts) < 3 {
+// Start subscribes to the neutral cluster event stream and rejects envelopes
+// from expired or superseded connection leases.
+func (g *Gateway) Start(ctx context.Context) error {
+	g.mu.Lock()
+	directory := g.directory
+	g.mu.Unlock()
+	if directory == nil {
+		return errors.New("runner gateway route directory is not configured")
+	}
+	events, err := g.transport.SubscribeEvents(ctx, func(envelope machine.EventEnvelope) {
+		current, err := directory.RouteIsCurrent(context.Background(), envelope.Route)
+		if err != nil || !current {
 			return
 		}
-		runnerID := parts[2]
-		var ev RunnerEvent
-		if err := json.Unmarshal(m.Data, &ev); err != nil {
+		payload, err := json.Marshal(envelope.Event)
+		if err != nil {
 			return
 		}
-		ev.RunnerID = runnerID
-		ev.Payload = m.Data
-		var envelope struct {
+		runnerID := envelope.Route.MachineID.String()
+		ev := RunnerEvent{Seq: int(envelope.Event.Seq), Type: envelope.Event.Type, RunnerID: runnerID, Payload: payload}
+		var identity struct {
 			SpawnID string `json:"spawnId"`
 		}
-		_ = json.Unmarshal(m.Data, &envelope)
+		_ = json.Unmarshal(payload, &identity)
 		g.mu.Lock()
+		sequenceKey := fmt.Sprintf("%s\x00%s\x00%d", runnerID, envelope.Route.HolderID, envelope.Route.FencingToken)
+		if envelope.Event.Seq <= g.eventSeq[sequenceKey] {
+			g.mu.Unlock()
+			return
+		}
+		g.eventSeq[sequenceKey] = envelope.Event.Seq
 		g.lastSeen[runnerID] = time.Now()
-		waiter := g.waiters[waiterKey(runnerID, envelope.SpawnID)]
+		waiter := g.waiters[waiterKey(runnerID, identity.SpawnID)]
+		onEvent := g.onEvent
 		g.mu.Unlock()
 		if waiter != nil {
 			switch ev.Type {
@@ -167,8 +135,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 				}
 			}
 		}
-		if g.onEvent != nil {
-			g.onEvent(ev)
+		if onEvent != nil {
+			onEvent(ev)
 		}
 		select {
 		case g.events <- ev:
@@ -176,20 +144,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	})
 	if err != nil {
-		_ = reg.Unsubscribe()
 		return fmt.Errorf("subscribe events: %w", err)
-	}
-	activationCtx, cancelActivation := context.WithTimeout(ctx, activationTimeout)
-	defer cancelActivation()
-	if err := g.nc.FlushWithContext(activationCtx); err != nil {
-		_ = reg.Unsubscribe()
-		_ = evt.Unsubscribe()
-		return fmt.Errorf("activate runner subscriptions: %w", err)
 	}
 	go func() {
 		<-ctx.Done()
-		_ = reg.Unsubscribe()
-		_ = evt.Unsubscribe()
+		_ = events.Close()
 	}()
 	return nil
 }
@@ -209,6 +168,25 @@ func (g *Gateway) RegisteredRunners() []string {
 	return out
 }
 
+func (g *Gateway) RegisteredRunnersContext(ctx context.Context) []string {
+	g.mu.Lock()
+	directory := g.directory
+	g.mu.Unlock()
+	if directory == nil {
+		return nil
+	}
+	routes, err := directory.ListActiveRoutes(ctx)
+	if err != nil {
+		return nil
+	}
+	result := make([]string, 0, len(routes))
+	for _, route := range routes {
+		result = append(result, route.MachineID.String())
+	}
+	sort.Strings(result)
+	return result
+}
+
 // Events exposes the runner event stream (type + raw payload).
 func (g *Gateway) Events() <-chan RunnerEvent { return g.events }
 
@@ -218,7 +196,7 @@ func (g *Gateway) Spawn(ctx context.Context, runnerID string, sp Spawn) error {
 	if err != nil {
 		return err
 	}
-	if err := g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd); err != nil {
+	if err := g.roundTrip(ctx, runnerID, cmd); err != nil {
 		return err
 	}
 	g.touchRunner(runnerID)
@@ -330,6 +308,7 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 				OK       *bool  `json:"ok"`
 				ExitCode int    `json:"exitCode"`
 				Message  string `json:"message"`
+				Error    string `json:"error"`
 				Preview  *struct {
 					Type    string `json:"type"`
 					Content string `json:"content"`
@@ -344,7 +323,7 @@ func (g *Gateway) SpawnAndWaitOpts(ctx context.Context, runnerID string, sp Spaw
 			switch ev.Type {
 			case "spawn-done":
 				ok := p.OK == nil || *p.OK
-				return SpawnResult{OK: ok, ExitCode: p.ExitCode, Preview: p.Preview}, nil
+				return SpawnResult{OK: ok, ExitCode: p.ExitCode, Error: p.Error, Preview: p.Preview}, nil
 			case "spawn-error":
 				return SpawnResult{OK: false, Error: p.Message}, nil
 			}
@@ -421,7 +400,7 @@ func (g *Gateway) Kill(ctx context.Context, runnerID, spawnID string) error {
 	if err != nil {
 		return err
 	}
-	return g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	return g.roundTrip(ctx, runnerID, cmd)
 }
 
 // SwitchProvider asks a runner to change provider for a spawn (cc switch).
@@ -430,23 +409,45 @@ func (g *Gateway) SwitchProvider(ctx context.Context, runnerID, spawnID, provide
 	if err != nil {
 		return err
 	}
-	return g.roundTrip(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	return g.roundTrip(ctx, runnerID, cmd)
 }
 
-func (g *Gateway) roundTrip(ctx context.Context, subject string, payload []byte) error {
-	_, err := g.roundTripReply(ctx, subject, payload)
+func (g *Gateway) roundTrip(ctx context.Context, runnerID string, payload []byte) error {
+	_, err := g.roundTripReply(ctx, runnerID, payload)
 	return err
 }
 
-func (g *Gateway) roundTripReply(ctx context.Context, subject string, payload []byte) (runnerReply, error) {
-	reply, err := g.nc.RequestWithContext(ctx, subject, payload)
+func (g *Gateway) roundTripReply(ctx context.Context, runnerID string, payload []byte) (runnerReply, error) {
+	id, err := guid.Parse(runnerID)
 	if err != nil {
-		return runnerReply{}, fmt.Errorf("request %s: %w", subject, err)
+		return runnerReply{}, fmt.Errorf("invalid runner id: %w", err)
 	}
-	var r runnerReply
-	if err := json.Unmarshal(reply.Data, &r); err != nil {
-		return runnerReply{}, fmt.Errorf("bad reply on %s: %w", subject, err)
+	g.mu.Lock()
+	directory := g.directory
+	g.mu.Unlock()
+	if directory == nil {
+		return runnerReply{}, errors.New("runner route directory is not configured")
 	}
+	route, err := directory.ResolveActiveRoute(ctx, id)
+	if err != nil {
+		return runnerReply{}, fmt.Errorf("resolve runner %s: %w", runnerID, err)
+	}
+	var command runnerCmd
+	if err := json.Unmarshal(payload, &command); err != nil {
+		return runnerReply{}, fmt.Errorf("decode runner command: %w", err)
+	}
+	envelope, err := g.transport.Request(ctx, route, command)
+	if err != nil {
+		return runnerReply{}, err
+	}
+	current, err := directory.RouteIsCurrent(ctx, envelope.Route)
+	if err != nil {
+		return runnerReply{}, fmt.Errorf("verify runner %s reply route: %w", runnerID, err)
+	}
+	if !current {
+		return runnerReply{}, fmt.Errorf("runner %s reply was fenced", runnerID)
+	}
+	r := envelope.Reply
 	if !r.OK {
 		// daemon's reply contract is {ok, data}; errors ride inside data.error.
 		msg := r.Error
@@ -465,7 +466,7 @@ func (g *Gateway) ReadArtifact(ctx context.Context, runnerID, spawnID, path stri
 	if err != nil {
 		return nil, err
 	}
-	r, err := g.roundTripReply(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	r, err := g.roundTripReply(ctx, runnerID, cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -486,21 +487,9 @@ func (g *Gateway) RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate str
 	if err != nil {
 		return CmdResult{}, err
 	}
-	r, err := g.roundTripReply(ctx, fmt.Sprintf(cmdSubjectFmt, runnerID), cmd)
+	r, err := g.roundTripReply(ctx, runnerID, cmd)
 	if err != nil {
 		return CmdResult{}, err
 	}
 	return CmdResult{ExitCode: r.Data.ExitCode, Stdout: r.Data.Stdout, Stderr: r.Data.Stderr}, nil
-}
-
-func splitSubject(subj string) []string {
-	out := []string{}
-	start := 0
-	for i, c := range subj {
-		if c == '.' {
-			out = append(out, subj[start:i])
-			start = i + 1
-		}
-	}
-	return append(out, subj[start:])
 }

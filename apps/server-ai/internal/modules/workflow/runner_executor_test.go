@@ -1,185 +1,83 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	runnergateway "github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnergateway"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnertransport"
+	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/machine"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/core/extension/secure"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/nats-io/nats.go"
+	"github.com/uptrace/bun"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
-
-	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnergateway"
 )
 
-func startNATS(t *testing.T) *nats.Conn {
-	t.Helper()
-	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
-	if err != nil {
-		t.Fatalf("nats server: %v", err)
-	}
-	go ns.Start()
-	t.Cleanup(ns.Shutdown)
-	if !ns.ReadyForConnections(2 * time.Second) {
-		t.Fatal("nats not ready")
-	}
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
-	return nc
-}
-
-// execRunner answers spawn / read-file / run-cmd over real NATS.
-func execRunner(t *testing.T, nc *nats.Conn, runnerID, artifact string, spawnOK bool, cmdExit int) {
-	t.Helper()
-	cmdSubj := "chaos.runner." + runnerID + ".cmd"
-	evtSubj := "chaos.runner." + runnerID + ".evt"
-	_, err := nc.Subscribe(cmdSubj, func(m *nats.Msg) {
-		var cmd struct {
-			Type  string `json:"type"`
-			Path  string `json:"path"`
-			Spawn struct {
-				SpawnID string `json:"spawnId"`
-			} `json:"spawn"`
-		}
-		if err := json.Unmarshal(m.Data, &cmd); err != nil {
-			_ = m.Respond([]byte(`{"ok":false,"data":{"error":"bad"}}`))
-			return
-		}
-		switch cmd.Type {
-		case "spawn":
-			_ = m.Respond([]byte(`{"ok":true}`))
-			go func() {
-				time.Sleep(80 * time.Millisecond)
-				if spawnOK {
-					d, _ := json.Marshal(map[string]any{"type": "spawn-done", "spawnId": cmd.Spawn.SpawnID, "ok": true, "exitCode": 0})
-					_ = nc.Publish(evtSubj, d)
-					return
-				}
-				e, _ := json.Marshal(map[string]any{"type": "spawn-error", "spawnId": cmd.Spawn.SpawnID, "message": "agent crashed"})
-				_ = nc.Publish(evtSubj, e)
-			}()
-		case "read-file":
-			// Only serve content for output.json; other paths get an error
-			// so missing-artifact tests work correctly.
-			if cmd.Path == "output.json" {
-				resp, _ := json.Marshal(map[string]any{"ok": true, "data": map[string]any{"content": artifact}})
-				_ = m.Respond(resp)
-			} else {
-				_ = m.Respond([]byte(`{"ok":false,"data":{"error":"file not found"}}`))
-			}
-		case "run-cmd":
-			resp, _ := json.Marshal(map[string]any{"ok": true, "data": map[string]any{"exitCode": cmdExit, "stdout": "out", "stderr": ""}})
-			_ = m.Respond(resp)
-		default:
-			_ = m.Respond([]byte(`{"ok":true}`))
-		}
-	})
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-}
-
-func newLink(t *testing.T, artifact string, spawnOK bool, cmdExit int) *NatsRunnerLink {
-	t.Helper()
-	nc := startNATS(t)
-	g := gateway.New(nc)
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	if err := g.Start(ctx); err != nil {
-		t.Fatalf("start gateway: %v", err)
-	}
-	execRunner(t, nc, "r1", artifact, spawnOK, cmdExit)
-	if _, err := nc.Request("chaos.runner.register", []byte(`{"runnerId":"r1"}`), 2*time.Second); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	return &NatsRunnerLink{G: g}
-}
-
-func agentNode(validator string) *Node {
-	n := &Node{ID: "a0", Type: NodeAgent, Agent: &ExecutorAgentSpec{
-		ID: "a0", Role: "dev", Executor: "claude", SystemPrompt: "你是开发",
+func scriptAgentNode(source, validator string) *Node {
+	node := &Node{ID: "a0", Type: NodeAgent, Agent: &ExecutorAgentSpec{
+		ID: "a0", Role: "automation", Executor: "script", Script: source,
 	}}
 	if validator != "" {
-		v := validator
-		n.Agent.OutputSpec = &OutputSpec{OutputValidator: &v}
+		value := validator
+		node.Agent.OutputSpec = &OutputSpec{OutputValidator: &value}
 	}
-	return n
+	return node
 }
 
-func TestRunnerExecutorReadsAgentOutput(t *testing.T) {
-	link := newLink(t, `{"ok":true,"summary":"done"}`, true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	out, err := ex.RunAgent(context.Background(), agentNode(""), json.RawMessage(`{"task":"x"}`))
-	if err != nil {
-		t.Fatalf("RunAgent: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(out.Output, &got); err != nil {
-		t.Fatalf("output not JSON: %s", string(out.Output))
-	}
-	if got["summary"] != "done" {
-		t.Fatalf("unexpected output: %s", string(out.Output))
-	}
-}
-
-func TestRunnerExecutorFailsWhenSpawnErrors(t *testing.T) {
-	link := newLink(t, "", false, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	if _, err := ex.RunAgent(context.Background(), agentNode(""), nil); err == nil {
-		t.Fatal("a failed spawn must fail the node")
-	}
-}
-
-// F.5:validator 命令非零退出 → 节点失败;通过 → 输出被判定为 passed。
 func TestRunnerExecutorAppliesOutputValidator(t *testing.T) {
-	pass := newLink(t, `{"ok":true}`, true, 0)
-	exPass := NewRunnerExecutor(pass, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-	out, err := exPass.RunAgent(context.Background(), agentNode("cmd:pytest -q"), nil)
+	workspace := t.TempDir()
+	executor := runnerEnvironmentFor(t).Executor(t, workspace, "validator")
+	pass := scriptAgentNode(successfulNodeScript, "cmd:true")
+	output, err := executor.RunAgent(t.Context(), pass, json.RawMessage(`{"task":"validate"}`))
 	if err != nil {
-		t.Fatalf("validator pass should succeed: %v", err)
+		t.Fatalf("passing validator: %v", err)
 	}
-	if !strings.Contains(string(out.Output), "passed") && !strings.Contains(string(out.Output), "ok") {
-		t.Fatalf("unexpected validated output: %s", string(out.Output))
+	if !strings.Contains(string(output.Output), "passed") {
+		t.Fatalf("validated output = %s", output.Output)
 	}
 
-	fail := newLink(t, `{"ok":true}`, true, 1)
-	exFail := NewRunnerExecutor(fail, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-	if _, err := exFail.RunAgent(context.Background(), agentNode("cmd:pytest -q"), nil); err == nil {
+	fail := scriptAgentNode(successfulNodeScript, "cmd:false")
+	if _, err := executor.RunAgent(t.Context(), fail, nil); err == nil {
 		t.Fatal("non-zero validator exit must fail the node")
 	}
 }
 
 func TestRunnerExecutorAppliesValidatorSpecs(t *testing.T) {
-	node := agentNode("")
-	node.Agent.ValidatorSpecs = []ValidatorSpec{{Ref: "cmd:go test ./...", Layer: "automated", Required: true, TimeoutMs: 1234}}
-	fail := newLink(t, `{"ok":true}`, true, 1)
-	ex := NewRunnerExecutor(fail, "r1", t.TempDir(), "run-validator-spec").WithSpawnTimeout(5*time.Second, 20*time.Second)
-	if _, err := ex.RunAgent(context.Background(), node, nil); err == nil || !strings.Contains(err.Error(), "go test") {
-		t.Fatalf("required validatorSpecs failure must fail the node, got %v", err)
+	node := scriptAgentNode(successfulNodeScript, "")
+	node.Agent.ValidatorSpecs = []ValidatorSpec{{Ref: "cmd:false", Layer: "automated", Required: true, TimeoutMs: 1000}}
+	executor := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "validator-spec")
+	if _, err := executor.RunAgent(t.Context(), node, nil); err == nil || !strings.Contains(err.Error(), "cmd:false") {
+		t.Fatalf("required validator failure = %v", err)
 	}
 
 	node.Agent.ValidatorSpecs[0].Required = false
-	optional := newLink(t, `{"ok":true}`, true, 1)
-	ex = NewRunnerExecutor(optional, "r1", t.TempDir(), "run-optional-validator").WithSpawnTimeout(5*time.Second, 20*time.Second)
-	if _, err := ex.RunAgent(context.Background(), node, nil); err != nil {
-		t.Fatalf("optional validator failure should be evidence-only: %v", err)
+	if _, err := executor.RunAgent(t.Context(), node, nil); err != nil {
+		t.Fatalf("optional validator should remain evidence-only: %v", err)
 	}
 }
 
 func TestValidatorCmdParsing(t *testing.T) {
-	if got := validatorCmd(agentNode("")); got != "" {
+	if got := validatorCmd(scriptAgentNode(successfulNodeScript, "")); got != "" {
 		t.Errorf("no validator should yield empty, got %q", got)
 	}
-	if got := validatorCmd(agentNode("cmd: go test ./... ")); got != "go test ./..." {
+	if got := validatorCmd(scriptAgentNode(successfulNodeScript, "cmd: go test ./... ")); got != "go test ./..." {
 		t.Errorf("validatorCmd = %q", got)
 	}
-	if got := validatorCmd(agentNode("schema:foo.json")); got != "" {
+	if got := validatorCmd(scriptAgentNode(successfulNodeScript, "schema:foo.json")); got != "" {
 		t.Errorf("non-cmd validator should yield empty, got %q", got)
 	}
 	if got := validatorCmd(&Node{ID: "x", Type: NodeAgent}); got != "" {
@@ -188,15 +86,12 @@ func TestValidatorCmdParsing(t *testing.T) {
 }
 
 func TestRunnerExecutorApproveRequiresApprovalExecutor(t *testing.T) {
-	link := newLink(t, `{"ok":true}`, true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1")
-	d, err := ex.Approve(context.Background(), agentNode(""))
-	if err == nil || d.OK {
-		t.Fatalf("Approve without ApprovalExecutor must error, got (%v,%v)", d.OK, err)
+	executor := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "approval-guard")
+	decision, err := executor.Approve(context.Background(), scriptAgentNode(successfulNodeScript, ""))
+	if err == nil || decision.OK {
+		t.Fatalf("Approve without ApprovalExecutor must error, got (%v,%v)", decision.OK, err)
 	}
 }
-
-// ── outputSpec.produces validation ──
 
 func withProduces(node *Node, produces ...ProduceSpec) *Node {
 	if node.Agent.OutputSpec == nil {
@@ -206,76 +101,467 @@ func withProduces(node *Node, produces ...ProduceSpec) *Node {
 	return node
 }
 
-func TestRunnerExecutorRejectsMissingRequiredArtifact(t *testing.T) {
-	link := newLink(t, `{"ok":true}`, true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	// output.json has no "report" field, but agent claims it produced report.json
-	node := withProduces(agentNode(""), ProduceSpec{ID: "report", Path: "report.json", Type: "json", Required: true})
-	_, err := ex.RunAgent(context.Background(), node, nil)
-	if err == nil {
-		t.Fatal("missing required artifact must fail the node")
+func TestRunnerExecutorValidatesProducedArtifacts(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		produces  []ProduceSpec
+		wantError string
+	}{
+		{
+			name: "missing required", source: successfulNodeScript,
+			produces:  []ProduceSpec{{ID: "report", Path: "report.json", Type: "json", Required: true}},
+			wantError: "report",
+		},
+		{
+			name: "satisfied required", source: `printf '{"ok":true,"summary":"done"}' > output.json`,
+			produces: []ProduceSpec{{ID: "main", Path: "output.json", Type: "json", Required: true}},
+		},
+		{
+			name: "missing optional", source: successfulNodeScript,
+			produces: []ProduceSpec{{ID: "log", Path: "debug.log", Type: "text", Required: false}},
+		},
 	}
-	if !strings.Contains(err.Error(), "report") {
-		t.Fatalf("error should mention artifact id, got: %v", err)
-	}
-}
-
-func TestRunnerExecutorAcceptsSatisfiedRequiredProduces(t *testing.T) {
-	// output.json IS the required artifact — validateProduces should accept it
-	link := newLink(t, `{"ok":true,"summary":"done"}`, true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	node := withProduces(agentNode(""), ProduceSpec{ID: "main", Path: "output.json", Type: "json", Required: true})
-	out, err := ex.RunAgent(context.Background(), node, nil)
-	if err != nil {
-		t.Fatalf("RunAgent should succeed when required artifact exists: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(out.Output, &got); err != nil {
-		t.Fatalf("output not JSON: %s", string(out.Output))
-	}
-}
-
-func TestRunnerExecutorSkipsNonRequiredProduces(t *testing.T) {
-	link := newLink(t, `{"ok":true}`, true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	// non-required artifact missing → no error
-	node := withProduces(agentNode(""), ProduceSpec{ID: "log", Path: "debug.log", Type: "text", Required: false})
-	if _, err := ex.RunAgent(context.Background(), node, nil); err != nil {
-		t.Fatalf("non-required artifact should be skipped: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "artifacts-"+tt.name)
+			node := withProduces(scriptAgentNode(tt.source, ""), tt.produces...)
+			_, err := executor.RunAgent(t.Context(), node, nil)
+			if tt.wantError == "" && err != nil {
+				t.Fatalf("validate artifacts: %v", err)
+			}
+			if tt.wantError != "" && (err == nil || !strings.Contains(err.Error(), tt.wantError)) {
+				t.Fatalf("error = %v, want detail %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
-func TestRunnerExecutorRejectsInvalidJSONTypeArtifact(t *testing.T) {
-	link := newLink(t, "not json at all", true, 0)
-	ex := NewRunnerExecutor(link, "r1", t.TempDir(), "run-1").WithSpawnTimeout(5*time.Second, 20*time.Second)
-
-	// output.json content is "not json at all" which is invalid JSON
-	node := withProduces(agentNode(""), ProduceSpec{ID: "main", Path: "output.json", Type: "json", Required: true})
-	_, err := ex.RunAgent(context.Background(), node, nil)
-	if err == nil {
+func TestRunnerExecutorRejectsInvalidOutputJSON(t *testing.T) {
+	executor := runnerEnvironmentFor(t).Executor(t, t.TempDir(), "invalid-json")
+	node := withProduces(
+		scriptAgentNode(`printf 'not json at all' > output.json`, ""),
+		ProduceSpec{ID: "main", Path: "output.json", Type: "json", Required: true},
+	)
+	if _, err := executor.RunAgent(t.Context(), node, nil); err == nil {
 		t.Fatal("invalid JSON artifact must fail")
 	}
 }
 
-func TestNatsRunnerLinkDelegates(t *testing.T) {
-	link := newLink(t, "artifact-body", true, 0)
-	ctx := context.Background()
+const integrationRunnerID guid.ID = 91001
 
-	if got := link.RegisteredRunners(); len(got) == 0 {
-		t.Fatal("registered runner missing")
+var workflowRunner *runnerEnvironment
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+type runnerEnvironment struct {
+	contextCancel context.CancelFunc
+	database      *bun.DB
+	natsConn      *nats.Conn
+	hubNATSConn   *nats.Conn
+	httpServer    *httptest.Server
+	hub           *machine.Hub
+	gateway       *runnergateway.Gateway
+	process       *exec.Cmd
+	processDone   chan error
+	processOutput *synchronizedBuffer
+}
+
+func TestMain(m *testing.M) {
+	environment, err := startRunnerEnvironment()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "start workflow runner environment: %v\n", err)
+		os.Exit(1)
 	}
-	body, err := link.ReadArtifact(ctx, "r1", "s1", "output.json")
-	if err != nil || string(body) != "artifact-body" {
-		t.Fatalf("ReadArtifact = (%q,%v)", body, err)
+	workflowRunner = environment
+	code := m.Run()
+	if environment != nil {
+		environment.Close()
 	}
-	res, err := link.RunCmd(ctx, "r1", "s1", "echo hi", 1000)
-	if err != nil || res.ExitCode != 0 || res.Stdout != "out" {
-		t.Fatalf("RunCmd = (%+v,%v)", res, err)
+	os.Exit(code)
+}
+
+func startRunnerEnvironment() (*runnerEnvironment, error) {
+	natsURL := strings.TrimSpace(os.Getenv("TEST_NATS_URL"))
+	if natsURL == "" {
+		return nil, nil
 	}
-	if err := link.Kill(ctx, "r1", "s1"); err != nil {
-		t.Fatalf("Kill: %v", err)
+
+	natsConn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second), nats.Name("workflow-runner-integration-test"))
+	if err != nil {
+		return nil, fmt.Errorf("connect real NATS service: %w", err)
+	}
+	hubNATSConn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second), nats.Name("machine-hub-instance-a-integration-test"))
+	if err != nil {
+		natsConn.Close()
+		return nil, fmt.Errorf("connect machine hub instance A to real NATS service: %w", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	database, err := bunxtest.Memory()
+	if err != nil {
+		cancel()
+		hubNATSConn.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("open workflow runner database: %w", err)
+	}
+	if err := machine.Migrate(ctx, database); err != nil {
+		cancel()
+		_ = database.Close()
+		hubNATSConn.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("migrate workflow runner database: %w", err)
+	}
+	repository := machine.NewRepository(database)
+	gatewayTransport := runnertransport.NewNATS(natsConn)
+	hubTransport := runnertransport.NewNATS(hubNATSConn)
+	gateway := runnergateway.New(gatewayTransport)
+	gateway.SetDirectory(repository)
+	if err := gateway.Start(ctx); err != nil {
+		cancel()
+		_ = database.Close()
+		hubNATSConn.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("start runner gateway: %w", err)
+	}
+
+	tokens := machine.NewTokenStore()
+	hub := machine.NewHub(hubTransport, tokens, repository, func() (guid.ID, error) {
+		return integrationRunnerID, nil
+	}, integrationRunnerID+1, secure.SameOriginPolicy())
+	claimsContext := authn.WithClaims(ctx, &authn.Claims{TenantID: 201, EntityID: 301, PrincipalID: 401})
+	_, rawToken, _, err := hub.IssueTokenFor(claimsContext)
+	if err != nil {
+		cancel()
+		_ = hub.Close()
+		_ = database.Close()
+		hubNATSConn.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("issue workflow runner token: %w", err)
+	}
+	httpServer := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		cancel()
+		httpServer.Close()
+		_ = hub.Close()
+		_ = database.Close()
+		hubNATSConn.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("resolve repository root")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "../../../../.."))
+	runnerRoot := filepath.Join(repositoryRoot, "apps", "runner")
+	runnerEntry := filepath.Join(runnerRoot, "src", "serve.ts")
+	process := exec.Command("bun", "run", runnerEntry, "--server", httpServer.URL, "--name", "workflow-integration")
+	process.Dir = runnerRoot
+	process.Env = append(os.Environ(), "RUNNER_TOKEN="+rawToken)
+	output := &synchronizedBuffer{}
+	process.Stdout = output
+	process.Stderr = output
+	if err := process.Start(); err != nil {
+		cancel()
+		httpServer.Close()
+		_ = hub.Close()
+		_ = database.Close()
+		natsConn.Close()
+		return nil, fmt.Errorf("start Bun runner: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- process.Wait() }()
+
+	environment := &runnerEnvironment{
+		contextCancel: cancel,
+		database:      database,
+		natsConn:      natsConn,
+		hubNATSConn:   hubNATSConn,
+		httpServer:    httpServer,
+		hub:           hub,
+		gateway:       gateway,
+		process:       process,
+		processDone:   done,
+		processOutput: output,
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		if runners := gateway.RegisteredRunnersContext(claimsContext); len(runners) == 1 && runners[0] == integrationRunnerID.String() {
+			return environment, nil
+		}
+		select {
+		case err := <-done:
+			environment.closeServices()
+			return nil, fmt.Errorf("Bun runner exited before registration: %v\n%s", err, output.String())
+		case <-deadline.C:
+			environment.Close()
+			return nil, fmt.Errorf("Bun runner registration timed out\n%s", output.String())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *runnerEnvironment) Executor(t *testing.T, workspace, runID string) *RunnerExecutor {
+	t.Helper()
+	if e == nil || e.gateway == nil {
+		t.Fatal("workflow runner environment is unavailable")
+	}
+	return NewRunnerExecutor(&GatewayRunnerLink{G: e.gateway}, integrationRunnerID.String(), workspace, runID).
+		WithSpawnTimeout(5*time.Second, 20*time.Second).
+		WithHeartbeatTimeout(45 * time.Second)
+}
+
+func runnerEnvironmentFor(t *testing.T) *runnerEnvironment {
+	t.Helper()
+	if workflowRunner == nil {
+		t.Skip("set TEST_NATS_URL to run the real NATS and Bun runner integration tests")
+	}
+	return workflowRunner
+}
+
+const successfulNodeScript = `printf '{"ok":true}' > output.json`
+
+func runnerExecutorForDefinition(t *testing.T, def *WorkflowDef, scripts map[string]string) *RunnerExecutor {
+	return runnerExecutorAt(t, def, scripts, t.TempDir())
+}
+
+func runnerExecutorAt(t *testing.T, def *WorkflowDef, scripts map[string]string, workspace string) *RunnerExecutor {
+	t.Helper()
+	for i := range def.Nodes {
+		node := &def.Nodes[i]
+		if node.Type != NodeAgent || node.Agent == nil {
+			continue
+		}
+		node.Agent.Executor = "script"
+		node.Agent.Script = successfulNodeScript
+		if script := scripts[node.ID]; script != "" {
+			node.Agent.Script = script
+		}
+	}
+	if err := def.Validate(); err != nil {
+		t.Fatalf("validate real-runner workflow: %v", err)
+	}
+	return runnerEnvironmentFor(t).Executor(t, workspace, fmt.Sprintf("test-%d", time.Now().UnixNano()))
+}
+
+func newRunnerEngine(t *testing.T, def *WorkflowDef, scripts map[string]string) *Engine {
+	t.Helper()
+	engine, err := NewEngine(def, runnerExecutorForDefinition(t, def, scripts))
+	if err != nil {
+		t.Fatalf("new real-runner engine: %v", err)
+	}
+	return engine
+}
+
+func (e *runnerEnvironment) Close() {
+	if e.process != nil && e.process.Process != nil {
+		_ = e.process.Process.Signal(os.Interrupt)
+		select {
+		case <-e.processDone:
+		case <-time.After(5 * time.Second):
+			_ = e.process.Process.Kill()
+			<-e.processDone
+		}
+	}
+	e.closeServices()
+}
+
+func (e *runnerEnvironment) closeServices() {
+	if e.contextCancel != nil {
+		e.contextCancel()
+	}
+	if e.httpServer != nil {
+		e.httpServer.Close()
+	}
+	if e.hub != nil {
+		_ = e.hub.Close()
+	}
+	if e.natsConn != nil {
+		e.natsConn.Close()
+	}
+	if e.hubNATSConn != nil {
+		e.hubNATSConn.Close()
+	}
+	if e.database != nil {
+		_ = e.database.Close()
+	}
+}
+
+func TestScriptExecutorRunsThroughMachineRunner(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	workspace := t.TempDir()
+	executor := runner.Executor(t, workspace, "script-contract")
+	node := &Node{ID: "write-output", Type: NodeAgent, Agent: &ExecutorAgentSpec{
+		ID:       "write-output",
+		Role:     "automation",
+		Executor: "script",
+		Script:   `printf '{"ok":true,"source":"runner"}' > output.json`,
+	}}
+	result, err := executor.RunAgent(t.Context(), node, json.RawMessage(`{"task":"verify"}`))
+	if err != nil {
+		t.Fatalf("run script node: %v\nrunner output:\n%s", err, runner.processOutput.String())
+	}
+	if string(result.Output) != `{"ok":true,"source":"runner"}` {
+		t.Fatalf("output = %s", result.Output)
+	}
+}
+
+func TestGatewayConcurrentSpawnsUseIndependentWaiters(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	var wait sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, spawnID := range []string{"concurrent-a", "concurrent-b"} {
+		spawnID := spawnID
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			workspace := t.TempDir()
+			result, err := runner.gateway.SpawnAndWaitOpts(t.Context(), integrationRunnerID.String(), runnergateway.Spawn{
+				SpawnID: spawnID, RunID: "concurrent", NodeID: spawnID, Attempt: 1,
+				ExecutorType: "script", Prompt: `printf '{"ok":true}' > output.json`, Cwd: workspace,
+			}, runnergateway.WithIdleTimeout(2*time.Second), runnergateway.WithMaxTimeout(5*time.Second))
+			if err != nil {
+				errs <- err
+				return
+			}
+			if !result.OK {
+				errs <- fmt.Errorf("spawn %s failed: %+v", spawnID, result)
+			}
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestGatewayReadsArtifactFromRealRunner(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	workspace := t.TempDir()
+	spawnID := "artifact-round-trip"
+	result, err := runner.gateway.SpawnAndWait(t.Context(), integrationRunnerID.String(), runnergateway.Spawn{
+		SpawnID: spawnID, RunID: "artifact", NodeID: "write", Attempt: 1,
+		ExecutorType: "script", Prompt: `printf '{"source":"real-runner"}' > output.json`, Cwd: workspace,
+	})
+	if err != nil || !result.OK {
+		t.Fatalf("spawn = (%+v, %v)", result, err)
+	}
+	content, err := runner.gateway.ReadArtifact(t.Context(), integrationRunnerID.String(), spawnID, "output.json")
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(content) != `{"source":"real-runner"}` {
+		t.Fatalf("artifact = %s", content)
+	}
+	command, err := runner.gateway.RunCmd(t.Context(), integrationRunnerID.String(), spawnID, "printf 'validator-output'", 5000)
+	if err != nil {
+		t.Fatalf("run validator command: %v", err)
+	}
+	if command.ExitCode != 0 || command.Stdout != "validator-output" {
+		t.Fatalf("validator command = %+v", command)
+	}
+}
+
+func TestGatewaySwitchesProviderOnRealSession(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	spawnID := "switch-provider"
+	if err := runner.gateway.Spawn(t.Context(), integrationRunnerID.String(), runnergateway.Spawn{
+		SpawnID: spawnID, RunID: "provider", NodeID: "switch", Attempt: 1,
+		ExecutorType: "script", Prompt: `sleep 10`, Cwd: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("spawn long-running session: %v", err)
+	}
+	if err := runner.gateway.SwitchProvider(t.Context(), integrationRunnerID.String(), spawnID, "bedrock", "test-only-key"); err != nil {
+		t.Fatalf("switch provider: %v", err)
+	}
+}
+
+func TestGatewayOnEventReceivesRealRunnerEvent(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	events := make(chan runnergateway.RunnerEvent, 8)
+	runner.gateway.OnEvent(func(event runnergateway.RunnerEvent) { events <- event })
+	t.Cleanup(func() { runner.gateway.OnEvent(nil) })
+	spawnID := "event-callback"
+	result, err := runner.gateway.SpawnAndWait(t.Context(), integrationRunnerID.String(), runnergateway.Spawn{
+		SpawnID: spawnID, RunID: "events", NodeID: "event", Attempt: 1,
+		ExecutorType: "script", Prompt: successfulNodeScript, Cwd: t.TempDir(),
+	})
+	if err != nil || !result.OK {
+		t.Fatalf("spawn = (%+v, %v)", result, err)
+	}
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case event := <-events:
+			if event.RunnerID == integrationRunnerID.String() && event.Type == "spawn-done" {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("event callback did not receive spawn-done")
+		}
+	}
+}
+
+func TestGatewayTimeoutsAndKillRealProcesses(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	tests := []struct {
+		name      string
+		idle      time.Duration
+		max       time.Duration
+		heartbeat time.Duration
+		check     func(error) bool
+	}{
+		{name: "idle", idle: 150 * time.Millisecond, max: 5 * time.Second, check: func(err error) bool { return err != nil && !errors.Is(err, context.DeadlineExceeded) }},
+		{name: "maximum", idle: 5 * time.Second, max: 150 * time.Millisecond, check: func(err error) bool { return errors.Is(err, context.DeadlineExceeded) }},
+		{name: "heartbeat", idle: 5 * time.Second, max: 5 * time.Second, heartbeat: 150 * time.Millisecond, check: func(err error) bool { return errors.Is(err, runnergateway.ErrRunnerHeartbeatLost) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spawnID := "timeout-" + tt.name
+			_, err := runner.gateway.SpawnAndWaitOpts(t.Context(), integrationRunnerID.String(), runnergateway.Spawn{
+				SpawnID: spawnID, RunID: "timeouts", NodeID: tt.name, Attempt: 1,
+				ExecutorType: "script", Prompt: `sleep 10`, Cwd: t.TempDir(),
+			}, runnergateway.WithIdleTimeout(tt.idle), runnergateway.WithMaxTimeout(tt.max), runnergateway.WithHeartbeatTimeout(tt.heartbeat))
+			if !tt.check(err) {
+				t.Fatalf("unexpected timeout result: %v", err)
+			}
+			if err := runner.gateway.Kill(t.Context(), integrationRunnerID.String(), spawnID); err != nil {
+				t.Fatalf("kill timed-out process: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayUnknownRunnerFails(t *testing.T) {
+	runner := runnerEnvironmentFor(t)
+	err := runner.gateway.Spawn(t.Context(), "999999", runnergateway.Spawn{
+		SpawnID: "unknown", RunID: "unknown", NodeID: "unknown", Attempt: 1,
+		ExecutorType: "script", Prompt: successfulNodeScript, Cwd: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("unknown runner must fail")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := runner.gateway.RunCmd(ctx, "999999", "unknown", "true", 500); err == nil {
+		t.Fatal("unknown runner command must fail")
 	}
 }

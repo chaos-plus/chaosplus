@@ -1,6 +1,6 @@
 /** Common types for the runner's agent runtimes. */
 
-export type ExecutorType = "claude" | "codex" | "mock" | "mastra" | "script" | "http" | (string & {});
+export type ExecutorType = "claude" | "codex" | "mastra" | "script" | "http" | (string & {});
 
 export type AgentKind = "executor" | "digital_human";
 export type SessionStatus = "idle" | "running" | "completed" | "failed" | "stopped";
@@ -40,6 +40,7 @@ export interface AgentSpec {
   model?: string;
   provider?: string;
   apiKey?: string;
+  env?: Record<string, string>;
   allowedTools?: string[];
   maxTurns?: number;
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";

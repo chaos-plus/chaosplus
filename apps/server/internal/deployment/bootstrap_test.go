@@ -5,10 +5,13 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
 	"github.com/chaos-plus/chaosplus/internal/infra/dlock"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/infra/wuid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/federation"
@@ -27,6 +31,37 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 )
+
+func TestMain(m *testing.M) {
+	generator, err := guid.New(0)
+	if err != nil {
+		panic(err)
+	}
+	guid.SetDefault(generator)
+	os.Exit(m.Run())
+}
+
+func testID(value string) guid.ID {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	id, err := guid.Parse(strconv.FormatUint(hash.Sum64()>>1, 10))
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func wireID(value string) string { return strconv.FormatInt(int64(testID(value)), 10) }
+
+func parseGUID(value string) guid.ID {
+	id, _ := guid.Parse(value)
+	return id
+}
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) { return guid.ID(next.Add(1)), nil }
+}
 
 func TestOpenMigrationDBAcceptsSQLite(t *testing.T) {
 	db, dialect, err := openMigrationDB(context.Background(), bunx.Datasource{

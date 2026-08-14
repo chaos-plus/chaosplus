@@ -86,6 +86,9 @@ class SkillRuntimeTest(unittest.TestCase):
             (self.root / path).mkdir(parents=True, exist_ok=True)
         (self.root / "apps" / "server" / "go.mod").write_text("module example.test/project\n\ngo 1.26.0\n", encoding="utf-8")
         (self.root / "apps" / "server" / "internal" / "modules" / "iam" / "module.go").write_text("package iam\n", encoding="utf-8")
+        dependency = self.root / "apps" / "admin-ai" / "node_modules" / "dependency"
+        dependency.mkdir(parents=True)
+        (dependency / "dependency.go").write_text("package dependency\n", encoding="utf-8")
         (self.root / "apps" / "admin-ai" / "package.json").write_text(
             json.dumps({"name": "admin", "packageManager": "bun@1", "workspaces": ["apps/*"]}),
             encoding="utf-8",
@@ -177,7 +180,54 @@ class SkillRuntimeTest(unittest.TestCase):
         source = facts.read_text(encoding="utf-8")
         self.assertIn("example.test/project", source)
         self.assertIn("mysql, postgres, sqlite", source)
+        self.assertIn("Go package 目录数：1", source)
         self.assertFalse(RUNTIME.refresh_context(self.root))
+
+    def test_test_policy_allows_miniredis_in_isolated_go_test(self) -> None:
+        package = self.root / "apps/server/internal/modules/session"
+        package.mkdir(parents=True)
+        (package / "store_test.go").write_text(
+            'package session\n\nimport "github.com/alicebob/miniredis/v2"\n', encoding="utf-8"
+        )
+        self.assertEqual([], RUNTIME.find_test_policy_violations(self.root))
+
+    def test_test_policy_rejects_miniredis_in_production_go(self) -> None:
+        package = self.root / "apps/server/internal/modules/session"
+        package.mkdir(parents=True)
+        (package / "store.go").write_text(
+            'package session\n\nimport "github.com/alicebob/miniredis/v2"\n', encoding="utf-8"
+        )
+        errors = RUNTIME.find_test_policy_violations(self.root)
+        self.assertTrue(any("store.go:3" in error and "only in *_test.go" in error for error in errors))
+
+    def test_test_policy_rejects_substitutes_in_isolated_tests(self) -> None:
+        package = self.root / "apps/runner/src"
+        package.mkdir(parents=True)
+        forbidden = "mo" + "ck"
+        (package / "agent.test.ts").write_text(
+            f'const runtime = "{forbidden}";\n', encoding="utf-8"
+        )
+        errors = RUNTIME.find_test_policy_violations(self.root)
+        self.assertTrue(any("agent.test.ts:1" in error and "forbidden" in error for error in errors))
+
+    def test_test_policy_rejects_production_substitute(self) -> None:
+        source = self.root / "apps/runner/src/backends/index.ts"
+        source.parent.mkdir(parents=True)
+        forbidden = "fa" + "ke"
+        source.write_text(f'const runtime = "{forbidden}";\n', encoding="utf-8")
+        errors = RUNTIME.find_test_policy_violations(self.root)
+        self.assertTrue(any("index.ts:1" in error and "forbidden" in error for error in errors))
+
+    def test_test_policy_rejects_monkey_patching_globals_and_spies(self) -> None:
+        source = self.root / "apps/admin-ai/apps/platform/src/lib/client.test.ts"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            "globalThis.fetch = replacement;\nspyOn(client, 'request');\n",
+            encoding="utf-8",
+        )
+        errors = RUNTIME.find_test_policy_violations(self.root)
+        self.assertTrue(any("client.test.ts:1" in error and "monkey patching" in error for error in errors))
+        self.assertTrue(any("client.test.ts:2" in error and "monkey patching" in error for error in errors))
 
     def test_learning_routes_normalizes_and_deduplicates(self) -> None:
         skill = self.create_skill()

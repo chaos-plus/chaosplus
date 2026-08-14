@@ -3,18 +3,23 @@ import { pickBackend } from "./backends";
 import type { AgentTask } from "./types";
 
 /**
- * CLI entry: `bun run src/cli.ts --runtime mock --prompt "..." [--cwd path]`.
+ * CLI entry: `bun run src/cli.ts --runtime claude --prompt "..." [--cwd path]`.
  * Streams normalized agent events to stdout; exits 0 on done/ok, 1 otherwise.
  */
 const { values } = parseArgs({
   args: process.argv.slice(2),
   options: {
-    runtime: { type: "string", default: "mock" },
+    runtime: { type: "string" },
     prompt: { type: "string" },
     cwd: { type: "string" },
     model: { type: "string" },
   },
 });
+
+if (!values.runtime) {
+  console.error("usage: bun run src/cli.ts --runtime <executor> [--prompt <prompt>] [--cwd <path>] [--model <model>]");
+  process.exit(2);
+}
 
 const task: AgentTask = {
   prompt: values.prompt ?? "Summarize the current directory.",

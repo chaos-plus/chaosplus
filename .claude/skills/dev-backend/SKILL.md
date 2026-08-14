@@ -45,17 +45,19 @@ description: 开发、评审、测试和重构 Dev Go 后端与 IAM API。涉及
 5. 只在 composition root 接线。
 6. 通过生产 constructor、真实 SQLite 或可达数据库、真实监听器验证。
 
-测试不得用 mock、fake、stub、miniredis、monkey patch 或测试专用生产分支代替真实依赖。每个 `name_test.go` 必须验证同目录 `name.go`。
+当前项目自身的测试和自验证不得使用 mock、fake、stub、monkey patch、内部协议模拟器或测试专用生产分支，必须验证真实内部实现。外部 Redis 依赖可在隔离的 `*_test.go` 中使用 `miniredis` 提供本地快速反馈，但不得进入生产 Go 文件，也不得替代真实 Redis 集成、E2E 或发布验收。每个 `name_test.go` 必须验证同目录 `name.go`。
 
 ## 验收与学习
 
+Machine 交互终端必须使用正式 PTY/ConPTY、独立流式通道、短期 session lease、tenant/entity 授权、背压和生命周期审计；不得把 `run-cmd` 或 `shell:true` 包装成远程终端。Workflow 社区节点只能在 runner 的签名、digest-pinned、能力受限沙箱执行，禁止控制面进程加载市场代码，也不得复用 IAM claim plugin host。
+
 运行：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope backend
+```text
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope backend
 ```
 
-发布前加 `-Full`，覆盖率、race、vet、静态分析、漏洞、OpenAPI 和结构门禁全部通过后才能交付。
+发布前加 `--full`，覆盖率、race、vet、静态分析、漏洞、OpenAPI 和结构门禁全部通过后才能交付。门禁失败时只有用户明确要求的非保护开发分支 WIP 快照可按 `.rules/3.TEST.md` 提交/推送，且不构成交付或就绪。Windows 使用 `py -3` 启动同一脚本。
 
 只有已复现、已修复且有测试证据的通用失败才可写入 lessons：
 

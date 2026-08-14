@@ -53,7 +53,7 @@ type deletedTenant struct {
 func RegisterTenantREST(api huma.API, service *TenantService, registrar *authz.Registrar) {
 	// 当前用户自己的租户(登录即可,不要求平台管理员)。解决注册用户无法列出
 	// 自己租户的问题 —— /iam/tenants 是平台级操作。
-	authz.RegisterAuthenticated(registrar, api, huma.Operation{OperationID: "organization-my-tenants", Method: http.MethodGet, Path: "/iam/me/tenants", Summary: "List the caller's tenants", Tags: []string{"organization"}}, func(ctx context.Context, in *myTenantsInput) (*respx.Body[[]Tenant], error) {
+	authz.RegisterAuthenticated(registrar, api, huma.Operation{OperationID: "organization-my-tenants", Method: http.MethodGet, Path: "/iam/me/tenants", Summary: "List the caller's tenants", Tags: []string{"organization"}}, func(ctx context.Context, _ *myTenantsInput) (*respx.Body[[]Tenant], error) {
 		claims, ok := authn.FromContext(ctx)
 		if !ok || claims == nil || claims.PrincipalID.Zero() {
 			return nil, errors.New("not authenticated")

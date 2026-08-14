@@ -95,7 +95,7 @@ func TestPrincipalHTTPRejectsLastAdministratorDisable(t *testing.T) {
 
 	_, api := humatest.New(t)
 	RegisterREST(api, service, authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))
-	response := api.Post("/iam/principals/"+principal.ID.String()+"/disable", authz.TenantHeader + ": " + wireID("tenant"))
+	response := api.Post("/iam/principals/"+principal.ID.String()+"/disable", authz.TenantHeader+": "+wireID("tenant"))
 	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "last_tenant_administrator")
 }

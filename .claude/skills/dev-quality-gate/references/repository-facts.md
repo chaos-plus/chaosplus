@@ -5,8 +5,8 @@
 ## 后端
 
 - Go module：`github.com/chaos-plus/chaosplus`
-- Go 版本：`1.26.5`
-- Go package 目录数：67
+- Go 版本：`1.26.6`
+- Go package 目录数：64
 - 功能模块：audit, authn, federation, governance, iam, identity, oauth, organization, provisioning
 - IAM SQL 方言：mysql, postgres, sqlite
 - HTTP 框架：基于 chi 的 Huma v2
@@ -36,6 +36,7 @@
 - SQLite、MySQL、PostgreSQL 数据库配置使用 `type` 加 `dsn` 或 `dsn_file`。
 - `internal/app` 下严禁 YAML。
 - 每个 Go `name_test.go` 必须有同目录 `name.go`。
-- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 miniredis。
+- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 monkey patch。
+- 隔离 Go 测试可用 miniredis 做本地快速反馈；生产 Go 代码禁止引用，且不能替代真实 Redis 验收。
 - Go 完整验收覆盖率至少 90%。
 - 业务层级为 tenant -> entity -> business resources。

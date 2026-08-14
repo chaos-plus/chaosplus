@@ -44,4 +44,4 @@
 - Run the schema contract checker and affected migration tests before Go tests.
 - Run formatting, race tests, vet, staticcheck, govulncheck, frontend lint/typecheck/tests/build, and real end-to-end checks proportional to the change.
 - Never claim production readiness when a required environment-dependent check was not run. Record the exact residual blocker.
-- On an explicit delivery request, commit and push only after required checks pass and the worktree has been reviewed for unrelated changes.
+- On an explicit delivery request, commit and push only after required checks pass and the worktree has been reviewed for unrelated changes. If the user explicitly requests an incomplete snapshot while gates remain blocked, `.rules/3.TEST.md` permits only a `WIP:` commit on a non-protected, non-default development branch with exact failed/unrun gates and a not-ready declaration; architecture/schema/test-policy, secrets, conflicts, diff hygiene, security invariants, merge, release, tag, and force-push restrictions remain non-waivable.

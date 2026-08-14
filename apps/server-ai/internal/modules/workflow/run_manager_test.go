@@ -3,69 +3,56 @@ package workflow
 import (
 	"context"
 	"encoding/json"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 )
 
 func workflowTestContext() context.Context {
 	return authn.WithClaims(context.Background(), &authn.Claims{TenantID: 11, EntityID: 21, PrincipalID: 31})
 }
 
-func newTestRunManager(t *testing.T, nc *nats.Conn) *RunManager {
+const workflowTestTimeout = 10 * time.Second
+
+func cleanupTestRunManager(t *testing.T, manager *RunManager) {
 	t.Helper()
-	repository, _ := newTestRepository(t)
-	next := guid.ID(1000)
-	return NewRunManager(nc, nil, repository, "runner-1", 91, func() (guid.ID, error) {
-		next++
-		return next, nil
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), workflowTestTimeout)
+		defer cancel()
+		if err := manager.Stop(ctx); err != nil {
+			t.Errorf("stop run manager: %v", err)
+		}
 	})
 }
 
-// startTestNATS boots an in-process broker shared by all server tests.
-func startTestNATS(t *testing.T) *nats.Conn {
+func newTestRunManager(t *testing.T) *RunManager {
 	t.Helper()
-	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
-	if err != nil {
-		t.Fatalf("nats server: %v", err)
-	}
-	go ns.Start()
-	t.Cleanup(ns.Shutdown)
-	if !ns.ReadyForConnections(2 * time.Second) {
-		t.Fatal("nats not ready")
-	}
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
-	return nc
+	runner := runnerEnvironmentFor(t)
+	repository, _ := newTestRepository(t)
+	next := guid.ID(1000)
+	manager := NewRunManager(runner.natsConn, &GatewayRunnerLink{G: runner.gateway}, repository, integrationRunnerID.String(), 91, func() (guid.ID, error) {
+		next++
+		return next, nil
+	})
+	cleanupTestRunManager(t, manager)
+	return manager
 }
 
 func TestRunManagerPauseResumeAndCancel(t *testing.T) {
-	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(workflowTestContext())
 	defer stop()
-	m := newTestRunManager(t, nc)
-	var calls atomic.Int32
-	m.baseFactory = func(_ guid.ID) Executor {
-		return &MockExecutor{RunAgentFn: func(ctx context.Context, _ *Node, _ json.RawMessage) (AgentResult, error) {
-			if calls.Add(1) == 1 {
-				<-ctx.Done()
-				return AgentResult{}, ctx.Err()
-			}
-			return AgentResult{Output: json.RawMessage(`{"ok":true}`)}, nil
-		}}
-	}
+	m := newTestRunManager(t)
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	def := json.RawMessage(`{"id":"lifecycle","version":"1","nodes":[{"id":"agent","type":"agent","agent":{"id":"agent","role":"dev","executor":"mock"}}],"edges":[]}`)
+	script := `if [ -f .resumed ]; then printf '{"ok":true}' > output.json; exit 0; fi
+touch .resumed
+sleep 10`
+	def, _ := json.Marshal(map[string]any{"id": "lifecycle", "version": "1", "nodes": []map[string]any{{
+		"id": "agent", "type": "agent", "agent": map[string]any{"id": "agent", "role": "automation", "executor": "script", "script": script},
+	}}, "edges": []any{}})
 	run, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: def, Workspace: t.TempDir(), ProjectID: 51})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +64,7 @@ func TestRunManagerPauseResumeAndCancel(t *testing.T) {
 			}
 		}
 		return false
-	}, 3*time.Second)
+	}, workflowTestTimeout)
 	if err := m.Pause(run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -94,29 +81,21 @@ func TestRunManagerPauseResumeAndCancel(t *testing.T) {
 		default:
 			return false
 		}
-	}, 3*time.Second)
+	}, workflowTestTimeout)
 	if err := m.Resume(run.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunCompleted }, workflowTestTimeout)
 
-	var cancelCalls atomic.Int32
-	m.baseFactory = func(_ guid.ID) Executor {
-		return &MockExecutor{RunAgentFn: func(ctx context.Context, _ *Node, _ json.RawMessage) (AgentResult, error) {
-			cancelCalls.Add(1)
-			<-ctx.Done()
-			return AgentResult{}, ctx.Err()
-		}}
-	}
 	cancelRun, err := m.Launch(ctx, LaunchRequest{WorkflowJSON: def, Workspace: t.TempDir(), ProjectID: 51})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return cancelCalls.Load() > 0 }, 3*time.Second)
+	waitFor(t, func() bool { return cancelRun.Status() == RunRunning }, workflowTestTimeout)
 	if err := m.Cancel(cancelRun.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return cancelRun.Status() == RunCancelled }, 3*time.Second)
+	waitFor(t, func() bool { return cancelRun.Status() == RunCancelled }, workflowTestTimeout)
 }
 
 // testDefRaw: trigger -> approval(human) -(approved)-> agent. JSON string so
@@ -126,18 +105,16 @@ const testDefRaw = `{
   "nodes":[
     {"id":"t0","type":"trigger","trigger":{"source":"manual"}},
     {"id":"ap","type":"human_approval","humanApproval":{"approvers":"any_human","timeoutMs":60000,"onTimeout":"pause","onReject":"pause"}},
-    {"id":"a0","type":"agent","agent":{"id":"a0","role":"r","executor":"mock","systemPrompt":"x"}}
+    {"id":"a0","type":"agent","agent":{"id":"a0","role":"automation","executor":"script","script":"printf '{\"ok\":true}' > output.json"}}
   ],
   "edges":[{"from":"t0","to":"ap"},{"from":"ap","to":"a0","condition":"approved"}]
 }`
 
 func TestRunManagerLaunchAndApprove(t *testing.T) {
-	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(workflowTestContext())
 	defer stop()
 
-	m := newTestRunManager(t, nc)
-	m.baseFactory = func(_ guid.ID) Executor { return &MockExecutor{} }
+	m := newTestRunManager(t)
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -148,13 +125,13 @@ func TestRunManagerLaunchAndApprove(t *testing.T) {
 	}
 
 	// run 停在审批节点等待。
-	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, workflowTestTimeout)
 
 	// 通过 → 继续到 a0 → 完成。
 	if err := m.Approve(run.ID, "ap", true, "", nil); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunCompleted }, workflowTestTimeout)
 
 	if len(run.Events()) == 0 {
 		t.Fatal("no events recorded")
@@ -162,17 +139,17 @@ func TestRunManagerLaunchAndApprove(t *testing.T) {
 }
 
 func TestRunManagerPersistsRunBeforeAcquiringLease(t *testing.T) {
-	nc := startTestNATS(t)
+	runner := runnerEnvironmentFor(t)
 	ctx, stop := context.WithCancel(workflowTestContext())
 	defer stop()
 
 	repository, _ := newTestRepository(t)
 	next := guid.ID(1000)
-	m := NewRunManager(nc, nil, repository, "runner-1", 91, func() (guid.ID, error) {
+	m := NewRunManager(runner.natsConn, &GatewayRunnerLink{G: runner.gateway}, repository, integrationRunnerID.String(), 91, func() (guid.ID, error) {
 		next++
 		return next, nil
 	})
-	m.baseFactory = func(_ guid.ID) Executor { return &MockExecutor{} }
+	cleanupTestRunManager(t, m)
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -198,12 +175,10 @@ func TestRunManagerPersistsRunBeforeAcquiringLease(t *testing.T) {
 }
 
 func TestRunManagerRejectPauses(t *testing.T) {
-	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(workflowTestContext())
 	defer stop()
 
-	m := newTestRunManager(t, nc)
-	m.baseFactory = func(_ guid.ID) Executor { return &MockExecutor{} }
+	m := newTestRunManager(t)
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -212,21 +187,19 @@ func TestRunManagerRejectPauses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, workflowTestTimeout)
 
 	if err := m.Approve(run.ID, "ap", false, "wrong spec", &Feedback{Category: FeedbackDeviation, Detail: "与需求不符"}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunPaused }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunPaused }, workflowTestTimeout)
 }
 
 func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
-	nc := startTestNATS(t)
 	ctx, stop := context.WithCancel(workflowTestContext())
 	defer stop()
 
-	m := newTestRunManager(t, nc)
-	m.baseFactory = func(_ guid.ID) Executor { return &MockExecutor{} }
+	m := newTestRunManager(t)
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -237,8 +210,8 @@ func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
 		"nodes": []map[string]any{
 			{"id": "t0", "type": "trigger", "trigger": map[string]any{"source": "manual"}},
 			{"id": "ap", "type": "human_approval", "humanApproval": map[string]any{"approvers": "any_human", "timeoutMs": 60000, "onTimeout": "pause", "onReject": "retry"}},
-			{"id": "a0", "type": "agent", "agent": map[string]any{"id": "a0", "role": "r", "executor": "mock"}},
-			{"id": "alt", "type": "agent", "agent": map[string]any{"id": "alt", "role": "r", "executor": "mock"}},
+			{"id": "a0", "type": "agent", "agent": map[string]any{"id": "a0", "role": "automation", "executor": "script", "script": successfulNodeScript}},
+			{"id": "alt", "type": "agent", "agent": map[string]any{"id": "alt", "role": "automation", "executor": "script", "script": successfulNodeScript}},
 		},
 		"edges": []map[string]any{
 			{"from": "t0", "to": "ap"},
@@ -251,11 +224,11 @@ func TestRunManagerRejectRoutingWithRejectedEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunWaitingApproval }, workflowTestTimeout)
 	if err := m.Approve(run.ID, "ap", false, "nope", &Feedback{Category: FeedbackFunctional, Detail: "功能不对"}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
-	waitFor(t, func() bool { return run.Status() == RunCompleted }, 3*time.Second)
+	waitFor(t, func() bool { return run.Status() == RunCompleted }, workflowTestTimeout)
 }
 
 func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {

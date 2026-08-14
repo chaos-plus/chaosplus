@@ -214,16 +214,17 @@ type RunManager struct {
 	st       *BunRepository
 	runnerID string
 
-	mu               sync.Mutex
-	runs             map[guid.ID]*Run
-	sub              *nats.Subscription
-	baseFactory      func(runID guid.ID) Executor // test seam; nil -> RunnerExecutor
-	picker           MachinePicker                // per-node machine selector (nil = use runnerID)
+	mu       sync.Mutex
+	runs     map[guid.ID]*Run
+	sub      *nats.Subscription
+	picker   MachinePicker // per-node machine selector (nil = use runnerID)
+	work     sync.WaitGroup
+	stopping bool
 	// runnerScope, when set, reports the tenant/entity a runner id was onboarded
 	// under so a user-supplied runnerId cannot dispatch a run onto another
 	// tenant's machine (PRD P10).
-	runnerScope func(runnerID string) (tenantID, entityID guid.ID, ok bool)
-	processCtx  context.Context
+	runnerScope      func(context.Context, string) (tenantID, entityID guid.ID, ok bool)
+	processCtx       context.Context
 	holderID         guid.ID
 	nextID           func() (guid.ID, error)
 	leaseTTL         time.Duration
@@ -231,8 +232,8 @@ type RunManager struct {
 }
 
 func NewRunManager(nc *nats.Conn, link RunnerLink, st *BunRepository, runnerID string, holderID guid.ID, nextID func() (guid.ID, error)) *RunManager {
-	if nc == nil || st == nil || nextID == nil {
-		panic("workflow run manager requires NATS, repository, and id generator")
+	if nc == nil || link == nil || st == nil || nextID == nil {
+		panic("workflow run manager requires NATS, runner link, repository, and id generator")
 	}
 	return &RunManager{nc: nc, link: link, st: st, runnerID: runnerID, runs: make(map[guid.ID]*Run),
 		holderID: holderID, nextID: nextID, leaseTTL: 15 * time.Second,
@@ -247,7 +248,7 @@ func (m *RunManager) SetMachinePicker(p MachinePicker) {
 
 // SetRunnerScope wires a tenant/entity resolver for runner ids so a
 // user-supplied runnerId cannot target another tenant's machine.
-func (m *RunManager) SetRunnerScope(fn func(runnerID string) (tenantID, entityID guid.ID, ok bool)) {
+func (m *RunManager) SetRunnerScope(fn func(context.Context, string) (tenantID, entityID guid.ID, ok bool)) {
 	m.runnerScope = fn
 }
 
@@ -255,6 +256,10 @@ func (m *RunManager) SetRunnerScope(fn func(runnerID string) (tenantID, entityID
 // run's subscribers. Safe to call once.
 func (m *RunManager) Start(ctx context.Context) error {
 	m.mu.Lock()
+	if m.stopping {
+		m.mu.Unlock()
+		return fmt.Errorf("workflow run manager is stopping")
+	}
 	if m.holderID.Zero() {
 		holderID, err := m.nextID()
 		if err != nil {
@@ -285,15 +290,55 @@ func (m *RunManager) Start(ctx context.Context) error {
 		return fmt.Errorf("subscribe run events: %w", err)
 	}
 	m.sub = sub
-	go func() {
+	if !m.startBackground(func() {
 		<-ctx.Done()
 		_ = sub.Unsubscribe()
-	}()
+	}) {
+		_ = sub.Unsubscribe()
+		return fmt.Errorf("workflow run manager is stopping")
+	}
 	// Rehydrate non-terminal runs so in-flight approvals/pauses survive a
 	// control-plane restart (crash recovery, PRD §15.1). Without this the live
 	// run map is empty after boot and waiting approvals can never resolve.
 	m.LoadFromStore(ctx)
 	return nil
+}
+
+func (m *RunManager) startBackground(work func()) bool {
+	m.mu.Lock()
+	if m.stopping {
+		m.mu.Unlock()
+		return false
+	}
+	m.work.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.work.Done()
+		work()
+	}()
+	return true
+}
+
+func (m *RunManager) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	m.stopping = true
+	sub := m.sub
+	m.sub = nil
+	m.mu.Unlock()
+	if sub != nil {
+		_ = sub.Unsubscribe()
+	}
+	done := make(chan struct{})
+	go func() {
+		m.work.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop workflow run manager: %w", ctx.Err())
+	}
 }
 
 func (m *RunManager) Context() context.Context {
@@ -524,38 +569,33 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 		return nil
 	}
 
-	var base Executor
-	if m.baseFactory != nil {
-		base = m.baseFactory(run.ID)
-	} else {
-		runnerID := req.RunnerID
-		if runnerID == "" {
-			runnerID = m.runnerID
-		}
-		if runnerID == "" {
-			reg := m.link.RegisteredRunners()
-			if len(reg) == 0 {
-				cancel()
-				return fmt.Errorf("no runner registered; set runnerId or start a daemon")
-			}
-			runnerID = reg[0]
-		}
-		// Never dispatch onto a machine another tenant owns (PRD P10): a caller
-		// may supply runnerId explicitly, but only the run's own tenant's
-		// daemons are valid targets. Entity is deliberately not compared — a
-		// tenant may register a runner under one entity and run under another.
-		if m.runnerScope != nil {
-			if tenantID, _, ok := m.runnerScope(runnerID); ok && tenantID != run.TenantID {
-				cancel()
-				return fmt.Errorf("runner %s is not owned by this run's tenant", runnerID)
-			}
-		}
-		base = NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID.String()).
-			WithMachinePicker(m.picker).
-			WithRunnerScope(run.TenantID, m.runnerScope).
-			WithAttemptOffsets(attemptOffsets(run.Events())).
-			WithHeartbeatTimeout(m.heartbeatTimeout)
+	runnerID := req.RunnerID
+	if runnerID == "" {
+		runnerID = m.runnerID
 	}
+	if runnerID == "" {
+		reg := m.link.RegisteredRunners(run.context(ctx))
+		if len(reg) == 0 {
+			cancel()
+			return fmt.Errorf("no runner registered; set runnerId or start a daemon")
+		}
+		runnerID = reg[0]
+	}
+	// Never dispatch onto a machine another tenant owns (PRD P10): a caller
+	// may supply runnerId explicitly, but only the run's own tenant's
+	// daemons are valid targets. Entity is deliberately not compared — a
+	// tenant may register a runner under one entity and run under another.
+	if m.runnerScope != nil {
+		if tenantID, _, ok := m.runnerScope(run.context(ctx), runnerID); ok && tenantID != run.TenantID {
+			cancel()
+			return fmt.Errorf("runner %s is not owned by this run's tenant", runnerID)
+		}
+	}
+	base := NewRunnerExecutor(m.link, runnerID, req.Workspace, run.ID.String()).
+		WithMachinePicker(m.picker).
+		WithRunnerScope(run.TenantID, m.runnerScope).
+		WithAttemptOffsets(attemptOffsets(run.Events())).
+		WithHeartbeatTimeout(m.heartbeatTimeout)
 	exec := NewApprovalExecutor(base, broker)
 
 	eng, err := NewEngine(run.Def, exec)
@@ -582,9 +622,12 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 		cancel()
 		return err
 	}
-	go m.renewLease(runCtx, run)
-	go func() {
-		defer cancelCause(nil)
+	if !m.startBackground(func() {
+		renewDone := make(chan struct{})
+		go func() {
+			defer close(renewDone)
+			m.renewLease(runCtx, run)
+		}()
 		defer close(done)
 		eng.OnEvent = func(ev Event) {
 			consumes := make([]string, 0)
@@ -628,8 +671,13 @@ func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchReques
 		}
 		run.setStatus(final)
 		cancelCause(nil)
+		<-renewDone
 		m.releaseLease(run)
-	}()
+	}) {
+		cancel()
+		close(done)
+		return fmt.Errorf("workflow run manager is stopping")
+	}
 	return nil
 }
 

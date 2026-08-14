@@ -1,6 +1,7 @@
 package secure
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestOriginPolicy(t *testing.T) {
 		{"https://evil.example.com", false},
 		{"://", false},
 	} {
-		request := httptest.NewRequest("GET", "https://control.example.com/ws", nil)
+		request := httptest.NewRequest(http.MethodGet, "https://control.example.com/ws", nil)
 		request.Header.Set("Origin", test.origin)
 		assert.Equal(t, test.want, policy.Allows(request), test.origin)
 	}

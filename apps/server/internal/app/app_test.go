@@ -2,16 +2,37 @@ package app
 
 import (
 	"errors"
+	"hash/fnv"
 	"net"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+func testID(value string) guid.ID {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	id, err := guid.Parse(strconv.FormatUint(hash.Sum64()>>1, 10))
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) {
+		return guid.ID(next.Add(1)), nil
+	}
+}
 
 // newTestApp builds an App with just the fields the lifecycle methods need, so
 // tests can exercise shutdown/awaitShutdown without running Bootstrap (no otel,

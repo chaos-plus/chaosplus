@@ -48,8 +48,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Defect, error
 }
 func (s *Service) List(ctx context.Context, status Status, severity Severity) ([]Defect, error) {
 	if status != "" {
-		probe := &Defect{Title: "p", ReproductionSteps: "r", ExpectedResult: "e", ActualResult: "a", Status: status, Severity: SeverityMajor, Priority: PriorityMedium, TaskID: ptr(1)}
-		if validate(probe) != nil {
+		switch status {
+		case StatusOpen, StatusTriaged, StatusInProgress, StatusResolved, StatusVerified, StatusClosed, StatusReopened, StatusRejected:
+		default:
 			return nil, ErrInvalid
 		}
 	}
@@ -62,7 +63,6 @@ func (s *Service) List(ctx context.Context, status Status, severity Severity) ([
 	}
 	return s.repository.List(ctx, status, severity)
 }
-func ptr(id guid.ID) *guid.ID { return &id }
 func (s *Service) Get(ctx context.Context, id guid.ID) (*Defect, error) {
 	if id.Zero() {
 		return nil, ErrInvalid

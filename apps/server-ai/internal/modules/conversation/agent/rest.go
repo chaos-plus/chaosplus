@@ -19,38 +19,32 @@ var Actions = []authz.Action{
 
 type entityInput struct{}
 type idInput struct {
-	entityInput
 	ID guid.ParamID `path:"id"`
 }
 type createInput struct {
-	entityInput
 	Body AgentCreateInput
 }
 type updateInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body AgentUpdateInput
 }
 type statusInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body struct {
 		Status  Status `json:"status"`
 		Version int64  `json:"version" minimum:"1"`
 	}
 }
 type retireInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
+	ID   guid.ParamID `path:"id"`
 	Body struct {
 		HandoverDoc string `json:"handoverDoc" minLength:"1" maxLength:"65535"`
 		Version     int64  `json:"version" minimum:"1"`
 	}
 }
 type deleteInput struct {
-	entityInput
-	ID guid.ParamID `path:"id"`
-	Version int64 `query:"version" minimum:"1"`
+	ID      guid.ParamID `path:"id"`
+	Version int64        `query:"version" minimum:"1"`
 }
 type body[T any] struct{ Body T }
 type ok struct {

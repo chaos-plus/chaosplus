@@ -66,7 +66,7 @@ func TestGroupHTTPWorkflow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID.String()+"/members/"+wireID("principal/a"), tenant).Code)
 	assert.Equal(t, http.StatusOK, api.Delete("/iam/groups/"+group.ID.String()+"?version=2", tenant).Code)
 	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID.String(), tenant).Code)
-	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID.String(), authz.TenantHeader + ": " + wireID("tenant-b")).Code)
+	assert.Equal(t, http.StatusNotFound, api.Get("/iam/groups/"+group.ID.String(), authz.TenantHeader+": "+wireID("tenant-b")).Code)
 }
 
 func TestGroupHTTPEmptyCollectionsAndErrors(t *testing.T) {

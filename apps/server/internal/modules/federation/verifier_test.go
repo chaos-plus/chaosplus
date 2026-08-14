@@ -26,7 +26,7 @@ import (
 )
 
 // testIDP is a real OIDC identity provider for tests: discovery, authorize,
-// token, and JWKS endpoints backed by an Ed25519 signing key. No mocks.
+// token, and JWKS endpoints backed by an Ed25519 signing key.
 type testIDPCode struct {
 	issuer    string
 	challenge string

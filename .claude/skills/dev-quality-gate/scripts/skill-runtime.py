@@ -27,6 +27,18 @@ SECRET_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]+=*", re.IGNORECASE),
     re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE),
 )
+IGNORED_POLICY_PATH_PARTS = {".git", ".local", "dist", "node_modules", "vendor"}
+MINIREDIS = re.compile(r"\bminiredis\b", re.IGNORECASE)
+PRODUCT_SOURCE_SUFFIXES = {".cjs", ".go", ".js", ".jsx", ".mjs", ".py", ".ts", ".tsx"}
+TEST_DIRECTORY_NAMES = {"__tests__", "test", "tests"}
+TEST_SUBSTITUTE = re.compile(r"\b(?:mock|fake|stub)[A-Za-z0-9_]*\b", re.IGNORECASE)
+MONKEY_PATCH = re.compile(
+    r"(?:\b(?:globalThis|global|window)\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*\s*=|\bspyOn\s*\()"
+)
+POLICY_OWNER_PATHS = {
+    Path(".claude/skills/dev-quality-gate/scripts/skill-runtime.py"),
+    Path(".claude/skills/dev-quality-gate/scripts/test_skill_runtime.py"),
+}
 
 
 def repository_root() -> Path:
@@ -216,6 +228,46 @@ def repository_brand_terms(repo_root: Path) -> set[str]:
     return terms
 
 
+def _is_isolated_test(relative: Path) -> bool:
+    name = relative.name.lower()
+    return (
+        name.endswith("_test.go")
+        or name.startswith("test_") and relative.suffix == ".py"
+        or name.endswith((".test.js", ".test.jsx", ".test.ts", ".test.tsx"))
+        or name.endswith((".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx"))
+        or bool(TEST_DIRECTORY_NAMES.intersection(part.lower() for part in relative.parts[:-1]))
+    )
+
+
+def find_test_policy_violations(repo_root: Path) -> list[str]:
+    errors: list[str] = []
+    for path in sorted(item for item in repo_root.rglob("*") if item.is_file()):
+        relative = path.relative_to(repo_root)
+        if IGNORED_POLICY_PATH_PARTS.intersection(relative.parts):
+            continue
+        if path.suffix.lower() not in PRODUCT_SOURCE_SUFFIXES:
+            continue
+
+        source = path.read_text(encoding="utf-8-sig")
+        lines = source.splitlines()
+        if path.suffix.lower() == ".go" and not _is_isolated_test(relative):
+            for line_number, line in enumerate(lines, start=1):
+                if MINIREDIS.search(line):
+                    errors.append(f"{relative}:{line_number}: miniredis is allowed only in *_test.go")
+
+        if relative not in POLICY_OWNER_PATHS:
+            for line_number, line in enumerate(lines, start=1):
+                if TEST_SUBSTITUTE.search(line):
+                    errors.append(
+                        f"{relative}:{line_number}: mock/fake/stub substitutes are forbidden in product code and tests"
+                    )
+                if _is_isolated_test(relative) and MONKEY_PATCH.search(line):
+                    errors.append(
+                        f"{relative}:{line_number}: monkey patching globals or functions is forbidden in tests"
+                    )
+    return errors
+
+
 def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -231,11 +283,10 @@ def render_repository_facts(repo_root: Path) -> str:
     modules = sorted(path.name for path in module_root.iterdir() if path.is_dir())
     dialect_root = module_root / "iam" / "sql"
     dialects = sorted(path.name for path in dialect_root.iterdir() if path.is_dir())
-    ignored_parts = {".git", ".local", "vendor"}
     go_packages = {
         path.parent
         for path in repo_root.rglob("*.go")
-        if not ignored_parts.intersection(path.relative_to(repo_root).parts)
+        if not IGNORED_POLICY_PATH_PARTS.intersection(path.relative_to(repo_root).parts)
     }
 
     admin = _read_json(repo_root / "apps" / "admin-ai" / "package.json")
@@ -281,7 +332,8 @@ def render_repository_facts(repo_root: Path) -> str:
 - SQLite、MySQL、PostgreSQL 数据库配置使用 `type` 加 `dsn` 或 `dsn_file`。
 - `internal/app` 下严禁 YAML。
 - 每个 Go `name_test.go` 必须有同目录 `name.go`。
-- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 miniredis。
+- 测试使用真实依赖和真实 listener；严禁 mock、fake、stub 和 monkey patch。
+- 隔离 Go 测试可用 miniredis 做本地快速反馈；生产 Go 代码禁止引用，且不能替代真实 Redis 验收。
 - Go 完整验收覆盖率至少 90%。
 - 业务层级为 tenant -> entity -> business resources。
 """
@@ -396,6 +448,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("skills", nargs="*")
     refresh = subparsers.add_parser("refresh")
     refresh.add_argument("--repo-root", type=Path, default=repository_root())
+    test_policy = subparsers.add_parser("test-policy")
+    test_policy.add_argument("--repo-root", type=Path, default=repository_root())
     record = subparsers.add_parser("record")
     record.add_argument("--domain", choices=sorted(DOMAINS), required=True)
     for field in ("symptom", "cause", "prevention", "evidence"):
@@ -420,6 +474,15 @@ def main(arguments: list[str]) -> int:
     if args.command == "refresh":
         changed = refresh_context(args.repo_root.resolve())
         print("仓库事实已更新。" if changed else "仓库事实已是最新。")
+        return 0
+    if args.command == "test-policy":
+        errors = find_test_policy_violations(args.repo_root.resolve())
+        if errors:
+            print("测试依赖策略校验失败：", file=sys.stderr)
+            for error in errors:
+                print(f"- {error}", file=sys.stderr)
+            return 1
+        print("测试依赖策略校验通过。")
         return 0
     lesson_id, added = record_learning(
         repo_root / ".claude" / "skills",

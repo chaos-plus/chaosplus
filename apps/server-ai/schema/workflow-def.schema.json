@@ -58,6 +58,13 @@
       "type": "object",
       "required": ["id", "role", "executor"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "executor": { "const": "script" } }, "required": ["executor"] },
+          "then": { "required": ["script"] },
+          "else": { "not": { "required": ["script"] } }
+        }
+      ],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "role": { "type": "string", "minLength": 1 },
@@ -65,6 +72,7 @@
         "tokenProfile": { "enum": ["budget", "balanced", "quality"] },
         "maxContextTokens": { "type": "integer", "minimum": 1 },
         "systemPrompt": { "type": "string" },
+        "script": { "type": "string", "minLength": 1 },
         "allowedTools": { "type": "array", "items": { "type": "string" } },
         "forbiddenActions": { "type": "array", "items": { "type": "string" } },
         "allowedMCPTools": { "type": "array", "items": { "type": "string" } },

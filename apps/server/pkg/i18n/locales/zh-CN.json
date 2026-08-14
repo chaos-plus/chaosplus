@@ -16,6 +16,7 @@
   "geoip_no_client_ip": "无法确定客户端 IPv4 地址，请提供有效的客户端地址后重试。",
   "geoip_not_found": "未找到该 IP 地址的地理位置数据，请核对地址或尝试其他数据源。",
   "guid_not_ready": "ID 生成器尚未就绪，请等待服务启动完成后重试。",
+  "not_ready": "服务尚未就绪，请等待启动完成后重试。",
   "request_body_required": "请求体不能为空。",
   "request_body_timeout": "读取请求体超时，请重试。",
   "request_body_unreadable": "无法读取请求体。",

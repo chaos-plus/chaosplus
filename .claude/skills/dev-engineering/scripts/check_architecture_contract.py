@@ -16,6 +16,7 @@ SKILL = ROOT / ".claude/skills/dev-engineering/SKILL.md"
 SKILL_AGENT = ROOT / ".claude/skills/dev-engineering/agents/openai.yaml"
 BACKEND_RULE = ROOT / ".rules/3.BACKEND.md"
 FORBIDDEN_DIRS = (
+    ROOT / "apps/server-3rd",
     SERVER_AI / "store",
     SERVER_AI / "server",
     SERVER_AI / "core/id",
@@ -59,6 +60,7 @@ RULE_CONTRACTS = {
         "guid.ID",
         "UTC Unix milliseconds",
         "Use Huma",
+        "apps/server-3rd",
         "Commit and push only",
     ),
 }

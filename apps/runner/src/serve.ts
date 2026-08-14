@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { detectBinary } from "./backends/detect";
 import { AgentManager } from "./agents/manager";
 import { WsDaemonTransport } from "./machine/client";
-import type { RunnerCommand, RunnerEvent } from "./nats/transport";
+import type { RunnerCommand, RunnerEvent } from "./machine/protocol";
 import { startWeb } from "./web";
 
 /**
@@ -28,7 +28,9 @@ const SERVER = arg("--server") ?? "http://127.0.0.1:8081";
 const TOKEN = process.env.RUNNER_TOKEN ?? arg("--token");
 const NAME = arg("--name") ?? require("node:os").hostname();
 if (!TOKEN) {
-  console.error("usage: bun run src/serve.ts --server <url> --token <token> [--name <name>], or set RUNNER_TOKEN");
+  console.error(
+    "usage: bun run src/serve.ts --server <url> --token <token> [--name <name>], or set RUNNER_TOKEN",
+  );
   process.exit(1);
 }
 
@@ -37,7 +39,10 @@ const sessions = new Map<string, string>(); // spawnId -> agent session id
 const spawnCwd = new Map<string, string>(); // spawnId -> workspace cwd (for read-file)
 const transport = new WsDaemonTransport(SERVER, TOKEN, NAME);
 
-async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown) => void): Promise<void> {
+async function onCommand(
+  cmd: RunnerCommand,
+  reply: (ok: boolean, data?: unknown) => void,
+): Promise<void> {
   switch (cmd.type) {
     case "spawn": {
       const agent = manager.create({
@@ -48,6 +53,7 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
         model: cmd.spawn.model,
         provider: cmd.spawn.provider,
         apiKey: cmd.spawn.apiKey,
+        env: cmd.spawn.env,
         allowedTools: cmd.spawn.allowedTools,
         maxTurns: cmd.spawn.maxTurns,
       });
@@ -59,7 +65,11 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
       // reset its idle timeout on live activity (activity-based spawn timeout).
       agent.subscribe((e) => {
         if (e.type === "message" || e.type === "tool") {
-          transport.publish({ type: "spawn-event", spawnId: cmd.spawn.spawnId, event: e });
+          transport.publish({
+            type: "spawn-event",
+            spawnId: cmd.spawn.spawnId,
+            event: e,
+          });
         }
       });
       void runAndReport(agent.spec.id, cmd.spawn.spawnId, cmd.spawn.prompt);
@@ -98,7 +108,11 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
         return;
       }
       try {
-        const { stdout, stderr, exitCode } = await runCmd(cmd.cmd, cwd, cmd.timeoutMs || 60000);
+        const { stdout, stderr, exitCode } = await runCmd(
+          cmd.cmd,
+          cwd,
+          cmd.timeoutMs || 60000,
+        );
         reply(true, { exitCode, stdout, stderr });
       } catch (e) {
         reply(false, { error: (e as Error).message });
@@ -113,7 +127,8 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
     }
     case "switch-provider": {
       const id = sessions.get(cmd.spawnId);
-      if (!id) return reply(false, { error: `no session for spawn ${cmd.spawnId}` });
+      if (!id)
+        return reply(false, { error: `no session for spawn ${cmd.spawnId}` });
       manager.switchProvider(id, cmd.provider, cmd.apiKey);
       reply(true);
       return;
@@ -121,14 +136,22 @@ async function onCommand(cmd: RunnerCommand, reply: (ok: boolean, data?: unknown
   }
 }
 
-async function runAndReport(agentId: string, spawnId: string, prompt: string): Promise<void> {
+async function runAndReport(
+  agentId: string,
+  spawnId: string,
+  prompt: string,
+): Promise<void> {
   const agent = manager.get(agentId);
   if (!agent) return;
   try {
     try {
       await agent.run(prompt);
     } catch (e) {
-      transport.publish({ type: "spawn-error", spawnId, message: (e as Error).message });
+      transport.publish({
+        type: "spawn-error",
+        spawnId,
+        message: (e as Error).message,
+      });
       return;
     }
     const done = agent.events.find((ev) => ev.type === "done");
@@ -139,14 +162,22 @@ async function runAndReport(agentId: string, spawnId: string, prompt: string): P
       const first = (msgs[0] as { text: string }).text.slice(0, 500);
       preview = { type: "text", content: first };
     }
+    const failureMessage =
+      err && "message" in err
+        ? err.message
+        : done
+          ? `executor exited with code ${done.exitCode}${msgs.length > 0 ? `: ${(msgs.at(-1) as { text: string }).text}` : ""}`
+          : "no done event";
 
     transport.publish({
       type: "spawn-done",
       spawnId,
       ok: done?.ok ?? false,
       exitCode: done?.exitCode ?? 1,
-      ...(done && "costUsd" in done && done.costUsd != null ? { costUsd: done.costUsd } : {}),
-      ...(done?.ok === false || err ? { error: err && "message" in err ? err.message : "no done event" } : {}),
+      ...(done && "costUsd" in done && done.costUsd != null
+        ? { costUsd: done.costUsd }
+        : {}),
+      ...(done?.ok === false || err ? { error: failureMessage } : {}),
       ...(preview ? { preview } : {}),
     });
   } finally {
@@ -166,10 +197,9 @@ async function main(): Promise<void> {
   const runtimes = [
     detectBinary(["claude"], "CLAUDE_BINARY") ? "claude" : "",
     detectBinary(["codex"], "CODEX_BINARY") ? "codex" : "",
-    "mock",
-    "mastra",  // always available (pure API, no binary)
+    "mastra", // always available (pure API, no binary)
     "script", // always available (shell)
-    "http",   // always available (fetch)
+    "http", // always available (fetch)
   ].filter(Boolean);
   await transport.register({
     runtime: "bun",
@@ -200,17 +230,26 @@ async function main(): Promise<void> {
 /** Run a validator command template in a workspace, killing it on timeout.
  * Timeout or maxBuffer overflow → exitCode = 1 (not 0), so the validator
  * correctly fails the node instead of silently passing. */
-function runCmd(cmd: string, cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+function runCmd(
+  cmd: string,
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolvePromise, _reject) => {
-    const proc = execFile(cmd, { cwd, shell: true, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      let code = 0;
-      if (err) {
-        code = typeof (err as { code?: unknown }).code === "number"
-          ? (err as { code: number }).code
-          : 1; // killed, maxBuffer overflow, or spawn failure → non-zero
-      }
-      resolvePromise({ stdout, stderr, exitCode: code });
-    });
+    const proc = execFile(
+      cmd,
+      { cwd, shell: true, windowsHide: true, maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        let code = 0;
+        if (err) {
+          code =
+            typeof (err as { code?: unknown }).code === "number"
+              ? (err as { code: number }).code
+              : 1; // killed, maxBuffer overflow, or spawn failure → non-zero
+        }
+        resolvePromise({ stdout, stderr, exitCode: code });
+      },
+    );
     const killer = setTimeout(() => proc.kill(), timeoutMs);
     proc.on("close", () => clearTimeout(killer));
   });

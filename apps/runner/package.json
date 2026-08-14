@@ -3,11 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "chaos.plus execution runner: hosts coding-agent sessions (claude / codex / mock) and exposes a streaming agent runtime.",
+  "description": "chaos.plus execution runner: hosts coding-agent sessions and exposes a streaming agent runtime.",
   "scripts": {
     "serve": "bun run src/serve.ts",
     "dev": "bun run src/cli.ts",
-    "demo": "bun run src/cli.ts --runtime mock",
+    "demo": "bun run src/cli.ts --runtime claude",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "format": "prettier --write \"src/**/*.ts\""
@@ -17,7 +17,6 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.224",
     "@mastra/core": "^1.57.0",
     "@openai/codex-sdk": "^0.147.0",
-    "nats": "^2.29.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

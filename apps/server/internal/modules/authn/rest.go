@@ -273,8 +273,8 @@ func RegisterREST(a huma.API, authenticator Authenticator, web *WebService) {
 	authz.RegisterPublic(a, huma.Operation{
 		OperationID: "authn-captcha", Method: http.MethodGet, Path: "/authn/captcha",
 		Summary: "Issue a graphic captcha for registration", Tags: []string{"authn"},
-	}, func(ctx context.Context, in *captchaInput) (*respx.Body[captchaOutput], error) {
-		out, err := IssueCaptcha()
+	}, func(ctx context.Context, _ *captchaInput) (*respx.Body[captchaOutput], error) {
+		out, err := issueCaptcha()
 		if err != nil {
 			return nil, huma.Error500InternalServerError("captcha_unavailable")
 		}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-		"testing"
+	"testing"
 	"time"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx"
@@ -146,30 +146,30 @@ func TestRepositoryPropagatesDatabaseFailures(t *testing.T) {
 			return err
 		})
 		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
-			_, err := repo.IsMemberActive(t.Context(), testID("tenant") , testID("root"))
+			_, err := repo.IsMemberActive(t.Context(), testID("tenant"), testID("root"))
 			return err
 		})
 		dropAndAssert(t, []string{"iam_role_members", "iam_temporary_role_grants"}, func(repo *Repository) error {
-			_, err := repo.ListMemberRoleIDs(t.Context(), testID("tenant") , testID("root"))
+			_, err := repo.ListMemberRoleIDs(t.Context(), testID("tenant"), testID("root"))
 			return err
 		})
 	})
 
 	t.Run("authorizer", func(t *testing.T) {
 		dropAndAssert(t, []string{"iam_entities"}, func(repo *Repository) error {
-			_, err := NewAuthorizer(repo.db).Constraint(t.Context(), testID("tenant"), "store_view" , testID("root"))
+			_, err := NewAuthorizer(repo.db).Constraint(t.Context(), testID("tenant"), "store_view", testID("root"))
 			return err
 		})
 		dropAndAssert(t, []string{"iam_principals"}, func(repo *Repository) error {
-			_, err := NewAuthorizer(repo.db).CheckPlatform(t.Context(), "tenant_view" , testID("root"))
+			_, err := NewAuthorizer(repo.db).CheckPlatform(t.Context(), "tenant_view", testID("root"))
 			return err
 		})
 		dropAndAssert(t, []string{"iam_tenant_members"}, func(repo *Repository) error {
-			_, err := NewAuthorizer(repo.db).Check(t.Context(), testID("tenant"), "store_view" , testID("root"))
+			_, err := NewAuthorizer(repo.db).Check(t.Context(), testID("tenant"), "store_view", testID("root"))
 			return err
 		})
 		dropAndAssert(t, []string{"iam_groups"}, func(repo *Repository) error {
-			_, err := matchingDynamicGroupIDs(t.Context(), repo.db, testID("tenant") , testID("root"))
+			_, err := matchingDynamicGroupIDs(t.Context(), repo.db, testID("tenant"), testID("root"))
 			return err
 		})
 	})

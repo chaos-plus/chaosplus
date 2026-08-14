@@ -2,7 +2,9 @@ package iam
 
 import (
 	"context"
-		"net/http"
+	"hash/fnv"
+	"net/http"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -11,9 +13,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
-	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/bunx/bunxtest"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
+
+func testID(value string) guid.ID {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	id, err := guid.Parse(strconv.FormatUint(hash.Sum64()>>1, 10))
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) { return guid.ID(next.Add(1)), nil }
+}
 
 func TestModuleRegistersREST(t *testing.T) {
 	m := NewDeclarationOnlyModule(authz.NewDeclarationOnlyRegistrar(authz.DefaultRegistry()))

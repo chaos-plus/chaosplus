@@ -36,8 +36,8 @@ description: 开发、重组、验证和发布 Dev 文档站与架构文档。�
 
 运行：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/dev-quality-gate/scripts/check-gates.ps1 -Scope docs
+```text
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope docs
 ```
 
-布局变化时检查桌面/移动首页和至少一篇长架构文档。只有有证据的通用文档失败才写入 lessons，变化中的实现事实由 refresh 生成。
+Windows 使用 `py -3` 启动同一脚本。布局变化时检查桌面/移动首页和至少一篇长架构文档。只有有证据的通用文档失败才写入 lessons，变化中的实现事实由 refresh 生成。

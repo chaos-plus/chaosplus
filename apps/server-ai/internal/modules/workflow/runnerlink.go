@@ -7,9 +7,10 @@ import (
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/infra/runnergateway"
 )
 
-// RunnerLink is the runner-facing surface the engine needs: spawn + wait for
-// completion, read artifacts, run validator commands, list runners. Both the
-// NATS gateway (cloud/desktop) and the WS machine hub (PRD §5.3.1) implement it.
+// RunnerLink is the transport-neutral runner surface the engine needs: spawn +
+// wait for completion, read artifacts, run validator commands, and list runners.
+// The runner wire protocol and the control-plane's cluster bus stay outside this
+// business port.
 type RunnerLink interface {
 	// SpawnAndWait spawns and blocks until done/error. idle > 0 resets on live
 	// activity; max > 0 is an absolute bound. Either may be 0 (no limit).
@@ -17,14 +18,15 @@ type RunnerLink interface {
 	Kill(ctx context.Context, runnerID, spawnID string) error
 	ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error)
 	RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (gateway.CmdResult, error)
-	RegisteredRunners() []string
+	RegisteredRunners(context.Context) []string
 }
 
-// NatsRunnerLink adapts the NATS Gateway to RunnerLink (idle/max are re-wrapped
-// into SpawnWaitOptions). Kept so the NATS daemon path stays available.
-type NatsRunnerLink struct{ G *gateway.Gateway }
+// GatewayRunnerLink adapts the control-plane runner gateway to RunnerLink.
+// The gateway may use a cluster bus internally; that implementation detail is
+// never part of the runner's WebSocket protocol or configuration.
+type GatewayRunnerLink struct{ G *gateway.Gateway }
 
-func (l *NatsRunnerLink) SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max, heartbeat time.Duration) (gateway.SpawnResult, error) {
+func (l *GatewayRunnerLink) SpawnAndWait(ctx context.Context, runnerID string, sp gateway.Spawn, idle, max, heartbeat time.Duration) (gateway.SpawnResult, error) {
 	var opts []gateway.SpawnWaitOption
 	if idle > 0 {
 		opts = append(opts, gateway.WithIdleTimeout(idle))
@@ -38,20 +40,20 @@ func (l *NatsRunnerLink) SpawnAndWait(ctx context.Context, runnerID string, sp g
 	return l.G.SpawnAndWaitOpts(ctx, runnerID, sp, opts...)
 }
 
-func (l *NatsRunnerLink) Kill(ctx context.Context, runnerID, spawnID string) error {
+func (l *GatewayRunnerLink) Kill(ctx context.Context, runnerID, spawnID string) error {
 	return l.G.Kill(ctx, runnerID, spawnID)
 }
 
-func (l *NatsRunnerLink) ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error) {
+func (l *GatewayRunnerLink) ReadArtifact(ctx context.Context, runnerID, spawnID, path string) ([]byte, error) {
 	return l.G.ReadArtifact(ctx, runnerID, spawnID, path)
 }
 
-func (l *NatsRunnerLink) RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (gateway.CmdResult, error) {
+func (l *GatewayRunnerLink) RunCmd(ctx context.Context, runnerID, spawnID, cmdTemplate string, timeoutMs int) (gateway.CmdResult, error) {
 	return l.G.RunCmd(ctx, runnerID, spawnID, cmdTemplate, timeoutMs)
 }
 
-func (l *NatsRunnerLink) RegisteredRunners() []string {
-	return l.G.RegisteredRunners()
+func (l *GatewayRunnerLink) RegisteredRunners(ctx context.Context) []string {
+	return l.G.RegisteredRunnersContext(ctx)
 }
 
-var _ RunnerLink = (*NatsRunnerLink)(nil)
+var _ RunnerLink = (*GatewayRunnerLink)(nil)

@@ -54,7 +54,7 @@ export class AgentSession {
   }
 
   snapshot() {
-    const { apiKey: _apiKey, id, kind, runtime, ...rest } = this.spec;
+    const { apiKey: _apiKey, env: _env, id, kind, runtime, ...rest } = this.spec;
     return { id, kind, runtime, status: this.status, ...rest };
   }
 }

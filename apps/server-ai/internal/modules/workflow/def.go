@@ -130,6 +130,7 @@ type ExecutorAgentSpec struct {
 	TokenProfile     string                  `json:"tokenProfile,omitempty"`
 	MaxContextTokens int                     `json:"maxContextTokens,omitempty"`
 	SystemPrompt     string                  `json:"systemPrompt,omitempty"`
+	Script           string                  `json:"script,omitempty"`
 	AllowedTools     []string                `json:"allowedTools,omitempty"`
 	ForbiddenActions []string                `json:"forbiddenActions,omitempty"`
 	AllowedMCPTools  []string                `json:"allowedMCPTools,omitempty"`

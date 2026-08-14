@@ -3,7 +3,6 @@ import { runClaude } from "./claude";
 import { runCodex } from "./codex";
 import { runHttp } from "./http";
 import { runMastra } from "./mastra";
-import { runMock } from "./mock";
 import { runScript } from "./script";
 
 /** A backend is a function that runs one agent task and streams normalized events. */
@@ -15,7 +14,6 @@ export const BACKENDS: Record<string, AgentBackend> = {
   codex: runCodex,
   http: runHttp,
   mastra: runMastra,
-  mock: runMock,
   script: runScript,
 };
 

@@ -15,15 +15,15 @@ import (
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 )
 
-// RunnerExecutor dispatches agent nodes to a real machine runner over NATS
-// (PRD §18: executor via runner spawn). Each agent is asked to write its
+// RunnerExecutor dispatches agent nodes to a real machine runner through the
+// transport-neutral RunnerLink (PRD §18). Each agent is asked to write its
 // deliverable to output.json in the workspace; RunnerExecutor reads it back
 // after spawn-done, so downstream condition/transform nodes see real output.
 //
 // MachinePicker selects a runner for a given executor type. Returns "" if no
 // machine supports the requested executor — the caller should fall back to the
 // default runnerID.
-type MachinePicker func(executorType string) string
+type MachinePicker func(context.Context, string) string
 
 // The engine runs synchronously, so at most one SpawnAndWait is in flight and
 // draining the gateway's event stream is safe.
@@ -36,7 +36,7 @@ type RunnerExecutor struct {
 	// runTenantID + runnerScope let a per-node pick reject machines another
 	// tenant owns (PRD P10): a pick may target any runner of the run's tenant.
 	runTenantID guid.ID
-	runnerScope func(runnerID string) (tenantID, entityID guid.ID, ok bool)
+	runnerScope func(context.Context, string) (tenantID, entityID guid.ID, ok bool)
 	idle        time.Duration // per-spawn idle timeout (reset on any matching event); 0 = none
 	max         time.Duration // per-spawn absolute cap; 0 = none
 	heartbeat   time.Duration // runner liveness timeout; 0 = disabled
@@ -60,7 +60,7 @@ func (r *RunnerExecutor) WithMachinePicker(p MachinePicker) *RunnerExecutor {
 
 // WithRunnerScope binds the run's tenant and a runner-tenant resolver so a
 // per-node pick cannot dispatch onto a machine another tenant owns (PRD P10).
-func (r *RunnerExecutor) WithRunnerScope(tenantID guid.ID, scope func(runnerID string) (tenantID, entityID guid.ID, ok bool)) *RunnerExecutor {
+func (r *RunnerExecutor) WithRunnerScope(tenantID guid.ID, scope func(context.Context, string) (tenantID, entityID guid.ID, ok bool)) *RunnerExecutor {
 	r.runTenantID = tenantID
 	r.runnerScope = scope
 	return r
@@ -94,6 +94,10 @@ func (r *RunnerExecutor) WithHeartbeatTimeout(timeout time.Duration) *RunnerExec
 }
 
 func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.RawMessage) (AgentResult, error) {
+	if node == nil || node.Agent == nil || strings.TrimSpace(node.Agent.Executor) == "" {
+		return AgentResult{}, fmt.Errorf("runner executor: agent executor is required")
+	}
+
 	r.mu.Lock()
 	r.seq++
 	r.attempts[node.ID]++
@@ -111,13 +115,9 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	// scoped) rather than dispatching onto another tenant's machine.
 	runnerID := r.runnerID
 	if r.picker != nil {
-		execType := "mock"
-		if node.Agent != nil && node.Agent.Executor != "" {
-			execType = node.Agent.Executor
-		}
-		if picked := r.picker(execType); picked != "" {
+		if picked := r.picker(ctx, node.Agent.Executor); picked != "" {
 			if r.runnerScope != nil {
-				if tenantID, _, ok := r.runnerScope(picked); ok && tenantID == r.runTenantID {
+				if tenantID, _, ok := r.runnerScope(ctx, picked); ok && tenantID == r.runTenantID {
 					runnerID = picked
 				}
 			} else {
@@ -127,7 +127,10 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 	}
 
 	prompt := r.buildPrompt(node, input)
-	res, err := r.link.SpawnAndWait(ctx, runnerID, gateway.Spawn{
+	if node.Agent.Executor == "script" {
+		prompt = node.Agent.Script
+	}
+	spawn := gateway.Spawn{
 		RunID:        r.runID,
 		NodeID:       node.ID,
 		Attempt:      attempt,
@@ -138,7 +141,11 @@ func (r *RunnerExecutor) RunAgent(ctx context.Context, node *Node, input json.Ra
 		SystemPrompt: node.Agent.SystemPrompt,
 		AllowedTools: append([]string(nil), node.Agent.AllowedTools...),
 		MaxTurns:     maxTurns(node.Agent),
-	}, r.idle, r.max, r.heartbeat)
+	}
+	if node.Agent.Executor == "script" {
+		spawn.Env = map[string]string{"CHAOSPLUS_INPUT_JSON": string(input)}
+	}
+	res, err := r.link.SpawnAndWait(ctx, runnerID, spawn, r.idle, r.max, r.heartbeat)
 	if err != nil {
 		// On timeout, tell the runner to stop the stray session so it doesn't
 		// keep burning tokens/CPU after we've given up on it.

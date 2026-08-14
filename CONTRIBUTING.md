@@ -14,8 +14,11 @@ quality gates. Pull requests must keep every gate green.
 
 ## Rules enforced by the gate
 
-- Tests must use real dependencies; mocks, fakes, stubs, and miniredis are
-  forbidden.
+- Project tests and self-checks must exercise real internal implementations;
+  mocks, fakes, stubs, protocol simulators, and test-only product branches are
+  forbidden. Isolated Go tests may use miniredis as a lightweight external Redis
+  implementation for local feedback, but production Go files cannot import it
+  and real Redis release acceptance remains mandatory.
 - Every `xx_test.go` must have a sibling production file `xx.go`.
 - No YAML files under `internal/app`.
 - The data source comes only from `database.type` + `database.dsn` /
@@ -28,11 +31,23 @@ quality gates. Pull requests must keep every gate green.
 
 Run the full gate locally and fix every failure:
 
-```powershell
-$env:GOSUMDB='sum.golang.org'
-.\.claude\skills\dev-quality-gate\scripts\check-gates.ps1 -Scope all -Full
+```bash
+# macOS / Linux
+python3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope all --full
+
+# Windows
+py -3 .claude/skills/dev-quality-gate/scripts/check_gates.py --scope all --full
 ```
 
-`golangci-lint` (`.golangci.yml`) and `govulncheck` are part of the gate.
+`staticcheck`, `golangci-lint` (`.golangci.yml`), and `govulncheck` are installed
+at pinned versions when missing and are part of the gate.
 Commit messages use a conventional prefix (`feat`, `fix`, `test`, `docs`,
 `ci`).
+
+When a contributor explicitly needs to preserve or share incomplete work while
+gates are blocked, `.rules/3.TEST.md` allows a `WIP:` commit only on a
+non-protected, non-default development branch. The commit body must record the
+exact failed and unrun gates and state that it is not merge/release ready.
+Architecture, schema, test-policy, secret, conflict, diff-hygiene, and security
+checks remain mandatory; WIP commits cannot be tagged, released, force-pushed,
+or marked ready for review.

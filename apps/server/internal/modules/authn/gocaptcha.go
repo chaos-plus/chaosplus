@@ -1,12 +1,14 @@
 package authn
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
-	"math/rand"
+	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,43 @@ var (
 	clickBackgrounds []image.Image
 	slideGraph       *slide.GraphImage
 )
+
+func secureIntn(bound int) int {
+	if bound <= 0 {
+		panic("captcha random bound must be positive")
+	}
+	value, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(bound)))
+	if err != nil {
+		panic(fmt.Errorf("read captcha entropy: %w", err))
+	}
+	result, err := strconv.Atoi(value.String())
+	if err != nil {
+		panic(fmt.Errorf("convert captcha random value: %w", err))
+	}
+	return result
+}
+
+func secureByte(bound byte) byte {
+	if bound == 0 {
+		panic("captcha random byte bound must be positive")
+	}
+	value, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(bound)))
+	if err != nil {
+		panic(fmt.Errorf("read captcha entropy: %w", err))
+	}
+	raw := value.Bytes()
+	if len(raw) == 0 {
+		return 0
+	}
+	return raw[0]
+}
+
+func secureByteOffset(base, bound byte) byte {
+	if bound == 0 || base > 255-(bound-1) {
+		panic("captcha random byte range is invalid")
+	}
+	return base + secureByte(bound)
+}
 
 func init() {
 	for i := 0; i < 3; i++ {
@@ -76,8 +115,8 @@ func takeInteractiveAnswer(id string) string {
 // genCaptchaBackground: 渐变 + 噪点圆的底图,滑块/点选共用。
 func genCaptchaBackground() image.Image {
 	img := image.NewRGBA(image.Rect(0, 0, slideW, slideH))
-	top := color.RGBA{uint8(90 + rand.Intn(110)), uint8(70 + rand.Intn(90)), uint8(120 + rand.Intn(100)), 255}
-	bottom := color.RGBA{uint8(25 + rand.Intn(50)), uint8(35 + rand.Intn(55)), uint8(50 + rand.Intn(70)), 255}
+	top := color.RGBA{secureByteOffset(90, 110), secureByteOffset(70, 90), secureByteOffset(120, 100), 255}
+	bottom := color.RGBA{secureByteOffset(25, 50), secureByteOffset(35, 55), secureByteOffset(50, 70), 255}
 	for y := 0; y < slideH; y++ {
 		t := float64(y) / float64(slideH)
 		c := color.RGBA{
@@ -89,8 +128,8 @@ func genCaptchaBackground() image.Image {
 		draw.Draw(img, image.Rect(0, y, slideW, y+1), &image.Uniform{c}, image.Point{}, draw.Src)
 	}
 	for i := 0; i < 24; i++ {
-		cx, cy, r := rand.Intn(slideW), rand.Intn(slideH), 6+rand.Intn(22)
-		c := color.RGBA{uint8(rand.Intn(255)), uint8(rand.Intn(255)), uint8(rand.Intn(255)), uint8(50 + rand.Intn(90))}
+		cx, cy, r := secureIntn(slideW), secureIntn(slideH), 6+secureIntn(22)
+		c := color.RGBA{secureByte(255), secureByte(255), secureByte(255), secureByteOffset(50, 90)}
 		for dy := -r; dy <= r; dy++ {
 			for dx := -r; dx <= r; dx++ {
 				if dx*dx+dy*dy <= r*r {
@@ -111,7 +150,7 @@ func genSlideGraph() *slide.GraphImage {
 	mask := image.NewRGBA(image.Rect(0, 0, s, s))
 	overlay := image.NewRGBA(image.Rect(0, 0, s, s))
 	shadow := image.NewRGBA(image.Rect(0, 0, s, s))
-	tint := color.RGBA{uint8(120 + rand.Intn(100)), uint8(100 + rand.Intn(110)), uint8(130 + rand.Intn(110)), 255}
+	tint := color.RGBA{secureByteOffset(120, 100), secureByteOffset(100, 110), secureByteOffset(130, 110), 255}
 	shape := func(x, y int) bool {
 		if x >= 3 && x < s-5 && y >= 3 && y < s-3 {
 			return true
@@ -146,10 +185,10 @@ type captchaOutput struct {
 	Height      int    `json:"height,omitempty"`
 }
 
-// IssueCaptcha 随机返回一种验证方式(text / slide / click)。
-func IssueCaptcha() (*captchaOutput, error) {
+// issueCaptcha 随机返回一种验证方式(text / slide / click)。
+func issueCaptcha() (*captchaOutput, error) {
 	var kind captchaKind
-	switch rand.Intn(3) {
+	switch secureIntn(3) {
 	case 0:
 		kind = captchaText
 	case 1:

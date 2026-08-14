@@ -11,8 +11,8 @@ afterEach(() => {
   delete process.env.CLAUDE_BINARY;
 });
 
-/** 造一个含 name 可执行文件的临时目录,prepend 到 PATH。 */
-function fakeBin(name: string): string {
+/** 创建一个含 name 可执行文件的临时目录，并 prepend 到 PATH。 */
+function installExecutable(name: string): string {
   const dir = mkdtempSync(join(tmpdir(), "detect-"));
   const bin = join(dir, process.platform === "win32" ? name + ".exe" : name);
   writeFileSync(bin, "#!/bin/sh\nexit 0\n");
@@ -27,8 +27,8 @@ describe("detectBinary", () => {
     expect(detectBinary(["claude"], "CLAUDE_BINARY")).toBe("C:/custom/claude.exe");
   });
 
-  test("PATH 探测到伪造 binary", () => {
-    const bin = fakeBin("claude");
+  test("PATH 探测到临时 executable", () => {
+    const bin = installExecutable("claude");
     expect(detectBinary(["claude"], "CLAUDE_BINARY")).toBe(bin);
   });
 

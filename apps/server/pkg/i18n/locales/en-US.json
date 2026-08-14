@@ -16,6 +16,7 @@
   "geoip_no_client_ip": "The client IPv4 address could not be determined. Supply a valid client address and try again.",
   "geoip_not_found": "No geolocation data was found for this IP address. Verify the address or try another provider.",
   "guid_not_ready": "The ID generator is not ready. Retry after the service has finished starting.",
+  "not_ready": "The service is not ready. Retry after startup has completed.",
   "request_body_required": "The request body is required.",
   "request_body_timeout": "Reading the request body timed out. Retry the request.",
   "request_body_unreadable": "The request body could not be read.",

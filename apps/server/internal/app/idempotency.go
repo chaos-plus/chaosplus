@@ -69,7 +69,6 @@ func (s *idempotencyStore) store(key string, e idempotencyEntry) {
 type recordingResponse struct {
 	http.ResponseWriter
 	status int
-	header http.Header
 	body   bytes.Buffer
 }
 

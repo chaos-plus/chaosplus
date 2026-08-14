@@ -22,3 +22,14 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	}
 	return goosex.Run(ctx, db.DB, migrationsFS, dialect, "goose_machine")
 }
+
+func MigrateDownTo(ctx context.Context, db *bun.DB, version int64) error {
+	if db == nil {
+		return fmt.Errorf("machine migration requires database")
+	}
+	dialect := db.Dialect().Name().String()
+	if dialect == "pg" {
+		dialect = "postgres"
+	}
+	return goosex.DownTo(ctx, db.DB, migrationsFS, dialect, "goose_machine", version)
+}

@@ -70,7 +70,7 @@ func (m *RunManager) LoadFromStore(ctx context.Context) {
 		if err := m.acquireLease(ctx, run); err != nil {
 			if errors.Is(err, ErrLeaseHeld) {
 				slog.Info("active run is owned by another control-plane instance", "run", rd.ID)
-				go m.waitForStoredLease(ctx, run, rd.Status, restored)
+				m.startBackground(func() { m.waitForStoredLease(ctx, run, rd.Status, restored) })
 				continue
 			}
 			slog.Warn("skip active run without lease", "run", rd.ID, "err", err)
@@ -168,7 +168,9 @@ func (m *RunManager) activateStoredRun(ctx context.Context, run *Run, status Run
 		m.releaseLease(run)
 		return
 	}
-	go m.resumeStoredRun(ctx, run, run.req, restored)
+	if !m.startBackground(func() { m.resumeStoredRun(ctx, run, run.req, restored) }) {
+		m.releaseLease(run)
+	}
 }
 
 func (m *RunManager) resumeStoredRun(ctx context.Context, run *Run, req LaunchRequest, restored []Event) {

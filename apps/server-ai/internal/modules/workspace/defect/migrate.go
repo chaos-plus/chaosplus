@@ -21,3 +21,14 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	}
 	return goosex.Run(ctx, db.DB, migrations, d, "goose_ai_workspace_defect")
 }
+
+func MigrateDownTo(ctx context.Context, db *bun.DB, version int64) error {
+	if db == nil {
+		return fmt.Errorf("defect migration requires database")
+	}
+	d := db.Dialect().Name().String()
+	if d == "pg" {
+		d = "postgres"
+	}
+	return goosex.DownTo(ctx, db.DB, migrations, d, "goose_ai_workspace_defect", version)
+}

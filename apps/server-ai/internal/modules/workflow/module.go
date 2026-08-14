@@ -33,5 +33,6 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	return nil
 }
-func (m *Module) Repository() *BunRepository { return m.repository }
-func (m *Module) Manager() *RunManager       { return m.manager }
+func (m *Module) Stop(ctx context.Context) error { return m.manager.Stop(ctx) }
+func (m *Module) Repository() *BunRepository     { return m.repository }
+func (m *Module) Manager() *RunManager           { return m.manager }

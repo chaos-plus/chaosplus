@@ -3,10 +3,14 @@ package organization
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"hash/fnv"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	authnext "github.com/chaos-plus/chaosplus/internal/core/extension/authn"
 	"github.com/chaos-plus/chaosplus/internal/core/extension/authz"
+	"github.com/chaos-plus/chaosplus/internal/infra/guid"
 	authnmod "github.com/chaos-plus/chaosplus/internal/modules/authn"
 	"github.com/chaos-plus/chaosplus/internal/modules/iam"
 	"github.com/chaos-plus/chaosplus/internal/modules/identity"
@@ -14,6 +18,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func testID(value string) guid.ID {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	id, err := guid.Parse(strconv.FormatUint(hash.Sum64()>>1, 10))
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func wireID(value string) string { return strconv.FormatInt(int64(testID(value)), 10) }
+
+func wireGUID(value string) guid.ID {
+	id, _ := guid.Parse(wireID(value))
+	return id
+}
+
+func newTestIDGenerator() func() (guid.ID, error) {
+	var next atomic.Int64
+	return func() (guid.ID, error) { return guid.ID(next.Add(1)), nil }
+}
 
 func TestOrganizationModuleLifecycleAndRouteDeclarations(t *testing.T) {
 	db, service := newOrganizationService(t)
