@@ -550,7 +550,11 @@ func (m *RunManager) Launch(ctx context.Context, req LaunchRequest) (*Run, error
 }
 
 func (m *RunManager) startEngine(ctx context.Context, run *Run, req LaunchRequest, restored []Event) error {
-	runCtx, cancelCause := context.WithCancelCause(ctx)
+	// The engine runs on the process context, which carries no claims. Every
+	// repository a node reaches through (machine route resolution, artifacts)
+	// requires tenant/entity/principal, so the run's own claims must ride along
+	// or each spawn fails with "requires authenticated ... claims".
+	runCtx, cancelCause := context.WithCancelCause(run.context(ctx))
 	cancel := func() { cancelCause(ErrRunInterrupted) }
 	done := make(chan struct{})
 	run.mu.Lock()

@@ -72,7 +72,13 @@ function runWithAbort(
       const code = err && "code" in (err as object)
         ? (err as { code: number }).code
         : (err ? 1 : 0); // killed/maxBuffer → non-zero
-      resolve({ stdout, stderr, exitCode: typeof code === "number" ? code : 1 });
+      // Spawn failures (ENOENT on a missing cwd or interpreter, EACCES) carry a
+      // string code and produce no output at all. Without this the run reports a
+      // bare "exit 1" with nothing to diagnose from.
+      const detail = err && typeof code !== "number"
+        ? [stderr, err.message].filter(Boolean).join("\n")
+        : stderr;
+      resolve({ stdout, stderr: detail, exitCode: typeof code === "number" ? code : 1 });
     });
 
     // Feed script body to stdin when interpreter requires it (bun run -).

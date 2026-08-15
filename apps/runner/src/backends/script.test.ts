@@ -36,3 +36,18 @@ describe("runScript", () => {
     expect(msgs.some((m) => "text" in m && (m as { text: string }).text.includes("error-msg"))).toBe(true);
   });
 });
+
+describe("runScript spawn failures", () => {
+  test("surfaces the reason when cwd does not exist", async () => {
+    const evs = await collect(
+      runScript({ prompt: "console.log('x')", cwd: "/nonexistent-workspace-xyz" }),
+    );
+    const done = evs.find((e) => e.type === "done");
+    expect(done!.ok).toBe(false);
+    // Regression: spawn errors carry a string code (ENOENT) and no output, so
+    // they used to collapse into a bare "exit 1" with nothing to diagnose.
+    const messages = evs.filter((e) => e.type === "message");
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.map((m) => (m as { text: string }).text).join("\n")).toMatch(/ENOENT|spawn/i);
+  });
+});
