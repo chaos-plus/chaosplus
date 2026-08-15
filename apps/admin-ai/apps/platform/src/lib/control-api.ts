@@ -60,6 +60,7 @@ export interface Agent {
   handoverDoc: string;
   retiredAt: number;
   createdAt: number;
+  version: number;
 }
 
 export interface Channel {
@@ -272,6 +273,7 @@ interface ServerAgent {
   handoverDoc: string;
   retiredAt: number;
   createdAt: number;
+  version: number;
 }
 interface ServerChannel {
   id: string;
@@ -484,6 +486,7 @@ function toAgent(a: ServerAgent): Agent {
     handoverDoc: a.handoverDoc,
     retiredAt: a.retiredAt,
     createdAt: a.createdAt,
+    version: a.version,
   };
 }
 
@@ -722,10 +725,14 @@ export const controlApi = {
     req<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(a) }),
   deleteAgent: (id: string) =>
     req<{ ok: boolean }>(`/agents/${id}`, { method: "DELETE" }),
-  setAgentStatus: (id: string, status: "running" | "stopped") =>
+  setAgentStatus: (
+    id: string,
+    status: "running" | "stopped",
+    version: number,
+  ) =>
     req<{ ok: boolean; status: string }>(`/agents/${id}/status`, {
       method: "POST",
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, version }),
     }),
   retireAgent: (
     id: string,
@@ -734,6 +741,7 @@ export const controlApi = {
       confirm?: string;
       successor?: string;
       reason?: string;
+      version: number;
     },
   ) =>
     req<{ ok: boolean; handoverDoc: string }>(`/agents/${id}/retire`, {

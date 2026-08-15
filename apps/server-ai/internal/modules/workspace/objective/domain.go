@@ -78,10 +78,10 @@ type KeyResultInput struct {
 
 type CreateInput struct {
 	Title       string           `json:"title"`
-	Description string           `json:"description"`
+	Description string           `json:"description" required:"false"`
 	PeriodStart int64            `json:"periodStart"`
 	PeriodEnd   int64            `json:"periodEnd"`
-	KeyResults  []KeyResultInput `json:"keyResults"`
+	KeyResults  []KeyResultInput `json:"keyResults" required:"false"`
 }
 
 type UpdateInput struct {

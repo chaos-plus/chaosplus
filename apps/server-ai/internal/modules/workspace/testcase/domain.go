@@ -79,9 +79,9 @@ type StepInput struct {
 type CreateInput struct {
 	RequirementID *guid.ID    `json:"requirementId,omitempty"`
 	Title         string      `json:"title"`
-	Description   string      `json:"description"`
-	Preconditions string      `json:"preconditions"`
-	Priority      Priority    `json:"priority"`
+	Description   string      `json:"description" required:"false"`
+	Preconditions string      `json:"preconditions" required:"false"`
+	Priority      Priority    `json:"priority" required:"false"`
 	AssigneeID    *guid.ID    `json:"assigneeId,omitempty"`
 	Steps         []StepInput `json:"steps"`
 }

@@ -81,12 +81,12 @@ type CreateInput struct {
 	TestCaseID        *guid.ID `json:"testCaseId,omitempty"`
 	TestRunID         *guid.ID `json:"testRunId,omitempty"`
 	Title             string   `json:"title"`
-	Description       string   `json:"description"`
+	Description       string   `json:"description" required:"false"`
 	ReproductionSteps string   `json:"reproductionSteps"`
 	ExpectedResult    string   `json:"expectedResult"`
 	ActualResult      string   `json:"actualResult"`
-	Severity          Severity `json:"severity"`
-	Priority          Priority `json:"priority"`
+	Severity          Severity `json:"severity" required:"false"`
+	Priority          Priority `json:"priority" required:"false"`
 	AssigneeID        *guid.ID `json:"assigneeId,omitempty"`
 }
 type UpdateInput struct {

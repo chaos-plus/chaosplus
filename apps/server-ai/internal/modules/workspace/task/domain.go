@@ -67,10 +67,10 @@ type CreateInput struct {
 	RequirementID *guid.ID `json:"requirementId,omitempty"`
 	ParentID      *guid.ID `json:"parentId,omitempty"`
 	Title         string   `json:"title"`
-	Description   string   `json:"description"`
-	Priority      Priority `json:"priority"`
-	DueAt         int64    `json:"dueAt"`
-	EstimateMS    int64    `json:"estimateMs"`
+	Description   string   `json:"description" required:"false"`
+	Priority      Priority `json:"priority" required:"false"`
+	DueAt         int64    `json:"dueAt" required:"false"`
+	EstimateMS    int64    `json:"estimateMs" required:"false"`
 	AssigneeID    *guid.ID `json:"assigneeId,omitempty"`
 	ChannelID     *guid.ID `json:"channelId,omitempty"`
 	WorkflowID    *guid.ID `json:"workflowId,omitempty"`

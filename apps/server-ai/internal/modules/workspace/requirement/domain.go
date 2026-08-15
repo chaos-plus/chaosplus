@@ -57,9 +57,9 @@ type keyResultLink struct {
 type CreateInput struct {
 	ParentID           *guid.ID  `json:"parentId,omitempty"`
 	Title              string    `json:"title"`
-	Description        string    `json:"description"`
-	AcceptanceCriteria string    `json:"acceptanceCriteria"`
-	KeyResultIDs       []guid.ID `json:"keyResultIds"`
+	Description        string    `json:"description" required:"false"`
+	AcceptanceCriteria string    `json:"acceptanceCriteria" required:"false"`
+	KeyResultIDs       []guid.ID `json:"keyResultIds" required:"false"`
 }
 
 type UpdateInput struct {

@@ -58,10 +58,10 @@ type AgentCreateInput struct {
 	Name         string  `json:"name"`
 	Kind         Kind    `json:"kind"`
 	Runtime      string  `json:"runtime"`
-	Model        string  `json:"model"`
-	Provider     string  `json:"provider"`
-	SystemPrompt string  `json:"systemPrompt"`
-	Description  string  `json:"description"`
+	Model        string  `json:"model" required:"false"`
+	Provider     string  `json:"provider" required:"false"`
+	SystemPrompt string  `json:"systemPrompt" required:"false"`
+	Description  string  `json:"description" required:"false"`
 	MachineID    guid.ID `json:"machineId"`
 }
 

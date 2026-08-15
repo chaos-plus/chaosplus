@@ -95,7 +95,7 @@ export default function AgentsPage() {
 
   const toggle = async (a: Agent) => {
     try {
-      await controlApi.setAgentStatus(a.id, a.status === "running" ? "stopped" : "running")
+      await controlApi.setAgentStatus(a.id, a.status === "running" ? "stopped" : "running", a.version)
       load()
     } catch (e) {
       fail(a.status === "running" ? "停止" : "启动", e)
@@ -368,7 +368,7 @@ function RetireDialog({
 
   const submit = async () => {
     try {
-      const res = await controlApi.retireAgent(agent.id, { force, confirm, successor, reason })
+      const res = await controlApi.retireAgent(agent.id, { force, confirm, successor, reason, version: agent.version })
       setDoc(res.handoverDoc || "(强制注销,未生成交接文档)")
       onDone()
     } catch (e) {
