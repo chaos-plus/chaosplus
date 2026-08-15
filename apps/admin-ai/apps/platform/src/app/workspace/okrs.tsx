@@ -11,9 +11,18 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog";
 import { Input } from "@workspace/ui/components/input";
-import { Textarea } from "@workspace/ui/components/textarea";
 import { toast } from "@workspace/ui/components/sonner";
-import { controlApi, type Okr } from "../../lib/control-api";
+import {
+  appendUploadedImages,
+  controlApi,
+  type Attachment,
+  type Okr,
+} from "../../lib/control-api";
+import {
+  AttachmentQueue,
+  MarkdownView,
+  RichContentEditor,
+} from "./rich-content";
 
 interface KR {
   title: string;
@@ -69,6 +78,7 @@ export default function OkrsPage() {
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
   const [form, setForm] = useState({
     title: "",
     objective: "",
@@ -131,14 +141,38 @@ export default function OkrsPage() {
           unit: result.unit.trim(),
         })),
       };
+      let saved: Okr;
       if (editing)
-        await controlApi.updateOkr(editing.id, {
+        saved = await controlApi.updateOkr(editing.id, {
           ...payload,
           version: editing.version,
         });
-      else await controlApi.createOkr(payload);
+      else saved = await controlApi.createOkr(payload);
+      const uploaded: Attachment[] = [];
+      let uploadError: unknown;
+      for (const file of files) {
+        try {
+          uploaded.push(
+            await controlApi.uploadAttachment("objective", saved.id, file),
+          );
+        } catch (error) {
+          uploadError ??= error;
+        }
+      }
+      const objective = appendUploadedImages(
+        payload.objective,
+        uploaded,
+        controlApi.attachmentContentUrl,
+      );
+      if (objective !== payload.objective)
+        saved = await controlApi.updateOkr(saved.id, {
+          ...payload,
+          objective,
+          version: saved.version,
+        });
       setOpen(false);
       setEditing(null);
+      setFiles([]);
       setForm({
         title: "",
         objective: "",
@@ -148,6 +182,10 @@ export default function OkrsPage() {
       });
       setKrError("");
       await load();
+      if (uploadError)
+        toast.error(
+          `部分 OKR 附件上传失败:${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        );
     } catch (e) {
       setKrError(e instanceof Error ? e.message : "保存失败");
     } finally {
@@ -157,6 +195,7 @@ export default function OkrsPage() {
 
   const beginCreate = () => {
     setEditing(null);
+    setFiles([]);
     setForm({
       title: "",
       objective: "",
@@ -170,6 +209,7 @@ export default function OkrsPage() {
 
   const beginEdit = (okr: Okr) => {
     setEditing(okr);
+    setFiles([]);
     setForm({
       title: okr.title,
       objective: okr.objective,
@@ -287,9 +327,9 @@ export default function OkrsPage() {
                   </Button>
                 </div>
                 {o.objective && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {o.objective}
-                  </p>
+                  <div className="mt-1 text-muted-foreground">
+                    <MarkdownView value={o.objective} />
+                  </div>
                 )}
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
                   <div
@@ -337,7 +377,7 @@ export default function OkrsPage() {
           if (!saving) setOpen(value);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{editing ? "编辑 OKR" : "新建 OKR"}</DialogTitle>
           </DialogHeader>
@@ -353,19 +393,13 @@ export default function OkrsPage() {
                 placeholder="如:Q3 增长"
               />
             </div>
-            <div className="grid gap-1.5">
-              <label htmlFor="okr-objective" className="text-sm font-medium">
-                目标 Objective
-              </label>
-              <Textarea
-                id="okr-objective"
-                rows={2}
-                value={form.objective}
-                onChange={(e) =>
-                  setForm({ ...form, objective: e.target.value })
-                }
-              />
-            </div>
+            <RichContentEditor
+              id="okr-objective"
+              label="目标 Objective"
+              rows={5}
+              value={form.objective}
+              onChange={(objective) => setForm({ ...form, objective })}
+            />
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
                 <label
@@ -506,6 +540,12 @@ export default function OkrsPage() {
                 </div>
               ))}
             </div>
+            <AttachmentQueue
+              id="okr-attachments"
+              files={files}
+              onChange={setFiles}
+              disabled={saving}
+            />
             {krError && (
               <p
                 id="okr-krs-error"

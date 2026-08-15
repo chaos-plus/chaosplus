@@ -55,7 +55,7 @@ func (r *BunRepository) Create(ctx context.Context, value *Agent) error {
 	now := time.Now().UTC().UnixMilli()
 	value.TenantID, value.EntityID, value.OwnerID = tenantID, entityID, principalID
 	value.CreatedAt, value.UpdatedAt, value.CreatedBy, value.UpdatedBy, value.Version = now, now, principalID, principalID, 1
-	if _, err := r.db.NewInsert().Model(value).Table("conversation_agents").Exec(ctx); err != nil {
+	if _, err := r.db.NewInsert().Model(value).Exec(ctx); err != nil {
 		return fmt.Errorf("create agent: %w", err)
 	}
 	return nil
@@ -67,7 +67,7 @@ func (r *BunRepository) List(ctx context.Context) ([]Agent, error) {
 		return nil, err
 	}
 	items := []Agent{}
-	if err := r.db.NewSelect().Model(&items).Table("conversation_agents").
+	if err := r.db.NewSelect().Model(&items).
 		Where("tenant_id = ? AND entity_id = ? AND deleted_at = 0", tenantID, entityID).
 		Order("created_at ASC", "id ASC").Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -81,7 +81,7 @@ func (r *BunRepository) Get(ctx context.Context, id guid.ID) (*Agent, error) {
 		return nil, err
 	}
 	value := new(Agent)
-	err = r.db.NewSelect().Model(value).Table("conversation_agents").
+	err = r.db.NewSelect().Model(value).
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0", id, tenantID, entityID).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -97,7 +97,7 @@ func (r *BunRepository) Update(ctx context.Context, value *Agent, version int64)
 	if err != nil {
 		return err
 	}
-	result, err := r.db.NewUpdate().Model((*Agent)(nil)).Table("conversation_agents").
+	result, err := r.db.NewUpdate().Model((*Agent)(nil)).
 		Set("name = ?", value.Name).Set("kind = ?", value.Kind).Set("runtime = ?", value.Runtime).
 		Set("model = ?", value.Model).Set("provider = ?", value.Provider).Set("system_prompt = ?", value.SystemPrompt).
 		Set("description = ?", value.Description).Set("machine_id = ?", value.MachineID).
@@ -118,7 +118,7 @@ func (r *BunRepository) SetLifecycle(ctx context.Context, id guid.ID, status Sta
 	if status == StatusRetired {
 		retiredAt = now
 	}
-	result, err := r.db.NewUpdate().Model((*Agent)(nil)).Table("conversation_agents").Set("status = ?", status).
+	result, err := r.db.NewUpdate().Model((*Agent)(nil)).Set("status = ?", status).
 		Set("handover_doc = ?", handover).Set("retired_at = ?", retiredAt).
 		Set("updated_at = ?", now).Set("updated_by = ?", principalID).Set("version = version + 1").
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ?", id, tenantID, entityID, version).Exec(ctx)
@@ -137,7 +137,7 @@ func (r *BunRepository) Delete(ctx context.Context, id guid.ID, version int64) e
 		return err
 	}
 	now := time.Now().UTC().UnixMilli()
-	result, err := r.db.NewUpdate().Model((*Agent)(nil)).Table("conversation_agents").
+	result, err := r.db.NewUpdate().Model((*Agent)(nil)).
 		Set("deleted_at = ?", now).Set("deleted_by = ?", principalID).Set("updated_at = ?", now).
 		Set("updated_by = ?", principalID).Set("version = version + 1").
 		Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ?", id, tenantID, entityID, version).Exec(ctx)
@@ -153,7 +153,7 @@ func (r *BunRepository) ListByMachine(ctx context.Context, machineID guid.ID) ([
 		return nil, err
 	}
 	items := []Agent{}
-	err = r.db.NewSelect().Model(&items).Table("conversation_agents").
+	err = r.db.NewSelect().Model(&items).
 		Where("tenant_id = ? AND entity_id = ? AND machine_id = ? AND deleted_at = 0", tenantID, entityID, machineID).
 		Order("name ASC", "id ASC").Scan(ctx)
 	return items, err

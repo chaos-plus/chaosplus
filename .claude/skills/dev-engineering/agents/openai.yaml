@@ -1,6 +1,6 @@
 interface:
   display_name: "Dev 工程门禁"
-  short_description: "强制执行设计、复用、IAM 与生产交付规范"
-  default_prompt: "使用 $dev-engineering：写入前先检索并完整读取既有 owner，发布最终设计，再通过全部仓库门禁完成任务。"
+  short_description: "强制确认真实产品价值并执行设计、复用与交付规范"
+  default_prompt: "使用 $dev-engineering：逐功能确认产品角色、真实需求、竞品证据和价值指标，再检索既有 owner、发布最终设计并通过全部仓库门禁。"
 policy:
   allow_implicit_invocation: true

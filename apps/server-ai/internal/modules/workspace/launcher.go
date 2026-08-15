@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workflow"
 	"github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/workspace/task"
@@ -13,6 +14,41 @@ import (
 type workflowLauncher struct {
 	repository *workflow.BunRepository
 	manager    *workflow.RunManager
+}
+
+func (launcher workflowLauncher) ExecutionMetrics(ctx context.Context, taskIDs []guid.ID) (map[guid.ID]task.ExecutionMetric, error) {
+	wanted := make(map[guid.ID]struct{}, len(taskIDs))
+	for _, id := range taskIDs {
+		wanted[id] = struct{}{}
+	}
+	runs, err := launcher.repository.ListRunMetrics(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC().UnixMilli()
+	result := make(map[guid.ID]task.ExecutionMetric)
+	for _, run := range runs {
+		var value struct {
+			TaskID guid.ID `json:"taskId"`
+		}
+		if json.Unmarshal([]byte(run.ContextJSON), &value) != nil || value.TaskID.Zero() {
+			continue
+		}
+		if _, ok := wanted[value.TaskID]; !ok {
+			continue
+		}
+		end := run.UpdatedAt
+		if run.Status == workflow.RunRunning || run.Status == workflow.RunWaitingApproval {
+			end = now
+		}
+		metric := result[value.TaskID]
+		if end > run.CreatedAt {
+			metric.SpentMS += end - run.CreatedAt
+		}
+		metric.LatestStatus = string(run.Status)
+		result[value.TaskID] = metric
+	}
+	return result, nil
 }
 
 // NewWorkflowLauncher coordinates task execution with the workflow bounded

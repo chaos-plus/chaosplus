@@ -82,6 +82,17 @@ func TestHubHandshakeInvalidToken(t *testing.T) {
 	}
 }
 
+func TestHubStartInitializesRouteHolder(t *testing.T) {
+	nc := startTestNATS(t)
+	hub := NewHub(runnertransport.NewNATS(nc), NewTokenStore(), nil, testNextID(), 0, secure.SameOriginPolicy())
+	if err := hub.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if hub.holderID != 101 {
+		t.Fatalf("holder id = %s, want 101", hub.holderID)
+	}
+}
+
 // TestHubUnconfirmedDisconnectInvalidates: a pending machine that disconnects
 // loses its one-time token (§5.3.1).
 func TestHubUnconfirmedDisconnectInvalidates(t *testing.T) {
@@ -291,6 +302,9 @@ func TestMachineConnectionLeaseRejectsDuplicateAndAllowsFencedTakeover(t *testin
 	connectionA := dialDaemon(t, serverA, token)
 	var ready map[string]any
 	if err := connectionA.ReadJSON(&ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := hubA.Confirm(ctx, machineID, token); err != nil {
 		t.Fatal(err)
 	}
 	routeA, err := repository.ResolveActiveRoute(ctx, machineID)

@@ -39,7 +39,7 @@ func NewModule(db *bun.DB, hub *Hub, registrar *authz.Registrar) *Module {
 }
 
 func (m *Module) Migrate(ctx context.Context) error          { return Migrate(ctx, m.db) }
-func (m *Module) Start(ctx context.Context) error            { return m.hub.LoadTokens(ctx) }
+func (m *Module) Start(ctx context.Context) error            { return m.hub.Start(ctx) }
 func (m *Module) Stop(_ context.Context) error               { return m.hub.Close() }
 func (m *Module) Repository() Repository                     { return m.repository }
 func (m *Module) Hub() *Hub                                  { return m.hub }

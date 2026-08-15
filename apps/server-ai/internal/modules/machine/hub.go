@@ -101,8 +101,8 @@ type IDGenerator func() (coreid.ID, error)
 const ConnectionLeaseTTL = 15 * time.Second
 
 func NewHub(transport ClusterTransport, tokens *TokenStore, machines Repository, nextID IDGenerator, holderID coreid.ID, origin secure.OriginPolicy) *Hub {
-	if transport == nil || tokens == nil || nextID == nil || holderID.Zero() {
-		panic("machine hub requires cluster transport, token store, id generator, and holder id")
+	if transport == nil || tokens == nil || nextID == nil {
+		panic("machine hub requires cluster transport, token store, and id generator")
 	}
 	return &Hub{
 		transport:     transport,
@@ -122,6 +122,20 @@ func NewHub(transport ClusterTransport, tokens *TokenStore, machines Repository,
 }
 
 func (h *Hub) SetRepository(repository Repository) { h.machines = repository }
+
+func (h *Hub) Start(ctx context.Context) error {
+	h.mu.Lock()
+	if h.holderID.Zero() {
+		holderID, err := h.nextID()
+		if err != nil {
+			h.mu.Unlock()
+			return fmt.Errorf("generate machine route holder id: %w", err)
+		}
+		h.holderID = holderID
+	}
+	h.mu.Unlock()
+	return h.LoadTokens(ctx)
+}
 
 func (h *Hub) validateToken(ctx context.Context, token string) (*AccessToken, error) {
 	if h.machines == nil {
@@ -186,6 +200,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	if err != nil {
+		slog.Warn("subscribe machine commands", "machine", c.machineID, "err", err)
 		_ = conn.Close()
 		if h.machines != nil {
 			_ = h.machines.ReleaseRoute(leaseContext, route)

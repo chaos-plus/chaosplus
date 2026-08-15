@@ -173,8 +173,7 @@ func TestWorkspaceTraceabilityThroughRealHumaListener(t *testing.T) {
 		RequirementID: &requirementValue.ID, Title: "Verify fenced route", Description: "Exercise a real runner route", EstimateMS: 60_000,
 	}, http.StatusCreated)
 	inProgressTask := task.StatusInProgress
-	progress := 25
-	taskValue = workspaceHTTP[task.Task](t, client, http.MethodPatch, fmt.Sprintf("%s/api/tasks/%s", server.URL, taskValue.ID), task.UpdateInput{Status: &inProgressTask, Progress: &progress, Version: taskValue.Version}, http.StatusOK)
+	taskValue = workspaceHTTP[task.Task](t, client, http.MethodPatch, fmt.Sprintf("%s/api/tasks/%s", server.URL, taskValue.ID), task.UpdateInput{Status: &inProgressTask, Version: taskValue.Version}, http.StatusOK)
 
 	testCaseValue := workspaceHTTP[testcase.TestCase](t, client, http.MethodPost, server.URL+"/api/test-cases", testcase.CreateInput{
 		RequirementID: &requirementValue.ID, Title: "Reject stale fence", Description: "Validate takeover behavior", Preconditions: "Two control-plane instances", Priority: testcase.PriorityHighest,

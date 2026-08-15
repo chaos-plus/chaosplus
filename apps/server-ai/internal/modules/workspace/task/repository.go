@@ -43,6 +43,9 @@ func (r *BunRepository) Create(ctx context.Context, v *Task) error {
 	if err != nil {
 		return err
 	}
+	if v.Priority == "" {
+		v.Priority = PriorityMedium
+	}
 	v.ID, err = r.nextID()
 	if err != nil {
 		return fmt.Errorf("generate task id: %w", err)
@@ -100,7 +103,7 @@ func (r *BunRepository) Update(ctx context.Context, v *Task, version int64) erro
 	if err != nil {
 		return err
 	}
-	res, err := r.db.NewUpdate().Model((*Task)(nil)).Set("title = ?", v.Title).Set("description = ?", v.Description).Set("status = ?", v.Status).Set("estimate_ms = ?", v.EstimateMS).Set("spent_ms = ?", v.SpentMS).Set("progress = ?", v.Progress).Set("workflow_run_id = ?", v.WorkflowRunID).Set("workflow_id = ?", v.WorkflowID).Set("project_id = ?", v.ProjectID).Set("workspace = ?", v.Workspace).Set("assignee_id = ?", v.AssigneeID).Set("owner_id = ?", v.OwnerID).Set("updated_at = ?", time.Now().UTC().UnixMilli()).Set("updated_by = ?", p).Set("version = version + 1").Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ?", v.ID, t, e, version).Exec(ctx)
+	res, err := r.db.NewUpdate().Model((*Task)(nil)).Set("title = ?", v.Title).Set("description = ?", v.Description).Set("status = ?", v.Status).Set("priority = ?", v.Priority).Set("due_at = ?", v.DueAt).Set("estimate_ms = ?", v.EstimateMS).Set("workflow_run_id = ?", v.WorkflowRunID).Set("workflow_id = ?", v.WorkflowID).Set("project_id = ?", v.ProjectID).Set("workspace = ?", v.Workspace).Set("assignee_id = ?", v.AssigneeID).Set("owner_id = ?", v.OwnerID).Set("updated_at = ?", time.Now().UTC().UnixMilli()).Set("updated_by = ?", p).Set("version = version + 1").Where("id = ? AND tenant_id = ? AND entity_id = ? AND deleted_at = 0 AND version = ?", v.ID, t, e, version).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("update task: %w", err)
 	}

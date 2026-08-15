@@ -68,3 +68,14 @@ func TestCommitRollsBackEventWhenProjectionFails(t *testing.T) {
 		t.Fatalf("rolled back events = (%+v, %v)", items, err)
 	}
 }
+
+func TestListRunMetricsUsesAuthenticatedScope(t *testing.T) {
+	repository, ctx := newTestRepository(t)
+	if err := repository.SaveRunDefinition(ctx, RunDef{ID: 41, ProjectID: 51, DefJSON: `{"id":"wf","version":"1","nodes":[],"edges":[]}`, ContextJSON: `{"taskId":"61"}`, Workspace: "/tmp/work"}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repository.ListRunMetrics(ctx)
+	if err != nil || len(items) != 1 || items[0].ID != 41 || items[0].ContextJSON != `{"taskId":"61"}` {
+		t.Fatalf("run metrics = (%+v, %v)", items, err)
+	}
+}

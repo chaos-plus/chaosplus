@@ -15,6 +15,8 @@ AGENTS = ROOT / "AGENTS.md"
 SKILL = ROOT / ".claude/skills/dev-engineering/SKILL.md"
 SKILL_AGENT = ROOT / ".claude/skills/dev-engineering/agents/openai.yaml"
 BACKEND_RULE = ROOT / ".rules/3.BACKEND.md"
+PRODUCT_RULE = ROOT / ".rules/3.PROTOTYPE.md"
+PRD_TEMPLATE = ROOT / ".rules/4.PRD_TEMPLATE.md"
 FORBIDDEN_DIRS = (
     ROOT / "apps/server-3rd",
     SERVER_AI / "store",
@@ -43,6 +45,7 @@ RULE_CONTRACTS = {
     SKILL: (
         "全仓统一入口",
         ".rules/3.BACKEND.md",
+        "产品价值门禁",
         "停止门禁",
         "dev-quality-gate",
     ),
@@ -62,6 +65,18 @@ RULE_CONTRACTS = {
         "Use Huma",
         "apps/server-3rd",
         "Commit and push only",
+    ),
+    PRODUCT_RULE: (
+        "产品价值与真实需求门禁",
+        "产品角色不是 IAM 角色",
+        "默认研究至少 3 个",
+        "严禁编造",
+        "等待明确确认",
+    ),
+    PRD_TEMPLATE: (
+        "功能价值映射",
+        "竞品与现实替代方案研究",
+        "确认来源/日期",
     ),
 }
 

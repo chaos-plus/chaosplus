@@ -7,6 +7,11 @@ import (
 
 type WorkflowLauncher interface {
 	LaunchTask(context.Context, Task) (guid.ID, error)
+	ExecutionMetrics(context.Context, []guid.ID) (map[guid.ID]ExecutionMetric, error)
+}
+type ExecutionMetric struct {
+	SpentMS      int64
+	LatestStatus string
 }
 type EventSink interface {
 	TaskChanged(context.Context, Task, string) error
@@ -30,7 +35,7 @@ func (s *Service) emit(ctx context.Context, v Task, event string) error {
 	return s.events.TaskChanged(ctx, v, event)
 }
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Task, error) {
-	v := &Task{RequirementID: in.RequirementID, ParentID: in.ParentID, Title: in.Title, Description: in.Description, EstimateMS: in.EstimateMS, AssigneeID: in.AssigneeID, ChannelID: in.ChannelID, WorkflowID: in.WorkflowID, ProjectID: in.ProjectID, Workspace: in.Workspace, Status: StatusOpen}
+	v := &Task{RequirementID: in.RequirementID, ParentID: in.ParentID, Title: in.Title, Description: in.Description, Priority: in.Priority, DueAt: in.DueAt, EstimateMS: in.EstimateMS, AssigneeID: in.AssigneeID, ChannelID: in.ChannelID, WorkflowID: in.WorkflowID, ProjectID: in.ProjectID, Workspace: in.Workspace, Status: StatusOpen}
 	if err := validate(v); err != nil {
 		return nil, err
 	}
@@ -54,13 +59,36 @@ func (s *Service) List(ctx context.Context, st Status, rid *guid.ID) ([]Task, er
 			return nil, ErrInvalid
 		}
 	}
-	return s.repository.List(ctx, st, rid)
+	items, err := s.repository.List(ctx, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.decorate(ctx, items); err != nil {
+		return nil, err
+	}
+	filtered := make([]Task, 0, len(items))
+	for _, item := range items {
+		if st != "" && item.Status != st || rid != nil && (item.RequirementID == nil || *item.RequirementID != *rid) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
 }
 func (s *Service) Get(ctx context.Context, id guid.ID) (*Task, error) {
 	if id.Zero() {
 		return nil, ErrInvalid
 	}
-	return s.repository.Get(ctx, id)
+	items, err := s.List(ctx, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if items[i].ID == id {
+			return &items[i], nil
+		}
+	}
+	return nil, ErrNotFound
 }
 func (s *Service) Update(ctx context.Context, id guid.ID, in UpdateInput) (*Task, error) {
 	if id.Zero() || in.Version < 1 {
@@ -82,14 +110,14 @@ func (s *Service) Update(ctx context.Context, id guid.ID, in UpdateInput) (*Task
 	if in.Status != nil {
 		v.Status = *in.Status
 	}
+	if in.Priority != nil {
+		v.Priority = *in.Priority
+	}
+	if in.DueAt != nil {
+		v.DueAt = *in.DueAt
+	}
 	if in.EstimateMS != nil {
 		v.EstimateMS = *in.EstimateMS
-	}
-	if in.SpentMS != nil {
-		v.SpentMS = *in.SpentMS
-	}
-	if in.Progress != nil {
-		v.Progress = *in.Progress
 	}
 	if in.AssigneeID != nil {
 		if in.AssigneeID.Zero() {
@@ -128,6 +156,92 @@ func (s *Service) Update(ctx context.Context, id guid.ID, in UpdateInput) (*Task
 		return nil, err
 	}
 	return v, nil
+}
+
+func (s *Service) decorate(ctx context.Context, items []Task) error {
+	metrics := map[guid.ID]ExecutionMetric{}
+	if s.launcher != nil && len(items) > 0 {
+		ids := make([]guid.ID, len(items))
+		for i := range items {
+			ids[i] = items[i].ID
+		}
+		var err error
+		metrics, err = s.launcher.ExecutionMetrics(ctx, ids)
+		if err != nil {
+			return err
+		}
+	}
+	applyRollups(items, metrics)
+	return nil
+}
+
+func applyRollups(items []Task, metrics map[guid.ID]ExecutionMetric) {
+	byID := make(map[guid.ID]int, len(items))
+	children := make(map[guid.ID][]guid.ID)
+	for i := range items {
+		byID[items[i].ID] = i
+		if metric, ok := metrics[items[i].ID]; ok {
+			items[i].SpentMS = metric.SpentMS
+			switch metric.LatestStatus {
+			case "completed":
+				items[i].Status = StatusDone
+			case "failed", "paused", "waiting_approval":
+				items[i].Status = StatusReview
+			case "cancelled":
+				items[i].Status = StatusCancelled
+			case "running":
+				items[i].Status = StatusInProgress
+			}
+		}
+		if items[i].Status == StatusDone {
+			items[i].Progress = 100
+		} else {
+			items[i].Progress = 0
+		}
+		if items[i].ParentID != nil {
+			children[*items[i].ParentID] = append(children[*items[i].ParentID], items[i].ID)
+		}
+	}
+	visited := make(map[guid.ID]bool, len(items))
+	active := make(map[guid.ID]bool, len(items))
+	var rollup func(guid.ID)
+	rollup = func(id guid.ID) {
+		if visited[id] || active[id] {
+			return
+		}
+		active[id] = true
+		childIDs := children[id]
+		if len(childIDs) > 0 {
+			var estimate, spent, weighted int64
+			progressSum, childCount := 0, 0
+			for _, childID := range childIDs {
+				index, ok := byID[childID]
+				if !ok || active[childID] {
+					continue
+				}
+				rollup(childID)
+				child := items[index]
+				estimate += child.EstimateMS
+				spent += child.SpentMS
+				weighted += child.EstimateMS * int64(child.Progress)
+				progressSum += child.Progress
+				childCount++
+			}
+			if index, ok := byID[id]; ok && childCount > 0 {
+				items[index].EstimateMS, items[index].SpentMS = estimate, spent
+				if estimate > 0 {
+					items[index].Progress = int(weighted / estimate)
+				} else {
+					items[index].Progress = progressSum / childCount
+				}
+			}
+		}
+		active[id], visited[id] = false, true
+	}
+	// ponytail: O(n) in-memory rollup is intentional while task lists are unpaginated; move to a projection when measured entity size requires it.
+	for id := range byID {
+		rollup(id)
+	}
 }
 func (s *Service) Delete(ctx context.Context, id guid.ID, version int64) error {
 	if id.Zero() || version < 1 {

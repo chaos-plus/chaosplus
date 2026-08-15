@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	machine "github.com/chaos-plus/chaosplus/apps/server-ai/internal/modules/machine/protocol"
 	"github.com/nats-io/nats.go"
 )
+
+const activationTimeout = 5 * time.Second
 
 const (
 	commandSubjectFormat = "chaos.runner.route.%s.%s.cmd"
@@ -46,7 +49,9 @@ func (t *NATS) SubscribeCommands(ctx context.Context, route machine.RouteLease, 
 	if err != nil {
 		return nil, fmt.Errorf("subscribe runner commands: %w", err)
 	}
-	if err := t.connection.FlushWithContext(ctx); err != nil {
+	activation, cancel := context.WithTimeout(ctx, activationTimeout)
+	defer cancel()
+	if err := t.connection.FlushWithContext(activation); err != nil {
 		_ = subscription.Unsubscribe()
 		return nil, fmt.Errorf("activate runner command subscription: %w", err)
 	}
@@ -93,7 +98,9 @@ func (t *NATS) SubscribeEvents(ctx context.Context, handler machine.EventHandler
 	if err != nil {
 		return nil, fmt.Errorf("subscribe runner events: %w", err)
 	}
-	if err := t.connection.FlushWithContext(ctx); err != nil {
+	activation, cancel := context.WithTimeout(ctx, activationTimeout)
+	defer cancel()
+	if err := t.connection.FlushWithContext(activation); err != nil {
 		_ = subscription.Unsubscribe()
 		return nil, fmt.Errorf("activate runner event subscription: %w", err)
 	}

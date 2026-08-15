@@ -39,6 +39,7 @@ import {
 import { Textarea } from "@workspace/ui/components/textarea";
 import { toast } from "@workspace/ui/components/sonner";
 import {
+  appendUploadedImages,
   controlApi,
   type Attachment,
   type Defect,
@@ -46,6 +47,13 @@ import {
   type TestRun,
   type WorkItem,
 } from "../../lib/control-api";
+import { iamApi, type Member } from "../../lib/iam-api";
+import {
+  AttachmentQueue,
+  MarkdownView,
+  ProtectedAttachmentMedia,
+  RichContentEditor,
+} from "./rich-content";
 
 /** 统一把失败暴露给用户 —— 静默失败会让人以为操作成功了。 */
 function reportError(action: string, e: unknown) {
@@ -87,6 +95,40 @@ const ROUTE_TYPE: Record<string, string> = {
   bugs: "bug",
 };
 
+const PRIORITY_LABEL: Record<string, string> = {
+  highest: "最高",
+  high: "高",
+  medium: "中",
+  low: "低",
+  lowest: "最低",
+};
+
+function workItemForm(parent?: WorkItem) {
+  return {
+    title: "",
+    description: "",
+    acceptanceCriteria: "",
+    estimateHours: "",
+    requirementId: parent?.requirementId ?? "",
+    keyResultIds: [] as string[],
+    priority: parent?.priority || "medium",
+    dueDate: "",
+    assigneeId: parent?.assigneeId ?? "",
+  };
+}
+
+function dateInputValue(value: number) {
+  if (!value) return "";
+  const date = new Date(value);
+  return new Date(value - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function dueDateValue(value: string) {
+  return value ? new Date(`${value}T23:59:59.999`).getTime() : 0;
+}
+
 function StatusChip({ status }: { status: string }) {
   return (
     <span
@@ -116,14 +158,9 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
   const [createFor, setCreateFor] = useState<{ open: boolean; parent: string }>(
     { open: false, parent: "" },
   );
-  const [form, setForm] = useState({
-    title: "",
-    description: "",
-    acceptanceCriteria: "",
-    estimateHours: "",
-    requirementId: "",
-    keyResultIds: [] as string[],
-  });
+  const [form, setForm] = useState(workItemForm());
+  const [files, setFiles] = useState<File[]>([]);
+  const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<WorkItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkItem | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -131,6 +168,7 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
   const [keyResults, setKeyResults] = useState<
     Array<{ id: string; title: string }>
   >([]);
+  const [members, setMembers] = useState<Member[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -152,7 +190,12 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
   }, [load]);
   useEffect(() => {
     if (type === "task")
-      void controlApi.workItems("requirement").then(setRequirements);
+      void Promise.all([controlApi.workItems("requirement"), iamApi.members()])
+        .then(([nextRequirements, nextMembers]) => {
+          setRequirements(nextRequirements);
+          setMembers(nextMembers.filter((value) => value.status === "active"));
+        })
+        .catch((error) => reportError("加载任务选项", error));
     if (type === "requirement")
       void controlApi
         .okrs()
@@ -163,8 +206,9 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
 
   const create = async () => {
     if (!form.title.trim()) return;
+    setCreating(true);
     try {
-      await controlApi.createWorkItem({
+      let created = await controlApi.createWorkItem({
         type,
         title: form.title.trim(),
         description: form.description,
@@ -174,19 +218,42 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
         acceptanceCriteria: form.acceptanceCriteria,
         requirementId: form.requirementId,
         keyResultIds: form.keyResultIds,
+        priority: form.priority,
+        dueAt: dueDateValue(form.dueDate),
+        assigneeId: form.assigneeId,
       });
+      const uploaded: Attachment[] = [];
+      let uploadError: unknown;
+      for (const file of files) {
+        try {
+          uploaded.push(
+            await controlApi.uploadAttachment(type, created.id, file),
+          );
+        } catch (error) {
+          uploadError ??= error;
+        }
+      }
+      const description = appendUploadedImages(
+        form.description,
+        uploaded,
+        controlApi.attachmentContentUrl,
+      );
+      if (description !== form.description)
+        created = await controlApi.updateWorkItem(created.id, {
+          type,
+          description,
+          version: created.version,
+        });
       setCreateFor({ open: false, parent: "" });
-      setForm({
-        title: "",
-        description: "",
-        acceptanceCriteria: "",
-        estimateHours: "",
-        requirementId: "",
-        keyResultIds: [],
-      });
-      void load();
+      setForm(workItemForm());
+      setFiles([]);
+      await load();
+      if (uploadError) reportError("部分附件上传", uploadError);
+      else toast.success(`已创建${TYPE_LABEL[type] ?? type}`);
     } catch (e) {
       reportError("创建", e);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -289,6 +356,22 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
               {it.title}
             </button>
             <StatusChip status={it.status} />
+            {it.type === "task" && (
+              <Badge variant="outline">
+                {PRIORITY_LABEL[it.priority] ?? it.priority}
+              </Badge>
+            )}
+            {it.type === "task" && it.dueAt > 0 && (
+              <span className="text-xs text-muted-foreground">
+                截止 {new Date(it.dueAt).toLocaleDateString()}
+              </span>
+            )}
+            {it.type === "task" && it.assigneeId && (
+              <span className="text-xs text-muted-foreground">
+                {members.find((value) => value.subject === it.assigneeId)
+                  ?.display_name ?? it.assigneeId}
+              </span>
+            )}
 
             {it.progress > 0 && (
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -320,37 +403,37 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
                   </option>
                 ))}
               </select>
-              <Button
-                size="sm"
-                variant="outline"
-                className="min-h-11 cursor-pointer gap-1"
-                disabled={it.status === "in_progress"}
-                onClick={() => execute(it.id)}
-                title="按工作流执行"
-              >
-                <CirclePlay className="size-3.5" />
-                {it.status === "in_progress" ? "执行中" : "执行"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="min-h-11 cursor-pointer gap-1"
-                onClick={() => {
-                  setCreateFor({ open: true, parent: it.id });
-                  setForm({
-                    title: "",
-                    description: "",
-                    acceptanceCriteria: "",
-                    estimateHours: "",
-                    requirementId: "",
-                    keyResultIds: [],
-                  });
-                }}
-                aria-label={`为 ${it.title} 新建子任务`}
-              >
-                <Plus className="size-3.5" />
-                子任务
-              </Button>
+              {type === "task" && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="min-h-11 cursor-pointer gap-1"
+                    disabled={
+                      it.status === "in_progress" || it.status === "done"
+                    }
+                    onClick={() => execute(it.id)}
+                    title="按工作流执行"
+                  >
+                    <CirclePlay className="size-3.5" />
+                    {it.status === "in_progress" ? "执行中" : "执行"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="min-h-11 cursor-pointer gap-1"
+                    onClick={() => {
+                      setCreateFor({ open: true, parent: it.id });
+                      setForm(workItemForm(it));
+                      setFiles([]);
+                    }}
+                    aria-label={`为 ${it.title} 新建子任务`}
+                  >
+                    <Plus className="size-3.5" />
+                    子任务
+                  </Button>
+                </>
+              )}
               <Button
                 size="icon"
                 variant="ghost"
@@ -381,21 +464,17 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
             {TYPE_LABEL[type] ?? type}管理
           </h1>
           <p className="text-sm text-muted-foreground">
-            执行走工作流;进度、工时自动计算,变化订阅到关联群聊。
+            {type === "requirement"
+              ? "集中收集、评审和关联目标，不在需求池填写工时。"
+              : "拆分子任务并按工作流执行，父任务进度与工时自动汇总。"}
           </p>
         </div>
         <Button
           className="cursor-pointer gap-1.5"
           onClick={() => {
             setCreateFor({ open: true, parent: "" });
-            setForm({
-              title: "",
-              description: "",
-              acceptanceCriteria: "",
-              estimateHours: "",
-              requirementId: "",
-              keyResultIds: [],
-            });
+            setForm(workItemForm());
+            setFiles([]);
           }}
         >
           <Plus className="size-4" />
@@ -461,20 +540,16 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
       <DetailSheet
         item={detail}
         keyResults={keyResults}
+        members={members}
+        subtasks={detail ? childrenOf(detail.id) : []}
         onClose={() => setDetail(null)}
         onChanged={load}
         onExecute={execute}
         onAddSubtask={(parentId) => {
           setDetail(null);
           setCreateFor({ open: true, parent: parentId });
-          setForm({
-            title: "",
-            description: "",
-            acceptanceCriteria: "",
-            estimateHours: "",
-            requirementId: "",
-            keyResultIds: [],
-          });
+          setForm(workItemForm(items.find((value) => value.id === parentId)));
+          setFiles([]);
         }}
       />
 
@@ -484,7 +559,7 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
           if (!v) setCreateFor({ open: false, parent: "" });
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
               {createFor.parent
@@ -492,7 +567,7 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
                 : `新建${TYPE_LABEL[type] ?? type}`}
             </DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3 py-2">
+          <div className="grid gap-4 py-2">
             <div className="grid gap-1.5">
               <label htmlFor="wi-title" className="text-sm font-medium">
                 标题 <span className="text-destructive">*</span>
@@ -505,24 +580,23 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
                 placeholder="如:实现登录接口"
               />
             </div>
+            <RichContentEditor
+              id="wi-description"
+              label="描述"
+              value={form.description}
+              onChange={(description) => setForm({ ...form, description })}
+            />
             {type === "requirement" && (
               <>
-                <div className="grid gap-1.5">
-                  <label
-                    htmlFor="wi-acceptance"
-                    className="text-sm font-medium"
-                  >
-                    验收标准
-                  </label>
-                  <Textarea
-                    id="wi-acceptance"
-                    rows={3}
-                    value={form.acceptanceCriteria}
-                    onChange={(e) =>
-                      setForm({ ...form, acceptanceCriteria: e.target.value })
-                    }
-                  />
-                </div>
+                <RichContentEditor
+                  id="wi-acceptance"
+                  label="验收标准"
+                  rows={5}
+                  value={form.acceptanceCriteria}
+                  onChange={(acceptanceCriteria) =>
+                    setForm({ ...form, acceptanceCriteria })
+                  }
+                />
                 <div className="grid gap-1.5">
                   <label
                     htmlFor="wi-key-results"
@@ -556,64 +630,116 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
             )}
             {type === "task" && (
               <>
-                <div className="grid gap-1.5">
-                  <label
-                    htmlFor="wi-requirement"
-                    className="text-sm font-medium"
-                  >
-                    关联需求
-                  </label>
-                  <select
-                    id="wi-requirement"
-                    className="min-h-11 rounded-md border bg-background px-3"
-                    value={form.requirementId}
-                    onChange={(event) =>
-                      setForm({ ...form, requirementId: event.target.value })
-                    }
-                  >
-                    <option value="">无</option>
-                    {requirements.map((value) => (
-                      <option key={value.id} value={value.id}>
-                        {value.title}
-                      </option>
-                    ))}
-                  </select>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <label
+                      htmlFor="wi-requirement"
+                      className="text-sm font-medium"
+                    >
+                      关联需求
+                    </label>
+                    <select
+                      id="wi-requirement"
+                      className="min-h-11 rounded-md border bg-background px-3"
+                      value={form.requirementId}
+                      onChange={(event) =>
+                        setForm({ ...form, requirementId: event.target.value })
+                      }
+                    >
+                      <option value="">无</option>
+                      {requirements.map((value) => (
+                        <option key={value.id} value={value.id}>
+                          {value.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label
+                      htmlFor="wi-assignee"
+                      className="text-sm font-medium"
+                    >
+                      负责人
+                    </label>
+                    <select
+                      id="wi-assignee"
+                      className="min-h-11 rounded-md border bg-background px-3"
+                      value={form.assigneeId}
+                      onChange={(event) =>
+                        setForm({ ...form, assigneeId: event.target.value })
+                      }
+                    >
+                      <option value="">未分配</option>
+                      {members.map((value) => (
+                        <option key={value.subject} value={value.subject}>
+                          {value.display_name || value.email || value.subject}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label
+                      htmlFor="wi-priority"
+                      className="text-sm font-medium"
+                    >
+                      优先级
+                    </label>
+                    <select
+                      id="wi-priority"
+                      className="min-h-11 rounded-md border bg-background px-3"
+                      value={form.priority}
+                      onChange={(event) =>
+                        setForm({ ...form, priority: event.target.value })
+                      }
+                    >
+                      {Object.entries(PRIORITY_LABEL).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label htmlFor="wi-due" className="text-sm font-medium">
+                      截止日期
+                    </label>
+                    <Input
+                      id="wi-due"
+                      type="date"
+                      value={form.dueDate}
+                      onChange={(event) =>
+                        setForm({ ...form, dueDate: event.target.value })
+                      }
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-1.5">
-                  <label htmlFor="wi-desc" className="text-sm font-medium">
-                    描述
+                <div className="grid gap-1.5 sm:max-w-xs">
+                  <label htmlFor="wi-est" className="text-sm font-medium">
+                    估时(小时)
                   </label>
-                  <Textarea
-                    id="wi-desc"
-                    rows={3}
-                    value={form.description}
+                  <Input
+                    id="wi-est"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={form.estimateHours}
                     onChange={(e) =>
-                      setForm({ ...form, description: e.target.value })
+                      setForm({ ...form, estimateHours: e.target.value })
                     }
-                    placeholder="验收标准、上下文、相关文件…"
                   />
                 </div>
               </>
             )}
-            <div className="grid gap-1.5">
-              <label htmlFor="wi-est" className="text-sm font-medium">
-                估时(小时)
-              </label>
-              <Input
-                id="wi-est"
-                type="number"
-                min="0"
-                step="0.5"
-                value={form.estimateHours}
-                onChange={(e) =>
-                  setForm({ ...form, estimateHours: e.target.value })
-                }
-                placeholder="留空则按首次实际耗时自动校准"
-              />
-            </div>
+            <AttachmentQueue
+              id="wi-attachments"
+              files={files}
+              onChange={setFiles}
+              disabled={creating}
+            />
             {createFor.parent && (
               <p className="text-xs text-muted-foreground">
-                父级:{createFor.parent}
+                父任务:
+                {items.find((value) => value.id === createFor.parent)?.title}
               </p>
             )}
           </div>
@@ -628,8 +754,9 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
             <Button
               className="cursor-pointer"
               onClick={create}
-              disabled={!form.title.trim()}
+              disabled={creating || !form.title.trim()}
             >
+              {creating && <LoaderCircle className="size-4 animate-spin" />}
               创建
             </Button>
           </DialogFooter>
@@ -676,6 +803,8 @@ function WorkItemsPage({ routeType }: { routeType: string }) {
 function DetailSheet({
   item,
   keyResults,
+  members,
+  subtasks,
   onClose,
   onChanged,
   onExecute,
@@ -683,6 +812,8 @@ function DetailSheet({
 }: {
   item: WorkItem | null;
   keyResults: Array<{ id: string; title: string }>;
+  members: Member[];
+  subtasks: WorkItem[];
   onClose: () => void;
   onChanged: () => void | Promise<void>;
   onExecute: (id: string) => void;
@@ -693,6 +824,9 @@ function DetailSheet({
   const [estimate, setEstimate] = useState("");
   const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
   const [keyResultIds, setKeyResultIds] = useState<string[]>([]);
+  const [priority, setPriority] = useState("medium");
+  const [dueDate, setDueDate] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -702,6 +836,9 @@ function DetailSheet({
     setEstimate(item.estimateHours ? String(item.estimateHours) : "");
     setAcceptanceCriteria(item.acceptanceCriteria);
     setKeyResultIds(item.keyResultIds);
+    setPriority(item.priority || "medium");
+    setDueDate(dateInputValue(item.dueAt));
+    setAssigneeId(item.assigneeId);
     void controlApi
       .attachments(item.type, item.id)
       .then((x) => setAtts(x ?? []))
@@ -722,6 +859,9 @@ function DetailSheet({
         estimateHours: Number(estimate) || 0,
         acceptanceCriteria,
         keyResultIds,
+        priority,
+        dueAt: dueDateValue(dueDate),
+        assigneeId,
         version: item.version,
       });
       await onChanged();
@@ -761,6 +901,20 @@ function DetailSheet({
     }
   };
 
+  const downloadAttachment = async (attachment: Attachment) => {
+    try {
+      const blob = await controlApi.attachmentContent(attachment.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      reportError("下载附件", error);
+    }
+  };
+
   return (
     <Sheet open onOpenChange={(v) => !v && onClose()}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
@@ -782,47 +936,43 @@ function DetailSheet({
             </span>
           </div>
 
-          <div className="grid gap-1.5">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">进度</span>
-              <span className="tabular-nums text-muted-foreground">
-                {item.progress}%
-              </span>
+          {item.type === "task" && (
+            <div className="grid gap-1.5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium">进度</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {item.progress}%
+                </span>
+              </div>
+              <Progress value={item.progress} className="h-2" />
+              <p className="text-xs text-muted-foreground">
+                估 {item.estimateHours.toFixed(1)}h · 实{" "}
+                {item.spentHours.toFixed(2)}h
+                {item.estimateHours > 0 && item.spentHours > 0 && (
+                  <>
+                    {" "}
+                    · 偏差{" "}
+                    {(
+                      ((item.spentHours - item.estimateHours) /
+                        item.estimateHours) *
+                      100
+                    ).toFixed(0)}
+                    %
+                  </>
+                )}
+              </p>
             </div>
-            <Progress value={item.progress} className="h-2" />
-            <p className="text-xs text-muted-foreground">
-              估 {item.estimateHours.toFixed(1)}h · 实{" "}
-              {item.spentHours.toFixed(2)}h
-              {item.estimateHours > 0 && item.spentHours > 0 && (
-                <>
-                  {" "}
-                  · 偏差{" "}
-                  {(
-                    ((item.spentHours - item.estimateHours) /
-                      item.estimateHours) *
-                    100
-                  ).toFixed(0)}
-                  %
-                </>
-              )}
-            </p>
-          </div>
+          )}
 
           {item.type === "requirement" && (
             <>
-              <div className="grid gap-1.5">
-                <label htmlFor="d-acceptance" className="text-sm font-medium">
-                  验收标准
-                </label>
-                <Textarea
-                  id="d-acceptance"
-                  rows={4}
-                  value={acceptanceCriteria}
-                  onChange={(event) =>
-                    setAcceptanceCriteria(event.target.value)
-                  }
-                />
-              </div>
+              <RichContentEditor
+                id="d-acceptance"
+                label="验收标准"
+                rows={5}
+                value={acceptanceCriteria}
+                onChange={setAcceptanceCriteria}
+              />
               <div className="grid gap-1.5">
                 <label htmlFor="d-key-results" className="text-sm font-medium">
                   关联关键结果
@@ -851,31 +1001,102 @@ function DetailSheet({
             </>
           )}
 
-          <div className="grid gap-1.5">
-            <label htmlFor="d-desc" className="text-sm font-medium">
-              描述
-            </label>
-            <Textarea
-              id="d-desc"
-              rows={5}
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-            />
-          </div>
+          <RichContentEditor
+            id="d-desc"
+            label="描述"
+            value={desc}
+            onChange={setDesc}
+          />
 
-          <div className="grid gap-1.5">
-            <label htmlFor="d-est" className="text-sm font-medium">
-              估时(小时)
-            </label>
-            <Input
-              id="d-est"
-              type="number"
-              min="0"
-              step="0.5"
-              value={estimate}
-              onChange={(e) => setEstimate(e.target.value)}
-            />
-          </div>
+          {item.type === "task" && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <label htmlFor="d-assignee" className="text-sm font-medium">
+                    负责人
+                  </label>
+                  <select
+                    id="d-assignee"
+                    className="min-h-11 rounded-md border bg-background px-3"
+                    value={assigneeId}
+                    onChange={(event) => setAssigneeId(event.target.value)}
+                  >
+                    <option value="">未分配</option>
+                    {members.map((value) => (
+                      <option key={value.subject} value={value.subject}>
+                        {value.display_name || value.email || value.subject}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-1.5">
+                  <label htmlFor="d-priority" className="text-sm font-medium">
+                    优先级
+                  </label>
+                  <select
+                    id="d-priority"
+                    className="min-h-11 rounded-md border bg-background px-3"
+                    value={priority}
+                    onChange={(event) => setPriority(event.target.value)}
+                  >
+                    {Object.entries(PRIORITY_LABEL).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-1.5">
+                  <label htmlFor="d-due" className="text-sm font-medium">
+                    截止日期
+                  </label>
+                  <Input
+                    id="d-due"
+                    type="date"
+                    value={dueDate}
+                    onChange={(event) => setDueDate(event.target.value)}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <label htmlFor="d-est" className="text-sm font-medium">
+                    估时(小时)
+                  </label>
+                  <Input
+                    id="d-est"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={estimate}
+                    onChange={(e) => setEstimate(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <span className="text-sm font-medium">子任务</span>
+                {subtasks.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">暂无子任务</p>
+                ) : (
+                  <div className="divide-y rounded-md border">
+                    {subtasks.map((value) => (
+                      <div
+                        key={value.id}
+                        className="flex min-h-11 items-center gap-2 px-3 py-2 text-sm"
+                      >
+                        <StatusChip status={value.status} />
+                        <span className="min-w-0 flex-1 truncate">
+                          {value.title}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                          {value.spentHours.toFixed(1)}h /{" "}
+                          {value.estimateHours.toFixed(1)}h
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           <div className="grid gap-2">
             <div className="flex items-center justify-between">
@@ -906,7 +1127,6 @@ function DetailSheet({
             )}
             <div className="grid grid-cols-2 gap-2">
               {atts.map((a) => {
-                const url = controlApi.attachmentContentUrl(a.id);
                 const isImage = a.mime.startsWith("image/");
                 const isVideo = a.mime.startsWith("video/");
                 return (
@@ -914,25 +1134,16 @@ function DetailSheet({
                     key={a.id}
                     className="relative overflow-hidden rounded-lg border transition-colors hover:border-primary/40 hover:bg-accent/40"
                   >
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    <button
+                      type="button"
+                      className="block w-full cursor-pointer text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      aria-label={`下载附件 ${a.filename}`}
+                      onClick={() => void downloadAttachment(a)}
                     >
-                      {isImage ? (
-                        <img
-                          src={url}
-                          alt={a.filename}
-                          loading="lazy"
+                      {isImage || isVideo ? (
+                        <ProtectedAttachmentMedia
+                          attachment={a}
                           className="h-24 w-full object-cover"
-                        />
-                      ) : isVideo ? (
-                        <video
-                          src={url}
-                          className="h-24 w-full object-cover"
-                          muted
-                          preload="metadata"
                         />
                       ) : (
                         <div className="flex h-24 items-center justify-center bg-muted">
@@ -947,7 +1158,7 @@ function DetailSheet({
                           {(a.sizeBytes / 1024).toFixed(1)} KB
                         </p>
                       </div>
-                    </a>
+                    </button>
                     <Button
                       size="icon"
                       variant="ghost"
@@ -967,23 +1178,29 @@ function DetailSheet({
             <Button className="cursor-pointer" onClick={save}>
               保存
             </Button>
-            <Button
-              variant="outline"
-              className="cursor-pointer gap-1.5"
-              disabled={item.status === "in_progress"}
-              onClick={() => onExecute(item.id)}
-            >
-              <CirclePlay className="size-4" />
-              执行工作流
-            </Button>
-            <Button
-              variant="outline"
-              className="cursor-pointer gap-1.5"
-              onClick={() => onAddSubtask(item.id)}
-            >
-              <Plus className="size-4" />
-              新建子任务
-            </Button>
+            {item.type === "task" && (
+              <>
+                <Button
+                  variant="outline"
+                  className="cursor-pointer gap-1.5"
+                  disabled={
+                    item.status === "in_progress" || item.status === "done"
+                  }
+                  onClick={() => onExecute(item.id)}
+                >
+                  <CirclePlay className="size-4" />
+                  执行工作流
+                </Button>
+                <Button
+                  variant="outline"
+                  className="cursor-pointer gap-1.5"
+                  onClick={() => onAddSubtask(item.id)}
+                >
+                  <Plus className="size-4" />
+                  新建子任务
+                </Button>
+              </>
+            )}
             <Button
               variant="ghost"
               className="cursor-pointer"
@@ -1022,6 +1239,7 @@ function TestsPage() {
   const [editing, setEditing] = useState<TestCase | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TestCase | null>(null);
   const [pending, setPending] = useState(false);
+  const [caseFiles, setCaseFiles] = useState<File[]>([]);
   const [runEnvironment, setRunEnvironment] = useState("local");
   const [runResult, setRunResult] = useState("");
   const [runFailure, setRunFailure] = useState("");
@@ -1087,8 +1305,9 @@ function TestsPage() {
         priority: form.priority,
         steps: form.steps,
       };
+      let saved: TestCase;
       if (editing) {
-        await controlApi.updateTestCase(editing.id, {
+        saved = await controlApi.updateTestCase(editing.id, {
           title: value.title,
           description: value.description,
           preconditions: value.preconditions,
@@ -1096,9 +1315,31 @@ function TestsPage() {
           steps: value.steps,
           version: editing.version,
         });
-      } else await controlApi.createTestCase(value);
+      } else saved = await controlApi.createTestCase(value);
+      const uploaded: Attachment[] = [];
+      let uploadError: unknown;
+      for (const file of caseFiles) {
+        try {
+          uploaded.push(
+            await controlApi.uploadAttachment("testcase", saved.id, file),
+          );
+        } catch (error) {
+          uploadError ??= error;
+        }
+      }
+      const description = appendUploadedImages(
+        value.description,
+        uploaded,
+        controlApi.attachmentContentUrl,
+      );
+      if (description !== value.description)
+        saved = await controlApi.updateTestCase(saved.id, {
+          description,
+          version: saved.version,
+        });
       setOpen(false);
       setEditing(null);
+      setCaseFiles([]);
       setForm({
         requirementId: "",
         title: "",
@@ -1108,6 +1349,7 @@ function TestsPage() {
         steps: [{ action: "", expectedResult: "" }],
       });
       await load();
+      if (uploadError) reportError("部分测试附件上传", uploadError);
     } catch (error) {
       reportError("创建测试用例", error);
     } finally {
@@ -1117,6 +1359,7 @@ function TestsPage() {
 
   const beginCreate = () => {
     setEditing(null);
+    setCaseFiles([]);
     setForm({
       requirementId: "",
       title: "",
@@ -1130,6 +1373,7 @@ function TestsPage() {
 
   const beginEdit = (value: TestCase) => {
     setEditing(value);
+    setCaseFiles([]);
     setForm({
       requirementId: value.requirementId ?? "",
       title: value.title,
@@ -1332,6 +1576,10 @@ function TestsPage() {
           {selected && (
             <div className="space-y-5 px-4 pb-6">
               <div>
+                <p className="mb-1 text-sm font-medium">描述</p>
+                <MarkdownView value={selected.description} />
+              </div>
+              <div>
                 <p className="text-sm font-medium">前置条件</p>
                 <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
                   {selected.preconditions || "无"}
@@ -1510,15 +1758,12 @@ function TestsPage() {
                 }
               />
             </Field>
-            <Field label="描述" id="test-description">
-              <Textarea
-                id="test-description"
-                value={form.description}
-                onChange={(event) =>
-                  setForm({ ...form, description: event.target.value })
-                }
-              />
-            </Field>
+            <RichContentEditor
+              id="test-description"
+              label="描述"
+              value={form.description}
+              onChange={(description) => setForm({ ...form, description })}
+            />
             <Field label="前置条件" id="test-preconditions">
               <Textarea
                 id="test-preconditions"
@@ -1579,6 +1824,12 @@ function TestsPage() {
                 />
               </div>
             ))}
+            <AttachmentQueue
+              id="test-attachments"
+              files={caseFiles}
+              onChange={setCaseFiles}
+              disabled={pending}
+            />
             <Button
               variant="outline"
               className="justify-self-start"
@@ -1668,6 +1919,7 @@ function DefectsPage() {
   const [editing, setEditing] = useState<Defect | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Defect | null>(null);
   const [pending, setPending] = useState(false);
+  const [defectFiles, setDefectFiles] = useState<File[]>([]);
   const [resolutionNotes, setResolutionNotes] = useState<
     Record<string, string>
   >({});
@@ -1747,8 +1999,9 @@ function DefectsPage() {
         severity: form.severity,
         priority: form.priority,
       };
+      let saved: Defect;
       if (editing) {
-        await controlApi.updateDefect(editing.id, {
+        saved = await controlApi.updateDefect(editing.id, {
           title: value.title,
           description: value.description,
           reproductionSteps: value.reproductionSteps,
@@ -1758,9 +2011,31 @@ function DefectsPage() {
           priority: value.priority,
           version: editing.version,
         });
-      } else await controlApi.createDefect(value);
+      } else saved = await controlApi.createDefect(value);
+      const uploaded: Attachment[] = [];
+      let uploadError: unknown;
+      for (const file of defectFiles) {
+        try {
+          uploaded.push(
+            await controlApi.uploadAttachment("defect", saved.id, file),
+          );
+        } catch (error) {
+          uploadError ??= error;
+        }
+      }
+      const description = appendUploadedImages(
+        value.description,
+        uploaded,
+        controlApi.attachmentContentUrl,
+      );
+      if (description !== value.description)
+        saved = await controlApi.updateDefect(saved.id, {
+          description,
+          version: saved.version,
+        });
       setOpen(false);
       setEditing(null);
+      setDefectFiles([]);
       setForm({
         sourceType: "task",
         sourceId: "",
@@ -1773,6 +2048,7 @@ function DefectsPage() {
         priority: "medium",
       });
       await load();
+      if (uploadError) reportError("部分缺陷附件上传", uploadError);
     } catch (error) {
       reportError("创建缺陷", error);
     } finally {
@@ -1782,6 +2058,7 @@ function DefectsPage() {
 
   const beginCreate = () => {
     setEditing(null);
+    setDefectFiles([]);
     setForm({
       sourceType: "task",
       sourceId: "",
@@ -1805,6 +2082,7 @@ function DefectsPage() {
           ? ["task", value.taskId]
           : ["requirement", value.requirementId ?? ""];
     setEditing(value);
+    setDefectFiles([]);
     setForm({
       sourceType: source[0],
       sourceId: source[1],
@@ -2081,15 +2359,12 @@ function DefectsPage() {
                 }
               />
             </Field>
-            <Field label="描述" id="defect-description">
-              <Textarea
-                id="defect-description"
-                value={form.description}
-                onChange={(event) =>
-                  setForm({ ...form, description: event.target.value })
-                }
-              />
-            </Field>
+            <RichContentEditor
+              id="defect-description"
+              label="描述"
+              value={form.description}
+              onChange={(description) => setForm({ ...form, description })}
+            />
             <Field label="复现步骤" id="defect-reproduction">
               <Textarea
                 id="defect-reproduction"
@@ -2153,6 +2428,12 @@ function DefectsPage() {
                 </select>
               </Field>
             </div>
+            <AttachmentQueue
+              id="defect-attachments"
+              files={defectFiles}
+              onChange={setDefectFiles}
+              disabled={pending}
+            />
           </div>
           <DialogFooter>
             <Button

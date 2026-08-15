@@ -81,12 +81,15 @@ export interface WorkItem {
   title: string;
   description: string;
   status: string;
+  priority: string;
+  dueAt: number;
   parentId: string;
   estimateHours: number;
   spentHours: number;
   progress: number;
   workflowRunId: string;
   assigneeAgent: string;
+  assigneeId: string;
   channelId: string;
   requirementId: string;
   acceptanceCriteria: string;
@@ -173,6 +176,19 @@ export interface Attachment {
   sizeBytes: number;
   createdAt: number;
   version: number;
+}
+
+export function appendUploadedImages(
+  markdown: string,
+  attachments: Attachment[],
+  contentURL: (id: string) => string,
+) {
+  const images = attachments
+    .filter((value) => value.mime.startsWith("image/"))
+    .map((value) => `![${value.filename}](${contentURL(value.id)})`);
+  return images.length
+    ? [markdown.trim(), ...images].filter(Boolean).join("\n\n")
+    : markdown;
 }
 
 export interface Okr {
@@ -304,6 +320,8 @@ interface ServerTask {
   title: string;
   description: string;
   status: string;
+  priority: string;
+  dueAt: number;
   estimateMs: number;
   spentMs: number;
   progress: number;
@@ -407,6 +425,23 @@ async function upload(
   return toAttachment(created.data ?? (created as unknown as ServerAttachment));
 }
 
+async function attachmentContent(id: string): Promise<Blob> {
+  const res = await fetch(
+    `${base}/attachments/${encodeURIComponent(id)}/content`,
+    { headers: headersFor() },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      detail?: string;
+    };
+    throw new Error(
+      body.detail ?? body.error ?? `下载失败(HTTP ${res.status})`,
+    );
+  }
+  return res.blob();
+}
+
 function toAttachment(a: ServerAttachment): Attachment {
   return {
     id: a.id,
@@ -485,12 +520,15 @@ function toWorkItem(type: string, r: ServerRequirement | ServerTask): WorkItem {
     title: r.title,
     description: r.description,
     status: r.status,
+    priority: task?.priority ?? "",
+    dueAt: task?.dueAt ?? 0,
     parentId: r.parentId ?? "",
     estimateHours: (task?.estimateMs ?? 0) / 3_600_000,
     spentHours: (task?.spentMs ?? 0) / 3_600_000,
     progress: task?.progress ?? 0,
     workflowRunId: task?.workflowRunId ?? "",
     assigneeAgent: task?.assigneeId ?? r.ownerId,
+    assigneeId: task?.assigneeId ?? "",
     channelId: task?.channelId ?? "",
     requirementId: task?.requirementId ?? "",
     acceptanceCriteria: requirement?.acceptanceCriteria ?? "",
@@ -791,6 +829,9 @@ export const controlApi = {
               parentId: w.parentId || undefined,
               requirementId: w.requirementId || undefined,
               estimateMs: Math.round((w.estimateHours ?? 0) * 3_600_000),
+              priority: w.priority || "medium",
+              dueAt: w.dueAt || 0,
+              assigneeId: w.assigneeId || undefined,
               channelId: w.channelId || undefined,
             },
       ),
@@ -818,6 +859,9 @@ export const controlApi = {
             kind === "task" && w.estimateHours !== undefined
               ? Math.round(w.estimateHours * 3_600_000)
               : undefined,
+          priority: kind === "task" ? w.priority : undefined,
+          dueAt: kind === "task" ? w.dueAt : undefined,
+          assigneeId: kind === "task" ? w.assigneeId || undefined : undefined,
           version: w.version,
         }),
       },
@@ -863,6 +907,7 @@ export const controlApi = {
     upload(ownerType, ownerId, file),
   attachmentContentUrl: (id: string) =>
     `${base}/attachments/${encodeURIComponent(id)}/content`,
+  attachmentContent,
   deleteAttachment: (id: string, version: number) =>
     req<{ ok: boolean }>(
       `/attachments/${encodeURIComponent(id)}?version=${version}`,

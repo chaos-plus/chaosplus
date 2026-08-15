@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/chaos-plus/chaosplus/internal/infra/guid"
+	"github.com/uptrace/bun"
 )
 
 type Kind string
@@ -27,29 +28,30 @@ var (
 )
 
 type Agent struct {
-	ID           guid.ID `bun:"id,pk" json:"id"`
-	TenantID     guid.ID `bun:"tenant_id,notnull" json:"tenantId"`
-	EntityID     guid.ID `bun:"entity_id,notnull" json:"entityId"`
-	OwnerID      guid.ID `bun:"owner_id,notnull" json:"ownerId"`
-	MachineID    guid.ID `bun:"machine_id,notnull" json:"machineId"`
-	Name         string  `bun:"name,notnull" json:"name"`
-	Kind         Kind    `bun:"kind,notnull" json:"kind"`
-	Runtime      string  `bun:"runtime,notnull" json:"runtime"`
-	Model        string  `bun:"model,notnull" json:"model"`
-	Provider     string  `bun:"provider,notnull" json:"provider"`
-	SystemPrompt string  `bun:"system_prompt,notnull" json:"systemPrompt"`
-	Description  string  `bun:"description,notnull" json:"description"`
-	Status       Status  `bun:"status,notnull" json:"status"`
-	SpecJSON     string  `bun:"spec_json,notnull" json:"specJson"`
-	HandoverDoc  string  `bun:"handover_doc,notnull" json:"handoverDoc"`
-	RetiredAt    int64   `bun:"retired_at,notnull" json:"retiredAt"`
-	CreatedAt    int64   `bun:"created_at,notnull" json:"createdAt"`
-	CreatedBy    guid.ID `bun:"created_by,notnull" json:"createdBy"`
-	UpdatedAt    int64   `bun:"updated_at,notnull" json:"updatedAt"`
-	UpdatedBy    guid.ID `bun:"updated_by,notnull" json:"updatedBy"`
-	DeletedAt    int64   `bun:"deleted_at,notnull" json:"-"`
-	DeletedBy    guid.ID `bun:"deleted_by,notnull" json:"-"`
-	Version      int64   `bun:"version,notnull" json:"version"`
+	bun.BaseModel `bun:"table:conversation_agents"`
+	ID            guid.ID `bun:"id,pk" json:"id"`
+	TenantID      guid.ID `bun:"tenant_id,notnull" json:"tenantId"`
+	EntityID      guid.ID `bun:"entity_id,notnull" json:"entityId"`
+	OwnerID       guid.ID `bun:"owner_id,notnull" json:"ownerId"`
+	MachineID     guid.ID `bun:"machine_id,notnull" json:"machineId"`
+	Name          string  `bun:"name,notnull" json:"name"`
+	Kind          Kind    `bun:"kind,notnull" json:"kind"`
+	Runtime       string  `bun:"runtime,notnull" json:"runtime"`
+	Model         string  `bun:"model,notnull" json:"model"`
+	Provider      string  `bun:"provider,notnull" json:"provider"`
+	SystemPrompt  string  `bun:"system_prompt,notnull" json:"systemPrompt"`
+	Description   string  `bun:"description,notnull" json:"description"`
+	Status        Status  `bun:"status,notnull" json:"status"`
+	SpecJSON      string  `bun:"spec_json,notnull" json:"specJson"`
+	HandoverDoc   string  `bun:"handover_doc,notnull" json:"handoverDoc"`
+	RetiredAt     int64   `bun:"retired_at,notnull" json:"retiredAt"`
+	CreatedAt     int64   `bun:"created_at,notnull" json:"createdAt"`
+	CreatedBy     guid.ID `bun:"created_by,notnull" json:"createdBy"`
+	UpdatedAt     int64   `bun:"updated_at,notnull" json:"updatedAt"`
+	UpdatedBy     guid.ID `bun:"updated_by,notnull" json:"updatedBy"`
+	DeletedAt     int64   `bun:"deleted_at,notnull" json:"-"`
+	DeletedBy     guid.ID `bun:"deleted_by,notnull" json:"-"`
+	Version       int64   `bun:"version,notnull" json:"version"`
 }
 
 type AgentCreateInput struct {

@@ -124,6 +124,29 @@ type RunDef struct {
 	Version       int64     `bun:"version,notnull" json:"version"`
 }
 
+type RunMetric struct {
+	ID          guid.ID
+	Status      RunStatus
+	ContextJSON string
+	CreatedAt   int64
+	UpdatedAt   int64
+}
+
+func (r *BunRepository) ListRunMetrics(ctx context.Context) ([]RunMetric, error) {
+	claims, err := requireClaims(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := []RunMetric{}
+	err = r.db.NewSelect().Table("workflow_runs").Column("id", "status", "context_json", "created_at", "updated_at").
+		Where("tenant_id = ? AND entity_id = ? AND deleted_at = 0", claims.TenantID, claims.EntityID).
+		Order("created_at ASC", "id ASC").Scan(ctx, &items)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow run metrics: %w", err)
+	}
+	return items, nil
+}
+
 func (r *BunRepository) SaveRunDefinition(ctx context.Context, run RunDef) error {
 	claims, err := requireClaims(ctx)
 	if err != nil {

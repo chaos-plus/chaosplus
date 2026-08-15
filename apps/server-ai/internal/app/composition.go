@@ -59,12 +59,7 @@ func buildModules(config Config, dependencies sharedapp.ModuleDependencies) ([]a
 		return nil, err
 	}
 
-	holderID, err := dependencies.NextID()
-	if err != nil {
-		_ = client.Stop(context.Background())
-		return nil, fmt.Errorf("generate machine route holder id: %w", err)
-	}
-	hub := machine.NewHub(client.RunnerTransport(), machine.NewTokenStore(), nil, dependencies.NextID, holderID, dependencies.OriginPolicy)
+	hub := machine.NewHub(client.RunnerTransport(), machine.NewTokenStore(), nil, dependencies.NextID, 0, dependencies.OriginPolicy)
 	// A runner registers over the machine WS bridge; surface it to the run
 	// gateway so run launch can discover and dispatch to connected daemons,
 	// and drop it on disconnect so zombies are never dispatch targets.
