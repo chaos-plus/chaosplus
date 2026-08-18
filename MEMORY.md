@@ -4,6 +4,28 @@ Cross-session memory for chaosplus. Read this first on a new session/device. Kee
 
 ---
 
+## 2026-08-18 — DeepSeek Harness / Cordis 调研归档（未实施）
+
+**What:** 调研 `deepseek-ai/deepseek-harness`（2026-08-13 开源 5 天，156k star）底层 Cordis 插件系统，评估吸收点。归档于 `docs/research/dsh-cordis-plugin-absorption.md`（证据快照 `99f6f02`，全据官方 docs/architecture.md + cordis-primer.md）。
+
+**Synthesis:** 吸收四项机制（全为规则/测试级，不碰内核）:
+1. **Event dispatch 模式 = 公开契约**（emit/waterfall/parallel/serial；waterfall 必须 next() 委托，短路即决策）→ 落 `.rules`，统一 policyx/authz/validation 门链语义。
+2. **注册即效果**：register 返回 disposer，卸载逆序撤销 → 给 `internal/core/extension/` 定约定（WASM claims 已做对，`claims.go` Close()）。
+3. **「模型可见 ⟺ 已记录」运行时不变式** → 直接修 audit P1（output.json 自报不校验，`runner_executor.go:74-83`）→「可重建」写进 World Reconstruction Test 断言。
+4. **Capability seam 三件套**（Def/Provider/Consumer）→ 验证 §15.2 方向，补「消费者禁止 import 具体 adapter」纪律。
+
+**Node 层插件化专项（docs/research 文档 §6，用户明确要完备插件系统）:** 节点层全量插件化不违反 P7（§7.4 本就要求「新增领域不改内核一行」；P7 禁止的只是 dsh 连 loop/内核都可换）：
+- 节点类型 = 注册式定义（schema + **强制输出 JSON Schema/checksum** + execute + 调度元数据登记，白名单投影）→ P1 机制化。
+- 节点执行三段 waterfall：`node/pre-execute`（批准/预算可否决）→ `execute` → `post-execute`（validation+checksum 可驳回重试）。
+- 节点注册表**作用域分层**（全局默认 + tenant/entity shadow 层，读不建层，层空回收）→ 多版本 pinning/租户隔离/升级回滚撤层的存储形态。
+- 节点 schema 注册进 registry 装配 §18.1 L2/L6，非各执行器硬编码。
+
+**不吸收:** 「无特权核心一切皆插件」（仅指内核层，违反 P7）;Service locator `ctx.<key>`（TS 声明合并产物，Go 反模式，保持显式注册表注入）;异步 parallel 事件（§15.1 强时序事件源）;单次调用级并发安全 isConcurrencySafe（DAG 层 join/parallel_fork 已表达并行）。
+
+**How to apply:** 后续涉及门链/hook/事件契约的编码，先读 §9 吸收点 1；动 extension/ 时维持 disposer 约定（点 2）；任何模型可见输入落库校验（点 3）。未实施，落 `.rules` 与测试前先对齐 PRD §29。
+
+---
+
 ## 2026-08-10 — 7-domain PRD gap audit (protocol/auth, workflow-engine, data-model, agent-model, artifact-validation, runner, web-ui)
 
 **What:** Dispatched 7 parallel read-only review agents to compare the full codebase against `PRD.md`. No code was written. Full per-domain reports (Implemented / Partially / Not Implemented / deviations, with file:line evidence) were delivered in the team chat transcript of this session — not reproduced here, only the synthesis.
