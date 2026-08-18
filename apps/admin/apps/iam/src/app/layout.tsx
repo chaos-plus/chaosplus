@@ -24,6 +24,11 @@ export default function AppLayout() {
   const [tenantValue, setTenantValue] = useState(getTenant())
   const [tenantDraft, setTenantDraft] = useState(getTenant())
   const [platformTenants, setPlatformTenants] = useState<Tenant[] | null>(null)
+  const activeTenants = (platformTenants ?? []).filter((t) => t.status === "active")
+  const currentTenant = activeTenants.find((t) => t.id === tenantDraft)
+  const tenantLabel = currentTenant
+    ? `${currentTenant.name} (${currentTenant.slug})`
+    : tenantDraft
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -72,7 +77,11 @@ export default function AppLayout() {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
 
   const commitTenant = () => {
-    const next = tenantDraft.trim()
+    const draft = tenantDraft.trim()
+    const opt = activeTenants.find(
+      (t) => `${t.name} (${t.slug})` === draft || t.name === draft,
+    )
+    const next = opt ? opt.id : draft
     if (!next || next === tenantValue) return
     setMenus(null)
     setTenant(next)
@@ -121,20 +130,21 @@ export default function AppLayout() {
                 id="tenant"
                 list={platformTenants ? "tenant-options" : undefined}
                 className="w-24 min-w-0 bg-transparent text-sm outline-none sm:w-36"
-                value={tenantDraft}
+                value={tenantLabel}
                 onChange={(event) => setTenantDraft(event.target.value)}
                 onBlur={commitTenant}
                 onKeyDown={(event) => event.key === "Enter" && commitTenant()}
               />
               {platformTenants && (
                 <datalist id="tenant-options">
-                  {platformTenants
-                    .filter((tenant) => tenant.status === "active")
-                    .map((tenant) => (
-                      <option key={tenant.id} value={tenant.id}>
-                        {tenant.name} ({tenant.slug})
-                      </option>
-                    ))}
+                  {activeTenants.map((tenant) => (
+                    <option
+                      key={tenant.id}
+                      value={`${tenant.name} (${tenant.slug})`}
+                    >
+                      {tenant.name} ({tenant.slug})
+                    </option>
+                  ))}
                 </datalist>
               )}
             </div>

@@ -60,3 +60,18 @@ Cross-session memory for chaosplus. Read this first on a new session/device. Kee
 **How to apply:** server-ai now requires `CONTROL_API_TOKEN` env for production (empty = desktop mode). Workflow authors can add `"onError": "continue"` to nodes that should not block the run on failure. CI covers server-ai alongside server.
 
 See also: [[7-domain-prd-gap-audit]], [[mastra-workflow-reuse]]
+
+---
+
+## 2026-08-18 — UI 缺陷根因修复 + 门户架构目标确认
+
+**What:** 用户反馈 UI 多处问题(注册入口消失、下拉背景吞字、下拉显示 id)。根因调查并修复 4 处。
+
+- **下拉背景吞字根因**:全站 CSS 未设置 `color-scheme`。next-themes 把 `.dark` 类加在 `<html>`,但浏览器按系统配色渲染原生 `<select>` 弹层 → 暗色页面 + 系统浅色弹层 = 浅色文字压白底。**修复**:`globals.css` `:root{color-scheme:light}` + `.dark{color-scheme:dark}`;`themes.css` `[data-theme]{color-scheme:light}` + `[data-theme].dark{color-scheme:dark}`。两份包各改:apps/admin 与 apps/admin-ai 的 packages/ui。已用构建产物 + Playwright computed style 验证(暗/浅切换正确,select 文字 250/23 高对比)。
+- **下拉显示不可读字符串**:workflow-editor `property-panel.tsx` 的 `SelectField` 直出原始枚举(`manual/webhook/script/http/stop`)。改为 `{value,label}` 结构,显示中文标签(手动/定时/脚本/停止/继续/暂停/自动拒绝/重试),存储值不变。
+- **IAM 租户切换器显示 raw id**:`apps/admin/apps/iam/src/app/layout.tsx` 的 datalist 用 `value={tenant.id}` 而 input 显示 value → 顶栏展示 id。改为 datalist value 用 `名称 (slug)`,展示时映射名字,commit 时解析回 id。注:该 workspace 未安装依赖,无法本地 tsc,逻辑已逐步推演(见 diff)。
+- **注册入口消失根因**:登录页的"创建账号"链接由 `GET /authn/capabilities` 的 `registration` 门控 → `WebService.RegistrationEnabled()` = web enabled && registration.enabled && email_verification.enabled && notification enabled。dev 配置(iam-local-dev.yaml)全开,compose 生产配置(config.yaml)全关 → 生产注册默认隐藏。**按用户既定配置驱动,未改**。
+
+**门户架构目标(用户口述 2026-08-18):** 最终形态需要三个不同视角的 web 管理:`/sys`=系统运维、`/ops`=平台运营、`/platform`=租户/实例/用户平台(默认开放注册)。当前是两套扁平路由前端(apps/admin IAM、apps/admin-ai platform),无前缀分段,注册姿态全局单一配置。与 `.rules/3.ARCH.md` 的 SYS/OPS/APP 门户模型一致,抓手是"端路由前缀隔离 + 按端鉴权姿态"。**纳入下一轮规划(用户已选"先修 UI bug,门户后置")**。
+
+**How to apply:** 后续新增下拉一律走 `SimpleSelect`(value→label 单一事实来源),别手写原生 select/datalist;暗色下任何原生控件异常先查 color-scheme;注册可见性永远先查三层配置链(registration→email_verification→notification)。

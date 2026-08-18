@@ -5,6 +5,7 @@
    ===================================================== */
 
 [data-theme] {
+  color-scheme: light;
   --scrollbar-size: 0.625rem;
   --scrollbar-track: color-mix(in oklch, var(--muted) 68%, transparent);
   --scrollbar-thumb: color-mix(in oklch, var(--primary) 34%, var(--border));
@@ -40,6 +41,10 @@
 
 [data-theme] ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+[data-theme].dark {
+  color-scheme: dark;
 }
 
 /* -----------------------------------------------------

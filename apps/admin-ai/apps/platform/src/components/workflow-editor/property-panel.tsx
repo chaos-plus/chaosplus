@@ -50,12 +50,19 @@ export function PropertyPanel({ node, onChange }: Props) {
         </>
       )}
       {nodeType === "trigger" && (
-        <SelectField label="Source" value={(data.trigger as Record<string,unknown>)?.source as string ?? "manual"} options={["manual", "schedule", "webhook"]} onChange={(v) => onChange(node.id, { ...data, trigger: { ...(data.trigger as Record<string,unknown> ?? {}), source: v } })} />
+        <SelectField label="Source" value={(data.trigger as Record<string,unknown>)?.source as string ?? "manual"} options={[
+          { value: "manual", label: "手动" },
+          { value: "schedule", label: "定时" },
+          { value: "webhook", label: "Webhook" },
+        ]} onChange={(v) => onChange(node.id, { ...data, trigger: { ...(data.trigger as Record<string,unknown> ?? {}), source: v } })} />
       )}
 
       {/* onError for agent/script/http nodes */}
       {(nodeType === "agent" || nodeType === "script" || nodeType === "http") && (
-        <SelectField label="onError" value={(data.onError as string) ?? "stop"} options={["stop", "continue"]} onChange={(v) => onChange(node.id, { ...data, onError: v })} />
+        <SelectField label="onError" value={(data.onError as string) ?? "stop"} options={[
+          { value: "stop", label: "停止" },
+          { value: "continue", label: "继续" },
+        ]} onChange={(v) => onChange(node.id, { ...data, onError: v })} />
       )}
     </div>
   );
@@ -74,16 +81,16 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs text-muted-foreground mb-1">{label}</label>
       <select
-        className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+        className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
   );
@@ -116,7 +123,13 @@ function AgentFields({ data, onChange }: { data: Record<string, unknown>; onChan
       <SelectField
         label="Executor"
         value={(agent.executor as string) ?? "claude"}
-        options={["claude", "codex", "mastra", "script", "http"]}
+        options={[
+          { value: "claude", label: "Claude" },
+          { value: "codex", label: "Codex" },
+          { value: "mastra", label: "Mastra" },
+          { value: "script", label: "脚本" },
+          { value: "http", label: "HTTP" },
+        ]}
         onChange={(v) => onChange({ agent: { ...agent, executor: v } })}
       />
       <div>
@@ -137,8 +150,14 @@ function ApprovalFields({ data, onChange }: { data: Record<string, unknown>; onC
   return (
     <>
       <Field label="Timeout (ms)" value={String((ha.timeoutMs as number) ?? 600000)} onChange={(v) => onChange({ humanApproval: { ...ha, timeoutMs: Number(v) } })} />
-      <SelectField label="onTimeout" value={(ha.onTimeout as string) ?? "pause"} options={["pause", "auto_reject"]} onChange={(v) => onChange({ humanApproval: { ...ha, onTimeout: v } })} />
-      <SelectField label="onReject" value={(ha.onReject as string) ?? "pause"} options={["pause", "retry"]} onChange={(v) => onChange({ humanApproval: { ...ha, onReject: v } })} />
+      <SelectField label="onTimeout" value={(ha.onTimeout as string) ?? "pause"} options={[
+        { value: "pause", label: "暂停" },
+        { value: "auto_reject", label: "自动拒绝" },
+      ]} onChange={(v) => onChange({ humanApproval: { ...ha, onTimeout: v } })} />
+      <SelectField label="onReject" value={(ha.onReject as string) ?? "pause"} options={[
+        { value: "pause", label: "暂停" },
+        { value: "retry", label: "重试" },
+      ]} onChange={(v) => onChange({ humanApproval: { ...ha, onReject: v } })} />
     </>
   );
 }
